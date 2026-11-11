@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Request and response bodies of /api/v1, shared by the API and its HTTP client. Error codes come from Abstractions (ErrorCodes). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications.Abstractions\Juice.Notifications.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

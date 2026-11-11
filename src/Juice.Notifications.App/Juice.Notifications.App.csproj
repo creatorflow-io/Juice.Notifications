@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The centralized host (design D2). Not packed. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications.Api\Juice.Notifications.Api.csproj" />
+    <ProjectReference Include="..\Juice.Notifications.EF.PostgreSQL\Juice.Notifications.EF.PostgreSQL.csproj" />
+  </ItemGroup>
+
+</Project>

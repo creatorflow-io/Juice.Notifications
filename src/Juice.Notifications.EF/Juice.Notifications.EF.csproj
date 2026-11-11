@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The data model and NotificationsDbContext (schema "notifications"), the mediator's unit of work and the outbox's store.
+       PostgreSQL-shaped until phase 4 adds SQL Server (design D17). -->
+  <ItemGroup>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <PackageReference Include="EFCore.NamingConventions" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Juice.MediatR.Behaviors" />
+    <PackageReference Include="Juice.Messaging.Outbox.EF" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications.Abstractions\Juice.Notifications.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

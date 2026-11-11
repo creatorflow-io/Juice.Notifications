@@ -1,0 +1,102 @@
+{
+  "realm": "juice",
+  "enabled": true,
+  "accessTokenLifespan": 600,
+  "roles": {
+    "realm": [
+      { "name": "notifications-platform-admin", "description": "Registers applications and links them to tenants" },
+      { "name": "notifications-tenant-admin", "description": "Administers the notifications of the one tenant its token's platform_tenant claim names" }
+    ]
+  },
+  "clientScopes": [
+    {
+      "name": "juice-notifications",
+      "description": "The Juice.Notifications API: its audience, realm roles as a flat 'roles' claim, and client_id on service-account (client credentials) tokens only",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true" },
+      "protocolMappers": [
+        {
+          "name": "audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "juice-notifications", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": { "claim.name": "roles", "multivalued": "true", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "client id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "config": { "user.session.note": "client_id", "claim.name": "client_id", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "notifications-admin",
+      "name": "Platform admin (local)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${NOTIFICATIONS_ADMIN_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["juice-notifications"]
+    },
+    {
+      "clientId": "sample-producer",
+      "name": "Sample producer (local)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${SAMPLE_PRODUCER_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["juice-notifications"]
+    },
+    {
+      "clientId": "tenant-admin",
+      "name": "Tenant admin (local): administers tenant 0193f0aa-0000-7000-8000-0000000000a1, the integration tests' tenant",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "${TENANT_ADMIN_CLIENT_SECRET}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "defaultClientScopes": ["juice-notifications"],
+      "protocolMappers": [
+        {
+          "name": "platform tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "platform_tenant", "claim.value": "0193f0aa-0000-7000-8000-0000000000a1", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-notifications-admin",
+      "enabled": true,
+      "serviceAccountClientId": "notifications-admin",
+      "realmRoles": ["notifications-platform-admin"]
+    },
+    {
+      "username": "service-account-sample-producer",
+      "enabled": true,
+      "serviceAccountClientId": "sample-producer",
+      "realmRoles": []
+    },
+    {
+      "username": "service-account-tenant-admin",
+      "enabled": true,
+      "serviceAccountClientId": "tenant-admin",
+      "realmRoles": ["notifications-tenant-admin"]
+    }
+  ]
+}

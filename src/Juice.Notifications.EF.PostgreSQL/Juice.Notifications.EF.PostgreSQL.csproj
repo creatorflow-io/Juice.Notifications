@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- PostgreSQL migrations (and, from M3, the PostgreSQL claim store). Also the design-time factory for dotnet-ef. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications.EF\Juice.Notifications.EF.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,29 @@
+name: Build
+
+# Build and test on every working branch. Integration tests skip themselves on the runner: there is no local stack there.
+# Publishing alpha packages comes with the first release branch, as in Juice.Observability.
+on:
+  push:
+    branches: [ "main", "release/**", "dev/**" ]
+    paths-ignore:
+      - '**.md'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore Juice.Notifications.slnx
+        env:
+          GITHUB_PACKAGE_USERNAME: ${{ github.actor }}
+          GITHUB_PACKAGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build
+        run: dotnet build Juice.Notifications.slnx --no-restore -c Release
+      - name: Test
+        run: dotnet test Juice.Notifications.slnx --no-build -c Release

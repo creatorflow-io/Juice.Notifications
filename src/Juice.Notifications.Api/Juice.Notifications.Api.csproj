@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The /api/v1 endpoints and the service's wiring, as a library: a host adds them with AddJuiceNotifications and MapJuiceNotifications
+       (src/Juice.Notifications.App is the centralized host). -->
+  <PropertyGroup>
+    <Description>Juice Notifications API (/api/v1) and its wiring, for an ASP.NET Core host.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Juice.Messaging.Outbox.Delivery" />
+    <PackageReference Include="Juice.Messaging.Local" />
+    <PackageReference Include="Juice.Messaging.Idempotency.Caching" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.AspNetCore.Builder" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.AspNetCore.Routing" />
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+    <Using Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
+    <ProjectReference Include="..\Juice.Notifications.Api.Contracts\Juice.Notifications.Api.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Juice.Notifications.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The service's behavior: commands, stages and rules. Host-agnostic, so a product can embed it (design D2). -->
+  <ItemGroup>
+    <PackageReference Include="Juice.MediatR" />
+    <PackageReference Include="JsonSchema.Net" />
+    <PackageReference Include="Scriban" />
+    <PackageReference Include="MailKit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications.EF\Juice.Notifications.EF.csproj" />
+  </ItemGroup>
+
+</Project>

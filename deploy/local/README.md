@@ -1,0 +1,50 @@
+# Local stack
+
+PostgreSQL, RabbitMQ, Keycloak and Mailpit for developing and testing Juice.Notifications. Ports avoid the Juice.Observability stack's, so both
+can run at once.
+
+| Component | Image (pinned) | Address | Used from |
+|---|---|---|---|
+| PostgreSQL | `postgres:17.10-alpine` | `localhost:5434`, database `notifications` | M1 |
+| Keycloak | `quay.io/keycloak/keycloak:26.7.5` | http://localhost:8081, realm `juice` | M1 |
+| RabbitMQ | `rabbitmq:4.1.4-management-alpine` | `localhost:5673`, UI http://localhost:15673 | M2 |
+| Mailpit | `axllent/mailpit:v1.27.10` | SMTP `localhost:1026`, UI http://localhost:8026 | M6 |
+
+## Start
+
+Needs Docker with Compose, bash (Git Bash on Windows) and openssl.
+
+```bash
+scripts/init.sh                       # once: .env with random secrets
+docker compose up -d --wait
+scripts/run-app.sh                    # the service on http://localhost:5280, migrating the database first
+```
+
+## Clients in realm `juice`
+
+| Client | Grant | Roles | Use |
+|---|---|---|---|
+| `notifications-admin` | client credentials | `notifications-platform-admin` | register applications, link tenants |
+| `sample-producer` | client credentials | none | send notifications as an application (from M2) |
+| `tenant-admin` | client credentials | `notifications-tenant-admin`, `platform_tenant` = `0193f0aa-0000-7000-8000-0000000000a1` | configure that one tenant's delivery (the tests' tenant) |
+
+Producers must authenticate as their client: the API accepts a producer token only when its `client_id` claim (set by the `juice-notifications`
+scope on client-credentials tokens only) equals its `azp`. A stack created before 11 Nov 2026 lacks that mapper and the `tenant-admin` client, because Keycloak imports the realm only into an
+empty volume. Bring it up to date (safe to repeat):
+
+```bash
+scripts/init.sh && scripts/keycloak-update.sh
+```
+
+Their secrets are in `.env`. A token for the admin client:
+
+```bash
+source .env
+curl -s -d grant_type=client_credentials -d client_id=notifications-admin -d "client_secret=$NOTIFICATIONS_ADMIN_CLIENT_SECRET" \
+  http://localhost:8081/realms/juice/protocol/openid-connect/token | jq -r .access_token
+```
+
+## Tests
+
+The integration tests read `.env`, create a scratch database per test class on this PostgreSQL, and drop it afterwards. Without the stack they are
+skipped.

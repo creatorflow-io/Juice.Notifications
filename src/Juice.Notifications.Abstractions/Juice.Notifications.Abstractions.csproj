@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What producers and providers reference: contracts and the vocabulary of states, outcomes and channels. No dependencies. -->
+
+</Project>
