@@ -23,7 +23,15 @@ public sealed class NotificationStore
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            await File.WriteAllBytesAsync(temporary, JsonSerializer.SerializeToUtf8Bytes(updated));
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None,
+                Options = FileOptions.Asynchronous
+            };
+            if (!OperatingSystem.IsWindows())
+                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            await using (var file = new FileStream(temporary, options))
+                await JsonSerializer.SerializeAsync(file, updated);
             File.Move(temporary, path, true);
             state = updated;
         }
