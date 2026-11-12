@@ -357,10 +357,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("next_at");
 
-                    b.Property<string>("Priority")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
+                    b.Property<int>("Priority")
+                        .HasColumnType("integer")
                         .HasColumnName("priority");
 
                     b.Property<string>("ProviderMessageId")
@@ -402,6 +400,11 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasIndex("NextAt")
                         .HasDatabaseName("ix_deliveries_due")
+                        .HasFilter("next_at IS NOT NULL");
+
+                    b.HasIndex("Priority", "NextAt")
+                        .IsDescending(true, false)
+                        .HasDatabaseName("ix_deliveries_claim")
                         .HasFilter("next_at IS NOT NULL");
 
                     b.HasIndex("TenantId", "IntegrationId")

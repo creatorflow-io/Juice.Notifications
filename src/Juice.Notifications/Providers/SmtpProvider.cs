@@ -46,8 +46,11 @@ namespace Juice.Notifications.Providers
                 var known = string.Join(", ", options.Value.SmtpServers.Keys.Order());
                 return $"settings.server names one of the deployment's SMTP servers: {(known.Length > 0 ? known : "none are configured")}.";
             }
-            // Exactly the bare address, as stored and as the send parses it: " a@example.com " passed a trimmed check and failed every send.
-            if (s.From is null || !MailboxAddress.TryParse(s.From, out var from) || from.Address != s.From)
+            // The bare address as the send parses it: no display name, no angle brackets, no surrounding spaces (" a@example.com " passed a trimmed
+            // check and failed every send). Compared by form, not text: MimeKit decodes a punycode domain, so a@xn--bcher-kva.de reads back as
+            // a@bücher.de.
+            if (s.From is null || s.From != s.From.Trim() || s.From.Contains('<') || !MailboxAddress.TryParse(s.From, out var from)
+                || !string.IsNullOrEmpty(from.Name) || !from.Address.Contains('@'))
             {
                 return "settings.from is the sender's bare email address.";
             }
@@ -153,12 +156,16 @@ namespace Juice.Notifications.Providers
             return SendResult.Accepted(reply);
         }
 
-        /// <summary>Whether any of the message body went out: after that, a lost connection leaves the outcome unknown.</summary>
+        /// <summary>
+        /// Whether the whole message body went out: only then can the server have queued it (it needs the final <c>.</c>), so a lost connection
+        /// after that leaves the outcome unknown, and before it a retry is safe. MailKit reports the total; without one, any byte counts (unknown,
+        /// the safe side).
+        /// </summary>
         private sealed class BodyProgress : ITransferProgress
         {
             public bool Started { get; private set; }
 
-            public void Report(long bytesTransferred, long totalSize) => Started |= bytesTransferred > 0;
+            public void Report(long bytesTransferred, long totalSize) => Started |= totalSize > 0 ? bytesTransferred >= totalSize : bytesTransferred > 0;
 
             public void Report(long bytesTransferred) => Started |= bytesTransferred > 0;
         }

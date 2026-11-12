@@ -366,6 +366,36 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
+        /// A stale worker's unknown outcome doesn't outweigh a definite refusal: when both are unapplied, the 404 decides (no extra send, and the
+        /// category is the receiver's), as §10.3 and proof 5 want.
+        /// </summary>
+        [Fact]
+        public async Task A_definite_refusal_outweighs_a_stale_workers_unknown_outcome()
+        {
+            LocalStack.RequireAvailable();
+            var delivery = await DeliveryAsync(Channels.Webhook);
+            _webhook.OnSend = async () =>
+            {
+                // While this send is in flight, a worker whose lease ended records its own send of the same delivery, outcome unknown.
+                await using var db = _database.Context();
+                db.Attempts.Add(new DeliveryAttempt
+                {
+                    TenantId = Tenant, DeliveryId = delivery.Id, Number = 1, IntegrationId = _seed.Webhook, At = _clock.GetUtcNow(),
+                    Outcome = AttemptOutcome.Unknown, Category = FailureCategory.Provider, Error = "stale: no answer",
+                });
+                await db.SaveChangesAsync(Ct);
+            };
+            _webhook.Then(SendResult.Permanent(FailureCategory.Destination, "404 Not Found", 404));
+
+            await PassAsync();
+
+            var (row, attempts) = await ReadAsync(delivery.Id);
+            Assert.Equal((DeliveryStatus.Failed, FailureCategory.Destination, 2), (row.Status, row.FailureCategory, row.Attempts));
+            Assert.Equal([AttemptOutcome.Unknown, AttemptOutcome.PermanentFailure], attempts.Select(a => a.Outcome));
+            Assert.Equal(1, _webhook.Sends);
+        }
+
+        /// <summary>
         /// Proof 4: the worker dies after the send, before its step is saved. The attempt is recorded anyway; once the row is due again another
         /// worker applies it instead of sending blindly, and a webhook unknown is then re-sent under the same delivery id.
         /// </summary>

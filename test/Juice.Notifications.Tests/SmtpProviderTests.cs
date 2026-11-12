@@ -92,6 +92,15 @@ namespace Juice.Notifications.Tests
                         }
                         if (verb.Equals("DATA", StringComparison.OrdinalIgnoreCase) && act is Reply { Text: var text } && text.StartsWith("354"))
                         {
+                            if (_script.TryGetValue("MIDBODY", out var midBody))
+                            {
+                                // Read a little of the body, then act (a reset halfway through a large message).
+                                for (var i = 0; i < 20 && await reader.ReadLineAsync(_stop.Token) is { }; i++)
+                                {
+                                }
+                                await DoAsync(midBody, writer, client);
+                                return;
+                            }
                             while (await reader.ReadLineAsync(_stop.Token) is { } bodyLine && bodyLine != ".")
                             {
                             }
@@ -153,9 +162,10 @@ namespace Juice.Notifications.Tests
             SmtpServers = new() { ["fake"] = new SmtpServer { Host = host, Port = port, Security = SmtpSecurity.None } },
         }));
 
-        private static Task<SendResult> SendAsync(int port, string to = "someone@example.com", string settings = """{ "server": "fake", "from": "sender@example.com" }""")
+        private static Task<SendResult> SendAsync(int port, string to = "someone@example.com", string settings = """{ "server": "fake", "from": "sender@example.com" }""",
+            string text = "db-1 is at 95%")
         {
-            var content = JsonSerializer.Serialize(new EmailContent("Disk almost full", "db-1 is at 95%", "<p>db-1 is at 95%</p>"));
+            var content = JsonSerializer.Serialize(new EmailContent("Disk almost full", text, "<p>" + text + "</p>"));
             var delivery = new RenderedDelivery(Guid.NewGuid(), Guid.NewGuid(), Channels.Email, content, to, 1, NotificationPriority.Normal, false);
             return Provider(port).SendAsync(delivery, new IntegrationContext(Guid.NewGuid(), "mail", "smtp", settings, null), Ct);
         }
@@ -255,6 +265,19 @@ namespace Juice.Notifications.Tests
             Assert.True(server.BodyReceived);
         }
 
+        /// <summary>
+        /// Lost halfway through the body: the server never got the final dot, so it can't have queued the message, and a retry is safe (I9).
+        /// </summary>
+        [Fact]
+        public async Task Lost_partway_through_the_body_is_retryable()
+        {
+            var server = new FakeSmtpServer(new() { ["MIDBODY"] = Act.Drop });
+            var result = await SendAsync(server.Port, text: string.Join('\n', Enumerable.Repeat(new string('x', 70), 20_000)));
+            await server.DisposeAsync();
+            Is(result, AttemptOutcome.RetryableFailure, FailureCategory.Provider);
+            Assert.False(server.BodyReceived);
+        }
+
         /// <summary>Nothing listening is a failed connect: retryable.</summary>
         [Fact]
         public async Task A_closed_port_is_retryable()
@@ -292,6 +315,7 @@ namespace Juice.Notifications.Tests
         [Theory]
         [InlineData("""{ "server": "fake", "from": "sender@example.com" }""")]
         [InlineData("""{ "server": "fake", "from": "sender@example.com", "fromName": "Alerts" }""")]
+        [InlineData("""{ "server": "fake", "from": "a@xn--bcher-kva.de" }""")] // punycode: MimeKit reads it back decoded, still the bare address
         [InlineData("""{ "Server": "fake", "From": "sender@example.com", "FromName": null }""")]
         public void Good_settings_pass_the_check(string settings) => Assert.Null(Checker().CheckSettings(settings));
 

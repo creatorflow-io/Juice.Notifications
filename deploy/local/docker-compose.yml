@@ -72,6 +72,8 @@ services:
   # scripts/run-app.sh (the same port) keep working without it.
   app:
     profiles: ["app"]
+    # Longer than the service's 45 s shutdown: a send under way finishes and is recorded rather than being cut off and repeated.
+    stop_grace_period: 50s
     build:
       context: ../..
     environment:

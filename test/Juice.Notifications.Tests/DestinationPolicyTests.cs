@@ -101,9 +101,11 @@ namespace Juice.Notifications.Tests
         [InlineData("64:ff9b::a00:1", DestinationClass.Private)]
         [InlineData("64:ff9b::c0a8:101", DestinationClass.Private)]
         [InlineData("64:ff9b::808:808", DestinationClass.Public)]
-        // NAT64 local-use 64:ff9b:1::/48: private itself, blocked when it embeds a blocked address.
-        [InlineData("64:ff9b:1::808:808", DestinationClass.Private)]
-        [InlineData("64:ff9b:1::a00:1", DestinationClass.Private)]
+        // NAT64 local-use 64:ff9b:1::/48.
+        // Local-use NAT64 is judged at every RFC 6052 position (the prefix may be /48 … /96): zero bytes land in 0.0.0.0/8 somewhere, so blocked.
+        [InlineData("64:ff9b:1::808:808", DestinationClass.Blocked)]
+        [InlineData("64:ff9b:1:a9:fe:a9fe:808:808", DestinationClass.Blocked)] // 169.254.169.254 under a /56 prefix
+        [InlineData("64:ff9b:1::a00:1", DestinationClass.Blocked)]
         [InlineData("64:ff9b:1::a9fe:a9fe", DestinationClass.Blocked)]
         [InlineData("64:ff9b:1:ffff::7f00:1", DestinationClass.Blocked)]
         // 6to4 2002::/16 embeds the IPv4 address in bits 16–47.
@@ -250,7 +252,8 @@ namespace Juice.Notifications.Tests
         [InlineData("127.0.0.0/8", new int[0], false)]
         [InlineData("127.0.0.1/32", new[] { 5280 }, false)]
         [InlineData("169.254.169.254/32", new int[0], false)]
-        [InlineData("0.0.0.0/0", new int[0], false)]
+        // Judged as a whole, not by its base address: its blocked parts stay blocked at send time.
+        [InlineData("0.0.0.0/0", new int[0], true)]
         [InlineData("::1/128", new int[0], false)]
         [InlineData("fe80::/10", new int[0], false)]
         [InlineData("64:ff9b::a9fe:a9fe/128", new int[0], false)]

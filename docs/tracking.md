@@ -18,9 +18,9 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | M3 | Claim store and worker host | p1-07 | clean | Commit 43f1cea. |
 | M4 | Planner and routes | p1-08, p1-09 | clean | Commit 0e7d238. Audit records and configuration provisioning (I12) still open. |
 | M5 | Rendering and delivery planning | p1-10, p1-11 | clean | Commit fbb4684. Round 2: 6 bugs fixed. Confirmation: 2 fixed (renders on a 128 MB stack of their own, depth limit 250; invariant culture). Re-confirmation: no crash or wrong-outcome bugs; 2 low ones fixed (a slow-unwinding template error taken for a timeout; thread start failure taken for a template failure). Deferred #10, #12. |
-| M6 | Providers | p1-12, p1-13 | r1 | Round 1: 13 findings; fixed SMTP 4xx/timeout/QUIT/DATA classification and settings checks, webhook sent-or-not detection and body drain, 443-only for public hosts, NAT64/6to4/IPv4-compatible addresses, http only to private, allowlist validation, URL-free traces, Verify range, client cache disposal. Deferred #13–#15. Tests: DestinationPolicyTests, SmtpProviderTests, WebhookProviderTests (M6) / DispatcherTests (M7). |
-| M7 | Dispatcher | p1-14 | r1 | Round 1: 6 bugs fixed (priority claim order, sends not cancelled by stopping, retry over unapplied attempts, mandatory once per budget, backoff from the send end, missing address/secret handling). Tests: DestinationPolicyTests, SmtpProviderTests, WebhookProviderTests (M6) / DispatcherTests (M7). |
-| M8 | History, dead letters, operations, host | p1-15, p1-16, p1-17 | r1 | Round 1: 9 findings; fixed retry over unapplied attempts, offset times, producer sees target not address, single-status parsing, earliest expiry, metrics after commit, backlog gauge per running host, stale fields on retry, plan and delivery-planning spans. Deferred #16. |
+| M6 | Providers | p1-12, p1-13 | confirm | Round 1: 13 findings; fixed SMTP 4xx/timeout/QUIT/DATA classification and settings checks, webhook sent-or-not detection and body drain, 443-only for public hosts, NAT64/6to4/IPv4-compatible addresses, http only to private, allowlist validation, URL-free traces, Verify range, client cache disposal. Deferred #13–#15. Tests: DestinationPolicyTests, SmtpProviderTests, WebhookProviderTests (M6) / DispatcherTests (M7). Round 2: 4 fixed (SMTP drop mid-body retryable, legacy settings editable, punycode sender, NAT64 local-use at every RFC 6052 position; allowlist CIDRs judged as a whole). |
+| M7 | Dispatcher | p1-14 | confirm | Round 1: 6 bugs fixed (priority claim order, sends not cancelled by stopping, retry over unapplied attempts, mandatory once per budget, backoff from the send end, missing address/secret handling). Tests: DestinationPolicyTests, SmtpProviderTests, WebhookProviderTests (M6) / DispatcherTests (M7). Round 2: 4 fixed (claim index on integer priority, refusal beats stale unknown, 45 s shutdown + 50 s stop grace, 60 s dispatcher lease floor). |
+| M8 | History, dead letters, operations, host | p1-15, p1-16, p1-17 | r2 | Round 1: 9 findings; fixed retry over unapplied attempts, offset times, producer sees target not address, single-status parsing, earliest expiry, metrics after commit, backlog gauge per running host, stale fields on retry, plan and delivery-planning spans. Deferred #16. |
 | M9 | Proof points and acceptance | p1-g1 … p1-g6 | none | Not started. |
 
 ## Items (collection `tasks`, phase `p1`)
@@ -57,6 +57,8 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
+| 2026-11-12 | M6, M7 → confirm (round 2 fixes committed); M8 round 2 review running. |
+| 2026-11-12 | M6, M7, M8 → r2 (round 2 reviews started). Round 1 is commit 99e0cbe. |
 | 2026-11-12 | M6, M7, M8 round 1 fixes and tests committed (504 tests green); round 2 next. |
 | 2026-11-12 | M6, M7, M8 → r1 (round 1 reviews started). |
 | 2026-11-12 | p1-17 → done (recipients and due_backlog metrics, compose app profile, samples producer). M8 part 1 is commit f73ee0a. |

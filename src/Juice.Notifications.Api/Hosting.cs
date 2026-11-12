@@ -72,6 +72,9 @@ namespace Juice.Notifications.Api
             var connectionString = configuration.GetConnectionString("Notifications")
                 ?? throw new InvalidOperationException("ConnectionStrings:Notifications is required.");
             services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, connectionString));
+            // A send that is under way finishes and is recorded on shutdown (the dispatcher doesn't cancel sends): up to about 27 s for SMTP, plus
+            // recording and saving. The container's stop grace period must be longer still (deploy/local: stop_grace_period).
+            services.Configure<HostOptions>(host => host.ShutdownTimeout = host.ShutdownTimeout < TimeSpan.FromSeconds(45) ? TimeSpan.FromSeconds(45) : host.ShutdownTimeout);
             services.TryAddSingleton(TimeProvider.System);
             services.AddHostedService<DatabaseMigrator>();
 

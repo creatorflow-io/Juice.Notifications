@@ -178,7 +178,11 @@ namespace Juice.Notifications.Configuration
             {
                 errors.Add(new FieldError("/secretRef", $"A secret is named, never sent: env:{delivery.Value.ApiSecretEnvPrefix}NAME, or file: in the deployment's secret folder."));
             }
-            if (provider is not null && errors.Count == 0 && provider.CheckSettings(r.Settings is { } given ? given.GetRawText() : existing?.Settings ?? "{}") is { } settingsProblem)
+            // Checked when they are new or change, or the kind does: a stored integration saved under an older check can still be disabled or
+            // reprioritized without rewriting its settings.
+            var settingsChange = r.Settings is not null || existing is null || (r.Kind is not null && r.Kind != existing.Kind);
+            if (provider is not null && errors.Count == 0 && settingsChange
+                && provider.CheckSettings(r.Settings is { } given ? given.GetRawText() : existing?.Settings ?? "{}") is { } settingsProblem)
             {
                 errors.Add(new FieldError("/settings", settingsProblem));
             }

@@ -78,9 +78,16 @@ namespace Juice.Notifications.Providers
                 {
                     return DestinationClass.Blocked;
                 }
-                if (Nat64.Contains(ip) || Nat64Local.Contains(ip))
+                if (Nat64.Contains(ip))
                 {
-                    return Stricter(Nat64Local.Contains(ip) ? DestinationClass.Private : DestinationClass.Public, ClassifyOwn(new IPAddress(bytes[12..16])));
+                    return Stricter(DestinationClass.Public, ClassifyOwn(new IPAddress(bytes[12..16])));
+                }
+                if (Nat64Local.Contains(ip))
+                {
+                    // A local-use prefix can be /48, /56, /64 or /96 (RFC 6052 §2.2), which puts the IPv4 at a different place, and the rest is the
+                    // sender's choice: judged at every place, strictest wins.
+                    return Rfc6052Positions.Select(p => ClassifyOwn(new IPAddress(p.Select(i => bytes[i]).ToArray())))
+                        .Aggregate(DestinationClass.Private, Stricter);
                 }
                 if (SixToFour.Contains(ip))
                 {
@@ -89,6 +96,9 @@ namespace Juice.Notifications.Providers
             }
             return ClassifyOwn(ip);
         }
+
+        /// <summary>Where the IPv4 sits for each RFC 6052 prefix length that fits in 64:ff9b:1::/48 (byte 8, the u octet, is skipped).</summary>
+        private static readonly int[][] Rfc6052Positions = [[6, 7, 9, 10], [7, 9, 10, 11], [9, 10, 11, 12], [12, 13, 14, 15]];
 
         private static DestinationClass Stricter(DestinationClass a, DestinationClass b) => (DestinationClass)Math.Max((int)a, (int)b);
 
@@ -146,7 +156,11 @@ namespace Juice.Notifications.Providers
             {
                 return $"allowlist '{entry.Destination}': not a valid CIDR";
             }
-            return Classify(network.BaseAddress) == DestinationClass.Blocked
+            // Refused when it can only ever cover blocked addresses: a single one that is, or a network inside a blocked range. A wider network
+            // (0.0.0.0/0, a /64 inside 64:ff9b:1::/48) isn't judged by its base address; its blocked parts stay blocked at send time.
+            var single = network.PrefixLength == (network.BaseAddress.AddressFamily == AddressFamily.InterNetwork ? 32 : 128);
+            return (single ? Classify(network.BaseAddress) == DestinationClass.Blocked
+                    : Blocked.Append(Ipv4Compatible).Any(b => b.PrefixLength <= network.PrefixLength && b.BaseAddress.AddressFamily == network.BaseAddress.AddressFamily && b.Contains(network.BaseAddress)))
                 ? $"allowlist '{entry.Destination}': loopback, link-local, metadata and reserved addresses are never reachable"
                 : null;
         }

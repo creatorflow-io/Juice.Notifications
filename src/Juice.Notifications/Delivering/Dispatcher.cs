@@ -121,7 +121,8 @@ namespace Juice.Notifications.Delivering
             try
             {
                 // Not cancelled by the worker stopping: a send cut off midway may still have gone out, and would be repeated unrecorded under the
-                // same number. The providers' own timeouts bound it (SMTP 25 s, webhook 15 s), within the host's shutdown timeout.
+                // same number. The providers' own timeouts bound it (SMTP about 27 s, webhook 17 s); the host waits 45 s on shutdown (Hosting).
+                // The container's stop grace period has to allow that too (deploy/local: stop_grace_period).
                 result = await provider.SendAsync(new RenderedDelivery(row.Id, row.TenantId, row.Channel, row.Content, destination, attempt, row.Priority, row.Mandatory),
                     new IntegrationContext(integration.Id, integration.Key, integration.Kind, integration.Settings, secret), CancellationToken.None);
             }
@@ -165,9 +166,11 @@ namespace Juice.Notifications.Delivering
             {
                 return false;
             }
-            // A send that went through wins; else one whose outcome is unknown (it may have gone out, so the unknown-outcome policy decides,
-            // not a later plain failure from another worker); else the latest.
+            // What the receiver said beats what nobody heard: a send that went through wins; else a definite refusal (a 404, a 550: another
+            // send would be refused too); else an unknown outcome (it may have gone out, so the unknown-outcome policy decides rather than a
+            // retryable failure, which only shows that one send didn't); else the latest.
             var chosen = unapplied.FirstOrDefault(a => a.Outcome is AttemptOutcome.Delivered or AttemptOutcome.Accepted)
+                ?? unapplied.LastOrDefault(a => a.Outcome == AttemptOutcome.PermanentFailure)
                 ?? unapplied.LastOrDefault(a => a.Outcome == AttemptOutcome.Unknown)
                 ?? unapplied[^1];
             row.FirstAttemptAt ??= unapplied[0].At;
@@ -324,12 +327,20 @@ namespace Juice.Notifications.Delivering
 
     public static class DispatchRegistration
     {
+        public static readonly TimeSpan MinLease = TimeSpan.FromSeconds(60);
+
         /// <summary>The dispatcher, the phase 1 providers (webhook, SMTP) and the <c>Delivery</c> options.</summary>
         public static IServiceCollection AddDispatching(this IServiceCollection services, StageOptions options, bool runWorkers = true)
         {
             services.AddSingleton<WebhookProvider>();
             services.AddSingleton<INotificationProvider>(sp => sp.GetRequiredService<WebhookProvider>());
             services.AddSingleton<INotificationProvider, SmtpProvider>();
+            // The lease has to outlast a send, or another worker claims the row mid-send (§11): SMTP takes up to connect + 2 × request + QUIT, about
+            // 27 s with the defaults; 60 s leaves room for recording and saving. A host passing a shorter lease gets this floor.
+            if (options.Lease < MinLease)
+            {
+                options.Lease = MinLease;
+            }
             return services.AddStage<Delivery, DispatcherStage>(options, runWorkers);
         }
     }

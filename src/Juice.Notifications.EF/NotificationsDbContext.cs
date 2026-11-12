@@ -228,7 +228,10 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.DestinationSnapshot);
                 e.Property(x => x.Locale).HasMaxLength(35);
                 e.Property(x => x.RendererVersion).HasMaxLength(40);
-                e.Property(x => x.Priority).HasConversion<string>().HasMaxLength(20);
+                // The enum's value (Low 0 … Critical 3), not its name: the dispatcher claims by it, from the index below (M7 review: a CASE over the
+                // names sorted every due row on each claim).
+                e.Property(x => x.Priority);
+                e.HasIndex(x => new { x.Priority, x.NextAt }).IsDescending(true, false).HasFilter("next_at IS NOT NULL").HasDatabaseName("ix_deliveries_claim");
                 e.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
                 e.Property(x => x.FailureCategory).HasConversion<string>().HasMaxLength(20);
                 e.Property(x => x.LastError).HasMaxLength(2000);
