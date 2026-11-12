@@ -29,8 +29,34 @@ namespace Juice.Notifications.Rendering
         public const int MaxOutputChars = 256 * 1024;
         public static readonly TimeSpan Budget = TimeSpan.FromMilliseconds(200);
 
+        /// <summary>
+        /// One render per process before any budget starts: the first render pays for Scriban and the JIT warming up, which can exceed the
+        /// budget by itself and fail a valid template, at declaration or at its first delivery after a restart.
+        /// </summary>
+        private static readonly Lazy<Task> WarmUp = new(WarmAsync);
+
+        private static async Task WarmAsync()
+        {
+            try
+            {
+                await RenderCoreAsync("""{{ for x in [1, 2] }}{{ x | string.upcase }}{{ math.round 1.5 }}{{ html.escape data.a }}{{ array.size labels }}{{ end }}""",
+                    new RenderModel("t", 1, "t", NotificationPriority.Normal, JsonElement.Parse("""{ "a": "<b>" }"""), new Dictionary<string, string>(),
+                        new Dictionary<string, string>()), TimeSpan.FromSeconds(30), CancellationToken.None);
+            }
+            catch (RenderException)
+            {
+                // Warming up is best effort; a real render reports its own problems.
+            }
+        }
+
         /// <summary>Renders a template; throws <see cref="RenderException"/> for anything the sandbox refuses.</summary>
         public static async Task<string> RenderAsync(string body, RenderModel model, CancellationToken ct)
+        {
+            await WarmUp.Value.WaitAsync(ct);
+            return await RenderCoreAsync(body, model, Budget, ct);
+        }
+
+        private static async Task<string> RenderCoreAsync(string body, RenderModel model, TimeSpan limit, CancellationToken ct)
         {
             var template = Template.Parse(body);
             if (template.HasErrors)
@@ -38,7 +64,7 @@ namespace Juice.Notifications.Rendering
                 throw new RenderException("The template doesn't parse: " + string.Join("; ", template.Messages.Select(m => m.ToString())));
             }
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            budget.CancelAfter(Budget);
+            budget.CancelAfter(limit);
             var context = new TemplateContext(Builtins())
             {
                 LoopLimit = 1000,
@@ -60,7 +86,7 @@ namespace Juice.Notifications.Rendering
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                throw new RenderException($"The template took longer than {Budget.TotalMilliseconds} ms.");
+                throw new RenderException($"The template took longer than {limit.TotalMilliseconds} ms.");
             }
             catch (Exception ex) when (ex is Scriban.Syntax.ScriptRuntimeException or InvalidOperationException or ArgumentException)
             {

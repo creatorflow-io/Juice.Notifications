@@ -24,8 +24,12 @@ namespace Juice.Notifications.Intake
     /// Accepts a notification for a tenant from an application: the request and its notification (<c>Planning</c>, due now) are stored in one
     /// transaction (phase-1-plan I3). The same idempotency key again returns the original request.
     /// </summary>
+    /// <remarks>
+    /// <see cref="ApplicationEnabled"/> is checked here, after the idempotency key: a retry of an accepted request gets the original even when the
+    /// application was disabled since, so a producer never takes an accepted notification for a refused one.
+    /// </remarks>
     public sealed record AcceptNotification(Guid NotificationTenantId, Guid ApplicationId, string ApplicationKey, NotificationSubmission Submission,
-        string? TraceParent) : MessageBase, IRequest<Outcome<AcceptedView>>;
+        string? TraceParent, bool ApplicationEnabled = true) : MessageBase, IRequest<Outcome<AcceptedView>>;
 
     /// <summary>An accepted request; <see cref="Duplicate"/> when the idempotency key was seen before and this is the original.</summary>
     public sealed record AcceptedView(Guid Id, string Type, int TypeVersion, DateTimeOffset AcceptedAt, bool Duplicate);
@@ -52,9 +56,12 @@ namespace Juice.Notifications.Intake
 
         public static bool IsKey(string? value) => value is not null && Key().IsMatch(value);
 
+        /// <summary>Text can't hold a NUL character: PostgreSQL stores it in neither text nor jsonb.</summary>
+        public const string NulMessage = "This text holds a NUL character (\\u0000), which can't be stored.";
+
         /// <summary>Normalized recipients, or null with the reason; the default is <c>[{ "kind": "route" }]</c>.</summary>
         internal static IReadOnlyList<RecipientSpec>? Recipients(IReadOnlyList<RecipientSpec>? sent, NotificationType type, IChannelRegistry channels,
-            List<FieldError> invalid, List<FieldError> refused)
+            IReadOnlySet<string>? templatedChannels, List<FieldError> invalid, List<FieldError> refused)
         {
             if (sent is null || sent.Count == 0)
             {
@@ -96,6 +103,12 @@ namespace Juice.Notifications.Intake
                                 : $"The address isn't a valid {channel.Address.ToString().ToLowerInvariant()} address."));
                             break;
                         }
+                        // Refused now rather than failing at rendering after a 202: the type has nothing to send on this channel.
+                        if (templatedChannels is not null && !templatedChannels.Contains(channel.Key))
+                        {
+                            refused.Add(new FieldError(at + "/channel", $"Version {type.Version} of {type.Key} has no {channel.Key} template, so it can't send on {channel.Key}."));
+                            break;
+                        }
                         if (!result.Any(x => x.Kind == RecipientKinds.Address && x.Channel == channel.Key && x.Address == address))
                         {
                             result.Add(new RecipientSpec(RecipientKinds.Address, channel.Key, address));
@@ -115,7 +128,7 @@ namespace Juice.Notifications.Intake
         /// <summary>The address in canonical form for its channel, or null if it isn't one (design §3: email lowercased).</summary>
         public static string? NormalizeAddress(ChannelDefinition channel, string? address)
         {
-            if (string.IsNullOrWhiteSpace(address) || address.Length > 320)
+            if (string.IsNullOrWhiteSpace(address) || address.Length > 320 || address.Any(char.IsControl))
             {
                 return null;
             }
@@ -154,6 +167,10 @@ namespace Juice.Notifications.Intake
                 {
                     invalid.Add(new FieldError("/labels/" + TypeRules.Pointer(name), "A label value is a string of up to 500 characters."));
                 }
+                else if (value.Contains('\0'))
+                {
+                    invalid.Add(new FieldError("/labels/" + TypeRules.Pointer(name), NulMessage));
+                }
             }
         }
 
@@ -174,7 +191,7 @@ namespace Juice.Notifications.Intake
                 {
                     invalid.Add(new FieldError(at, "A link name is 1–63 letters, digits, _ . or -, starting with a letter."));
                 }
-                else if (value is not { Length: <= 2000 } || !Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http"))
+                else if (value is not { Length: <= 2000 } || value.Any(char.IsControl) || !Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http"))
                 {
                     invalid.Add(new FieldError(at, "A link is an absolute http or https URL of up to 2000 characters."));
                 }
@@ -213,18 +230,28 @@ namespace Juice.Notifications.Intake
                 return Outcome<AcceptedView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",
                     [new FieldError("/idempotencyKey", "The idempotency key is 1–200 printable characters without spaces. It is required.")]);
             }
-            if (!await db.ApplicationTenants.AnyAsync(t => t.ApplicationId == request.ApplicationId && t.TenantId == tenant, cancellationToken))
-            {
-                return Outcome<AcceptedView>.Forbidden(ErrorCodes.TenantNotLinked, "The application isn't linked to this tenant. A platform admin links it.");
-            }
-            // The same key again is the same request: answer with the original, whatever this one says (design §5.2).
+            // The same key again is the same request: answer with the original, whatever this one says (design §5.2). First, before the
+            // application check: a retry after a lost 202 must not read as refused because an admin disabled the application since.
             if (await IntakeQueries.FindAsync(db, tenant, request.ApplicationId, s.IdempotencyKey!, cancellationToken) is { } original)
             {
                 return Outcome<AcceptedView>.Ok(original with { Duplicate = true });
             }
+            if (!request.ApplicationEnabled)
+            {
+                return Outcome<AcceptedView>.Forbidden(ErrorCodes.ApplicationDisabled, $"The application {request.ApplicationKey} is disabled.");
+            }
+            if (!await db.ApplicationTenants.AnyAsync(t => t.ApplicationId == request.ApplicationId && t.TenantId == tenant, cancellationToken))
+            {
+                return Outcome<AcceptedView>.Forbidden(ErrorCodes.TenantNotLinked, "The application isn't linked to this tenant. A platform admin links it.");
+            }
             if (string.IsNullOrEmpty(s.Type))
             {
                 return Outcome<AcceptedView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.", [new FieldError("/type", "The type is required.")]);
+            }
+            if (s.Type.Contains('\0'))
+            {
+                // It is a query parameter next, and PostgreSQL refuses the byte.
+                return Outcome<AcceptedView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.", [new FieldError("/type", RequestRules.NulMessage)]);
             }
             if (!s.Type.StartsWith(request.ApplicationKey + ".", StringComparison.Ordinal))
             {
@@ -269,7 +296,12 @@ namespace Juice.Notifications.Intake
             RequestRules.Labels(s.Labels, invalid);
             RequestRules.Links(s.Links, invalid);
             var actor = RequestRules.Actor(s.Actor, invalid);
-            var recipients = RequestRules.Recipients(s.Recipients, type, channels, invalid, refused);
+            // Only an address recipient needs this: its channel must have a template for the type (routes pick their own channels).
+            var templated = s.Recipients?.Any(r => r?.Kind == RecipientKinds.Address) == true
+                ? (await db.Templates.AsNoTracking().Where(t => t.TypeId == type.Id && (t.TenantId == null || t.TenantId == tenant))
+                    .Select(t => t.Channel).Distinct().ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal)
+                : null;
+            var recipients = RequestRules.Recipients(s.Recipients, type, channels, templated, invalid, refused);
             var data = s.Data is { ValueKind: not JsonValueKind.Null and not JsonValueKind.Undefined } d ? d : JsonDocument.Parse("{}").RootElement;
             if (data.ValueKind != JsonValueKind.Object)
             {
@@ -278,6 +310,10 @@ namespace Juice.Notifications.Intake
             else if (CanonicalJson.FirstDuplicate(data, "/data") is { } duplicate)
             {
                 invalid.Add(new FieldError(duplicate, "This object repeats a property name; each name appears once."));
+            }
+            else if (CanonicalJson.FirstNul(data, "/data") is { } nul)
+            {
+                invalid.Add(new FieldError(nul, RequestRules.NulMessage));
             }
             else if (System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > RequestRules.MaxDataBytes)
             {
@@ -292,7 +328,7 @@ namespace Juice.Notifications.Intake
                 return Outcome<AcceptedView>.Unprocessable(refused.Any(e => e.Pointer.StartsWith("/recipients", StringComparison.Ordinal))
                     ? ErrorCodes.RecipientNotAllowed : ErrorCodes.InvalidRequest, "The type's rules refuse this request.", refused);
             }
-            var dataErrors = DataSchemas.Validate(schemas.For(type), data, "/data");
+            var dataErrors = schemas.Validate(type, data, "/data");
             if (dataErrors.Count > 0)
             {
                 return Outcome<AcceptedView>.Unprocessable(ErrorCodes.InvalidData, $"The data doesn't match version {type.Version} of {type.Key}.", dataErrors);

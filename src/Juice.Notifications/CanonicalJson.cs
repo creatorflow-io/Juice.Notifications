@@ -21,6 +21,45 @@ namespace Juice.Notifications
         }
 
         /// <summary>
+        /// The JSON pointer of the first string or property name holding a NUL character (<c>\u0000</c>), or null. PostgreSQL stores neither
+        /// in text nor in jsonb, so it is refused as a field error instead of failing the insert.
+        /// </summary>
+        public static string? FirstNul(JsonElement element, string at)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.String:
+                    return element.GetString()!.Contains('\0') ? at : null;
+                case JsonValueKind.Object:
+                    foreach (var property in element.EnumerateObject())
+                    {
+                        var here = at + "/" + property.Name.Replace("~", "~0").Replace("/", "~1");
+                        if (property.Name.Contains('\0'))
+                        {
+                            return here;
+                        }
+                        if (FirstNul(property.Value, here) is { } inner)
+                        {
+                            return inner;
+                        }
+                    }
+                    return null;
+                case JsonValueKind.Array:
+                    var i = 0;
+                    foreach (var item in element.EnumerateArray())
+                    {
+                        if (FirstNul(item, $"{at}/{i++}") is { } inner)
+                        {
+                            return inner;
+                        }
+                    }
+                    return null;
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
         /// The JSON pointer of the first object that repeats a property name, or null. Such JSON means different things to different readers (jsonb
         /// keeps the last; JsonNode refuses it), so it is refused wherever its meaning matters.
         /// </summary>

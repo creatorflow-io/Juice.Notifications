@@ -104,7 +104,8 @@ namespace Juice.Notifications.Api
         private static async Task<IResult> SendAsync(Guid tenantId, SendNotificationBody body, ClaimsPrincipal user, Producers producers, IMediator mediator,
             NotificationsDbContext db, Stages.StageNudges nudges, CancellationToken ct)
         {
-            var (caller, refusal) = await producers.ResolveAsync(user, ct);
+            // A disabled application is refused by intake, after the idempotency key: a retry of an accepted request still gets the original.
+            var (caller, refusal) = await producers.ResolveAsync(user, ct, forWriting: false);
             if (caller is null)
             {
                 return refusal!;
@@ -113,7 +114,7 @@ namespace Juice.Notifications.Api
                 body.Recipients?.Select(r => new RecipientSpec(r?.Kind, r?.Channel, r?.Address)).ToList(), body.Actor is null ? null : new ActorSpec(body.Actor.Kind, body.Actor.Id),
                 body.Priority, body.Labels, body.Data, body.Links, body.ExpiresAt);
             var traceParent = Activity.Current is { IdFormat: ActivityIdFormat.W3C } activity ? activity.Id : null;
-            return await ApiResults.SendAsync(mediator, db, new AcceptNotification(tenantId, caller.Id, caller.Key, submission, traceParent),
+            return await ApiResults.SendAsync(mediator, db, new AcceptNotification(tenantId, caller.Id, caller.Key, submission, traceParent, caller.Enabled),
                 outcome =>
                 {
                     if (!outcome.Value!.Duplicate)

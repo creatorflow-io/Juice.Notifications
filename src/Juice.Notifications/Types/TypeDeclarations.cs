@@ -34,6 +34,21 @@ namespace Juice.Notifications.Types
         string Correlation, IReadOnlyList<string> Redact, JsonElement Schema, string Workflow,
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Templates)
     {
+        /// <summary>Where each (channel, stored locale) template was in the declaration, as sent: the pointer for errors found later.</summary>
+        public IReadOnlyDictionary<(string Channel, string Locale), string> Pointers { get; init; } = new Dictionary<(string, string), string>();
+
+        /// <summary>A stored type version as a checked declaration, to hash it as declarations are hashed today.</summary>
+        public static CheckedType From(NotificationType type, IEnumerable<Template> templates)
+        {
+            using var schema = JsonDocument.Parse(type.Schema);
+            return new CheckedType(type.Key, type.Name, type.Category, type.DisplayGroup, type.Priority, type.Mandatory, type.ExternalRecipients,
+                type.Correlation, type.Redact, schema.RootElement.Clone(), type.Workflow,
+                // A template can have later versions (edited after the declaration); the latest of each is the current one.
+                templates.GroupBy(t => t.Channel).ToDictionary(g => g.Key,
+                    g => (IReadOnlyDictionary<string, string>)g.GroupBy(t => t.Locale).Select(l => l.MaxBy(t => t.Version)!)
+                        .ToDictionary(t => t.Locale, t => t.Engine == TemplateEngines.Passthrough ? TypeRules.Passthrough : t.Body)));
+        }
+
         /// <summary>The whole declaration, canonical: equal declarations, however written, hash alike.</summary>
         public string Hash()
         {
@@ -97,6 +112,10 @@ namespace Juice.Notifications.Types
             {
                 Fail("/name", "The name is 1–200 characters.");
             }
+            else if (name.Contains('\0'))
+            {
+                Fail("/name", Intake.RequestRules.NulMessage);
+            }
             if (d.Category is null || !Slug().IsMatch(d.Category))
             {
                 Fail("/category", "The category is 1–63 lowercase letters, digits or hyphens, starting with a letter.");
@@ -140,14 +159,15 @@ namespace Juice.Notifications.Types
             {
                 Fail("/workflow", """Phase 1 runs one workflow: [{"step":"send"}]. Omit it or send exactly that.""");
             }
-            var templates = CheckTemplates(d.Templates, channels, Fail);
+            var pointers = new Dictionary<(string, string), string>();
+            var templates = CheckTemplates(d.Templates, channels, pointers, Fail);
 
             if (errors.Count > 0)
             {
                 return (null, errors);
             }
             return (new CheckedType(d.Key!, name!, d.Category!, displayGroup, priority, d.Mandatory ?? false, d.ExternalRecipients ?? false, correlation,
-                [.. redact], d.Schema!.Value, SendOnlyWorkflow, templates), []);
+                [.. redact], d.Schema!.Value, SendOnlyWorkflow, templates) { Pointers = pointers }, []);
         }
 
         public static bool TryPriority(string value, out NotificationPriority priority)
@@ -157,7 +177,7 @@ namespace Juice.Notifications.Types
         }
 
         private static Dictionary<string, IReadOnlyDictionary<string, string>> CheckTemplates(JsonElement? declared, IChannelRegistry channels,
-            Action<string, string> fail)
+            Dictionary<(string, string), string> pointers, Action<string, string> fail)
         {
             var result = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
             if (declared is not { } templates || templates.ValueKind == JsonValueKind.Null)
@@ -186,6 +206,7 @@ namespace Juice.Notifications.Types
                 if (entry.Value.ValueKind == JsonValueKind.String)
                 {
                     locales[DefaultLocale] = entry.Value.GetString()!;
+                    pointers[(entry.Name, DefaultLocale)] = pointer;
                 }
                 else if (entry.Value.ValueKind == JsonValueKind.Object)
                 {
@@ -204,6 +225,11 @@ namespace Juice.Notifications.Types
                         {
                             fail(pointer + "/" + Pointer(locale.Name), "This locale is already declared for the channel (locales ignore case).");
                         }
+                        else
+                        {
+                            // Errors point at the locale as sent (pt-BR), though it is stored lowercase.
+                            pointers[(entry.Name, locale.Name.ToLowerInvariant())] = pointer + "/" + Pointer(locale.Name);
+                        }
                     }
                     if (!locales.ContainsKey(DefaultLocale))
                     {
@@ -217,7 +243,12 @@ namespace Juice.Notifications.Types
                 }
                 foreach (var (locale, body) in locales)
                 {
-                    var at = entry.Value.ValueKind == JsonValueKind.String ? pointer : pointer + "/" + Pointer(locale);
+                    var at = pointers[(entry.Name, locale)];
+                    if (body.Contains('\0'))
+                    {
+                        fail(at, Intake.RequestRules.NulMessage);
+                        continue;
+                    }
                     if (body == Passthrough)
                     {
                         if (!channel.Passthrough)
@@ -265,7 +296,7 @@ namespace Juice.Notifications.Types
                 {
                     if (await Rendering.TemplateRenderer.CheckAsync(body, cancellationToken) is { } problem)
                     {
-                        sandbox.Add(new FieldError($"/templates/{TypeRules.Pointer(channel)}" + (locales.Count == 1 && locale == TypeRules.DefaultLocale ? "" : "/" + TypeRules.Pointer(locale)), problem));
+                        sandbox.Add(new FieldError(type.Pointers[(channel, locale)], problem));
                     }
                 }
             }
@@ -278,6 +309,17 @@ namespace Juice.Notifications.Types
             if (latest is not null && latest.DeclarationHash == hash)
             {
                 return Outcome<TypeVersionView>.Ok(TypeQueries.View(latest, isNew: false));
+            }
+            // A stored hash can predate what hashes cover now (a version declared before 'correlation' existed): hash the stored version
+            // as it would be declared today, so the same declaration still returns it rather than adding a version.
+            if (latest is not null)
+            {
+                var stored = await db.Templates.AsNoTracking().Where(t => t.TypeId == latest.Id && t.TenantId == null).ToListAsync(cancellationToken);
+                if (CheckedType.From(latest, stored).Hash() == hash)
+                {
+                    await db.Types.Where(t => t.Id == latest.Id).ExecuteUpdateAsync(set => set.SetProperty(t => t.DeclarationHash, hash), cancellationToken);
+                    return Outcome<TypeVersionView>.Ok(TypeQueries.View(latest, isNew: false) with { DeclarationHash = hash });
+                }
             }
             // Two different declarations at once both take latest + 1; the second commit hits the version's key, and the API answers it
             // (ApplicationEndpoints' race table): the same declaration as the winner gets the winner's version, a different one concurrent_change.

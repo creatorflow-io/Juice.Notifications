@@ -156,7 +156,36 @@ namespace Juice.Notifications.IntegrationTests
             { "a pattern that isn't a regex", """{ "schema": { "properties": { "a": { "pattern": "[" } } } }""", "/schema" },
             { "locales that differ only in case", """{ "templates": { "email": { "en": "x", "pt-BR": "y", "pt-br": "z" } } }""", "/templates/email/pt-br" },
             { "a locale with a trailing newline", """{ "templates": { "email": { "en": "x", "vi\n": "y" } } }""", "/templates/email/vi\n" },
+            // PostgreSQL stores no NUL character: refused at the field, not a 500 from the insert.
+            { "a NUL in the name", """{ "name": "a\u0000b" }""", "/name" },
+            { "a NUL in a template", """{ "templates": { "email": "x\u0000" } }""", "/templates/email" },
+            { "a NUL in the schema", """{ "schema": { "type": "object", "description": "a\u0000b" } }""", "/schema/description" },
+            // A sandbox error points at the template as sent: the locale's own case, and /en when an object holds only en.
+            { "a sandbox error in a mixed-case locale", """{ "templates": { "email": { "en": "x", "pt-BR": "{{ include 'x' }}" } } }""", "/templates/email/pt-BR" },
+            { "a sandbox error in an object with only en", """{ "templates": { "email": { "en": "{{ include 'x' }}" } } }""", "/templates/email/en" },
+            { "a $ref to an anchor that isn't in a subschema", """{ "schema": { "x-meta": { "$anchor": "a" }, "$ref": "#a" } }""", "/schema/$ref" },
         };
+
+        [Fact]
+        public async Task A_version_whose_stored_hash_is_stale_is_still_the_same_declaration()
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            var key = await DeclaredAsync(client, Type(NewType()));
+            await using (var db = producer.App.Database.Context())
+            {
+                // As a version declared before 'correlation' was part of the hash.
+                await db.Types.Where(t => t.Key == key).ExecuteUpdateAsync(set => set.SetProperty(t => t.DeclarationHash, "stale"), Ct);
+            }
+
+            var again = await client.PutAsJsonAsync(TypesUrl, Type(key), Ct);
+
+            Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+            Assert.Equal(1, (await again.Content.ReadFromJsonAsync<TypeVersionResponse>(Ct))!.Version);
+            await using var check = producer.App.Database.Context();
+            Assert.Equal(1, await check.Types.CountAsync(t => t.Key == key, Ct));
+            Assert.NotEqual("stale", (await check.Types.SingleAsync(t => t.Key == key, Ct)).DeclarationHash);
+        }
 
         [Theory]
         [MemberData(nameof(BadDeclarations))]
@@ -235,6 +264,70 @@ namespace Juice.Notifications.IntegrationTests
 
             Assert.Equal(HttpStatusCode.OK, again.StatusCode);
             Assert.Equal(first!.Id, (await again.Content.ReadFromJsonAsync<AcceptedResponse>(Ct))!.Id);
+        }
+
+        /// <summary>
+        /// A retry after a lost 202 gets the original, even when an admin disabled the application since. (Unlinking can't happen once the
+        /// application has sent for the tenant: its requests hold the link.)
+        /// </summary>
+        [Fact]
+        public async Task A_retry_gets_the_original_after_the_application_is_disabled()
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            using var admin = producer.App.Client(await LocalStack.AdminTokenAsync());
+            var type = await DeclaredAsync(client, Type(NewType()));
+            var key = Guid.NewGuid().ToString("N");
+            var first = await (await client.PostAsJsonAsync(SendUrl, Send(type, key), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
+
+            (await admin.PutAsJsonAsync($"/api/v1/applications/{ProducerApp.Key}", new UpdateApplicationBody(null, null, false), Ct)).EnsureSuccessStatusCode();
+            try
+            {
+                var afterDisable = await client.PostAsJsonAsync(SendUrl, Send(type, key), Ct);
+                Assert.Equal(HttpStatusCode.OK, afterDisable.StatusCode);
+                Assert.Equal(first!.Id, (await afterDisable.Content.ReadFromJsonAsync<AcceptedResponse>(Ct))!.Id);
+                var disabled = await client.PostAsJsonAsync(SendUrl, Send(type), Ct);
+                Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.ApplicationDisabled), (disabled.StatusCode, await CodeAsync(disabled)));
+            }
+            finally
+            {
+                (await admin.PutAsJsonAsync($"/api/v1/applications/{ProducerApp.Key}", new UpdateApplicationBody(null, null, true), Ct)).EnsureSuccessStatusCode();
+            }
+        }
+
+        [Fact]
+        public async Task A_NUL_character_is_refused_at_the_field()
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            var type = await DeclaredAsync(client, Type(NewType()));
+
+            var inData = await client.PostAsJsonAsync(SendUrl, Send(type, data: """{ "subject": "a\u0000b" }"""), Ct);
+            Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidRequest), (inData.StatusCode, await CodeAsync(inData)));
+            Assert.Contains("/data/subject", await PointersAsync(inData));
+
+            var body = Send(type) with { Labels = new Dictionary<string, string> { ["env"] = "a\0b" } };
+            var inLabel = await client.PostAsJsonAsync(SendUrl, body, Ct);
+            Assert.Equal(HttpStatusCode.BadRequest, inLabel.StatusCode);
+            Assert.Contains("/labels/env", await PointersAsync(inLabel));
+
+            var inType = await client.PostAsJsonAsync(SendUrl, Send(type + "\0x"), Ct);
+            Assert.Equal(HttpStatusCode.BadRequest, inType.StatusCode);
+            Assert.Contains("/type", await PointersAsync(inType));
+        }
+
+        [Fact]
+        public async Task An_address_on_a_channel_the_type_has_no_template_for_is_refused()
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            var type = await DeclaredAsync(client, Type(NewType(), external: true, templates: """{ "webhook": "passthrough" }"""));
+
+            var response = await client.PostAsJsonAsync(SendUrl,
+                Send(type, recipients: [new RecipientBody("address", "email", "someone@example.com")]), Ct);
+
+            Assert.Equal((HttpStatusCode.UnprocessableEntity, ErrorCodes.RecipientNotAllowed), (response.StatusCode, await CodeAsync(response)));
+            Assert.Contains("/recipients/0/channel", await PointersAsync(response));
         }
 
         /// <summary>Proof 2 (design §16): a duplicate request creates no new work, even sent 20 times at once.</summary>

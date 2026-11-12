@@ -48,8 +48,11 @@ namespace Juice.Notifications.Types
             {
                 return Errors(meta, pointer);
             }
-            var references = new List<FieldError>();
-            CheckReferences(schema, schema, pointer, references);
+            if (CanonicalJson.FirstNul(schema, pointer) is { } nul)
+            {
+                return [new FieldError(nul, Intake.RequestRules.NulMessage)];
+            }
+            var references = CheckReferences(schema, pointer);
             if (references.Count > 0)
             {
                 return references;
@@ -65,100 +68,111 @@ namespace Juice.Notifications.Types
             }
         }
 
-        /// <summary>Every <c>$ref</c>/<c>$dynamicRef</c> under <paramref name="node"/> must resolve inside <paramref name="root"/>; no <c>$id</c>.</summary>
-        private static void CheckReferences(JsonElement root, JsonElement node, string at, List<FieldError> errors)
+        // The 2020-12 keywords whose values are subschemas. Only these are schemas to the library: anything else (an annotation, an unknown
+        // keyword, enum or const values) is data, so a "$ref" or "$anchor" in it means nothing and a reference into it isn't a schema.
+        private static readonly HashSet<string> OneSubschema = ["additionalProperties", "propertyNames", "items", "contains", "not", "if", "then",
+            "else", "unevaluatedItems", "unevaluatedProperties", "contentSchema"];
+        private static readonly HashSet<string> SubschemaArrays = ["allOf", "anyOf", "oneOf", "prefixItems"];
+        private static readonly HashSet<string> SubschemaMaps = ["properties", "patternProperties", "$defs", "dependentSchemas"];
+
+        /// <summary>
+        /// Every <c>$ref</c>/<c>$dynamicRef</c> in a subschema must land on a subschema of this document (<c>#</c>, <c>#/$defs/…</c>, or a
+        /// <c>#anchor</c> declared in a subschema); no <c>$id</c>. A reference that lands elsewhere would pass a build and fail every request.
+        /// </summary>
+        private static List<FieldError> CheckReferences(JsonElement root, string pointer)
         {
-            if (node.ValueKind == JsonValueKind.Array)
+            var locations = new HashSet<string>(StringComparer.Ordinal);
+            var anchors = new HashSet<string>(StringComparer.Ordinal);
+            var references = new List<(string At, string Reference)>();
+            var errors = new List<FieldError>();
+            Walk(root, "", pointer, locations, anchors, references, errors);
+            foreach (var (at, reference) in references)
             {
-                var i = 0;
-                foreach (var item in node.EnumerateArray())
+                if (!Resolves(reference, locations, anchors))
                 {
-                    CheckReferences(root, item, $"{at}/{i++}", errors);
+                    errors.Add(new FieldError(at, $"The reference '{reference}' doesn't point to a subschema of this schema (#, #/$defs/… or a #anchor)."));
                 }
-                return;
             }
-            if (node.ValueKind != JsonValueKind.Object)
+            return errors;
+        }
+
+        /// <summary>Records the subschema at <paramref name="location"/> (a pointer from the root), its anchors and references, and walks its subschemas.</summary>
+        private static void Walk(JsonElement schema, string location, string pointer, HashSet<string> locations, HashSet<string> anchors,
+            List<(string, string)> references, List<FieldError> errors)
+        {
+            locations.Add(location);
+            if (schema.ValueKind != JsonValueKind.Object)
             {
-                return;
+                return; // true or false
             }
-            foreach (var property in node.EnumerateObject())
+            foreach (var property in schema.EnumerateObject())
             {
-                var here = at + "/" + TypeRules.Pointer(property.Name);
+                var segment = "/" + TypeRules.Pointer(property.Name);
+                var here = pointer + location + segment;
+                var value = property.Value;
                 switch (property.Name)
                 {
                     case "$id":
                         errors.Add(new FieldError(here, "A schema is one document without $id; use $defs and #/$defs/… references."));
                         break;
-                    case "$ref" or "$dynamicRef" when property.Value.ValueKind == JsonValueKind.String:
-                        if (!Resolves(root, property.Value.GetString()!))
+                    case "$ref" or "$dynamicRef" when value.ValueKind == JsonValueKind.String:
+                        references.Add((here, value.GetString()!));
+                        break;
+                    case "$anchor" or "$dynamicAnchor" when value.ValueKind == JsonValueKind.String:
+                        anchors.Add(value.GetString()!);
+                        break;
+                    case var name when OneSubschema.Contains(name):
+                        Walk(value, location + segment, pointer, locations, anchors, references, errors);
+                        break;
+                    case var name when SubschemaArrays.Contains(name) && value.ValueKind == JsonValueKind.Array:
+                        var i = 0;
+                        foreach (var item in value.EnumerateArray())
                         {
-                            errors.Add(new FieldError(here, $"The reference '{property.Value.GetString()}' doesn't point inside this schema (#/… or #anchor)."));
+                            Walk(item, $"{location}{segment}/{i++}", pointer, locations, anchors, references, errors);
                         }
                         break;
-                    // Property names and enum or const values are data, not subschemas: a property called "$ref" is fine.
-                    case "properties" or "patternProperties" or "$defs" or "definitions" or "dependentSchemas" when property.Value.ValueKind == JsonValueKind.Object:
-                        foreach (var sub in property.Value.EnumerateObject())
+                    case var name when SubschemaMaps.Contains(name) && value.ValueKind == JsonValueKind.Object:
+                        foreach (var sub in value.EnumerateObject())
                         {
-                            CheckReferences(root, sub.Value, here + "/" + TypeRules.Pointer(sub.Name), errors);
+                            Walk(sub.Value, location + segment + "/" + TypeRules.Pointer(sub.Name), pointer, locations, anchors, references, errors);
                         }
-                        break;
-                    case "enum" or "const" or "examples" or "default":
-                        break;
-                    default:
-                        CheckReferences(root, property.Value, here, errors);
                         break;
                 }
             }
         }
 
-        /// <summary>A same-document reference: <c>#</c>, a JSON pointer (<c>#/$defs/x</c>), or an anchor (<c>#name</c>) declared in the document.</summary>
-        private static bool Resolves(JsonElement root, string reference)
+        private static bool Resolves(string reference, HashSet<string> locations, HashSet<string> anchors)
         {
             if (!reference.StartsWith('#'))
             {
                 return false;
             }
             var fragment = Uri.UnescapeDataString(reference[1..]);
-            if (fragment.Length == 0)
-            {
-                return true;
-            }
-            if (!fragment.StartsWith('/'))
-            {
-                return HasAnchor(root, fragment);
-            }
-            var current = root;
-            foreach (var token in fragment[1..].Split('/').Select(t => t.Replace("~1", "/").Replace("~0", "~")))
-            {
-                if (current.ValueKind == JsonValueKind.Object && current.TryGetProperty(token, out var next))
-                {
-                    current = next;
-                }
-                else if (current.ValueKind == JsonValueKind.Array && int.TryParse(token, out var index) && index >= 0 && index < current.GetArrayLength())
-                {
-                    current = current[index];
-                }
-                else
-                {
-                    return false;
-                }
-            }
-            return current.ValueKind is JsonValueKind.Object or JsonValueKind.True or JsonValueKind.False;
+            return fragment.Length == 0 || (fragment.StartsWith('/') ? locations.Contains(fragment) : anchors.Contains(fragment));
         }
-
-        private static bool HasAnchor(JsonElement node, string anchor) => node.ValueKind switch
-        {
-            JsonValueKind.Object => node.EnumerateObject().Any(p =>
-                (p.Name is "$anchor" or "$dynamicAnchor" && p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() == anchor)
-                || (p.Name is not ("enum" or "const" or "examples" or "default") && HasAnchor(p.Value, anchor))),
-            JsonValueKind.Array => node.EnumerateArray().Any(item => HasAnchor(item, anchor)),
-            _ => false,
-        };
 
         /// <summary>The compiled schema of a type version, built on first use.</summary>
         public JsonSchema For(NotificationType type)
             // The compiled schema keeps reading the elements it was built from, so they must outlive it: a clone owns its memory.
             => _compiled.GetOrAdd(type.Id, _ => Build(JsonElement.Parse(type.Schema)));
+
+        /// <summary>
+        /// Validates a request's data against its type version. Compiling the schema is inside the same guard as evaluating it: a stored schema
+        /// the library can't build or resolve refuses the request (422), not a 500.
+        /// </summary>
+        public IReadOnlyList<FieldError> Validate(NotificationType type, JsonElement data, string pointer)
+        {
+            JsonSchema schema;
+            try
+            {
+                schema = For(type);
+            }
+            catch (Exception ex) when (ex is RefResolutionException or JsonSchemaException or JsonException or ArgumentException)
+            {
+                return [new FieldError(pointer, "The type's schema can't be evaluated: " + ex.Message)];
+            }
+            return Validate(schema, data, pointer);
+        }
 
         /// <summary>Validates a request's data; the errors point into what was sent, under <paramref name="pointer"/>.</summary>
         public static IReadOnlyList<FieldError> Validate(JsonSchema schema, JsonElement data, string pointer)
@@ -173,6 +187,11 @@ namespace Juice.Notifications.Types
                 // JsonSchema.Net matches each pattern with its own 5 s timeout (no hook to change it): a pattern that backtracks without end
                 // stops there, and the data is refused (docs/deferred.md #6).
                 return [new FieldError(pointer, "A pattern in the schema took too long to check against this data.")];
+            }
+            catch (Exception ex) when (ex is RefResolutionException or JsonSchemaException)
+            {
+                // The declaration check should have refused such a schema; if one gets through, the request is refused, not a 500.
+                return [new FieldError(pointer, "The type's schema can't be evaluated: " + ex.Message)];
             }
         }
 
