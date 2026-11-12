@@ -24,11 +24,26 @@ namespace Juice.Notifications.Delivering
     /// that can't be served (no integration, no template, a render failure) still gets a delivery, failed with its reason, so history shows it.
     /// <c>UNIQUE (RecipientId, DestinationKey, Channel)</c> on items stops a recipient reaching a destination twice.
     /// </summary>
-    public sealed class DeliveryPlannerStage(ILogger<DeliveryPlannerStage> logger) : IStage<NotificationRecipient>
+    /// <summary>The stage's step-failure limit, which the planner's timeout retries have to stay under.</summary>
+    public sealed record DeliveryPlannerLimits(int MaxStepFailures);
+
+    public sealed class DeliveryPlannerStage(ILogger<DeliveryPlannerStage> logger, DeliveryPlannerLimits? limits = null) : IStage<NotificationRecipient>
     {
         public string Name => DeliveryStageNames.DeliveryPlanner;
 
         private sealed record Destination(string Key, string Channel, Integration? Integration, string Snapshot, string? Problem);
+
+        /// <summary>
+        /// Render timeouts tolerated on one recipient before the next is recorded as a failed delivery: a timeout can be the machine's load,
+        /// so it is retried; one that keeps happening is the template's, and shows in history rather than only in the log.
+        /// </summary>
+        private const int TimeoutsBeforeFailing = 2;
+
+        /// <summary>Fewer when the stage gives a row up sooner: the last try records the timeout, so other channels still go out.</summary>
+        private int TimeoutsAllowed => Math.Max(0, Math.Min(TimeoutsBeforeFailing, (limits?.MaxStepFailures ?? int.MaxValue) - 1));
+
+        /// <summary>Snapshots keep an address as written (no 0026 for each &amp;), so history reads it and it stays its own length.</summary>
+        private static readonly JsonSerializerOptions Snapshot = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
         public void GiveUp(StageContext context, NotificationRecipient row, string error)
         {
@@ -57,20 +72,33 @@ namespace Juice.Notifications.Delivering
             var model = new RenderModel(type.Key, type.Version, type.Name, request.Priority, JsonElement.Parse(request.Data), request.Labels, request.Links);
 
             var created = 0;
+            // What this recipient already has (a retried step), read once; and each channel's content, rendered once for all its destinations.
+            var existing = (await db.DeliveryItems.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.RecipientId == row.Id)
+                .Select(i => new { i.DestinationKey, i.Channel }).ToListAsync(ct)).Select(i => (i.DestinationKey, i.Channel)).ToHashSet();
+            var rendered = new Dictionary<string, Rendered>(StringComparer.Ordinal);
             foreach (var destination in await DestinationsAsync(db, row, ct))
             {
-                if (await db.DeliveryItems.AnyAsync(i => i.TenantId == row.TenantId && i.RecipientId == row.Id && i.DestinationKey == destination.Key
-                    && i.Channel == destination.Channel, ct))
+                if (existing.Contains((destination.Key, destination.Channel)))
                 {
                     continue;
                 }
-                var (content, template, problem) = destination.Problem is null
-                    ? await RenderAsync(db, row.TenantId, type, request, destination.Channel, model, ct)
-                    : ("{}", null, destination.Problem);
                 if (destination.Integration is null)
                 {
-                    logger.LogWarning("Recipient {Recipient} can't reach {Destination}: {Problem}", row.Id, destination.Key, problem);
-                    continue; // no integration to record the delivery against; the recipient's outcome says why below
+                    // No integration to record a delivery against: logged, and the recipient's outcome says it below.
+                    logger.LogWarning("Recipient {Recipient} can't reach {Destination}: {Problem}", row.Id, destination.Key, destination.Problem);
+                    continue;
+                }
+                // Rendered even for a destination with a problem (its integration disabled), so a dead-letter retry once it is fixed has content to send.
+                if (!rendered.ContainsKey(destination.Channel))
+                {
+                    rendered[destination.Channel] = await RenderAsync(db, row.TenantId, type, request, destination.Channel, model,
+                        timeoutIsFinal: row.StepFailures >= TimeoutsAllowed, ct);
+                }
+                var (content, template, problem, category) = rendered[destination.Channel];
+                if (problem is null && destination.Problem is not null)
+                {
+                    // A destination-level problem (an integration disabled) is the provider's side, not the content.
+                    (problem, category) = (destination.Problem, FailureCategory.Provider);
                 }
                 var delivery = new Delivery
                 {
@@ -78,8 +106,8 @@ namespace Juice.Notifications.Delivering
                     DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0, Locale = template?.Locale ?? Types.TypeRules.DefaultLocale,
                     RendererVersion = TemplateRenderer.Version, Content = content, Priority = request.Priority, Mandatory = type.Mandatory, CreatedAt = context.Now,
                     Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed,
-                    FailureCategory = problem is null ? null : FailureCategory.Content,
-                    LastError = problem is { Length: > 2000 } ? problem[..2000] : problem, NextAt = problem is null ? context.Now : null, CompletedAt = problem is null ? null : context.Now,
+                    FailureCategory = problem is null ? null : category,
+                    LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? context.Now : null, CompletedAt = problem is null ? null : context.Now,
                 };
                 db.Deliveries.Add(delivery);
                 db.DeliveryItems.Add(new DeliveryItem
@@ -87,6 +115,12 @@ namespace Juice.Notifications.Delivering
                     TenantId = row.TenantId, DeliveryId = delivery.Id, RecipientId = row.Id, DestinationKey = destination.Key, Channel = destination.Channel,
                 });
                 created++;
+            }
+            if (created == 0 && existing.Count == 0)
+            {
+                // Nothing reaches it, now or from an earlier try: no integration, or a route whose targets are gone, disabled or none, or the
+                // route itself deleted. "Why didn't they get it?" is answered here, and in the log.
+                row.Outcome = RecipientOutcome.Failed;
             }
             context.Done(row, null);
             if (created > 0)
@@ -116,22 +150,33 @@ namespace Juice.Notifications.Delivering
                     join integration in db.Integrations on new { target.TenantId, Id = target.IntegrationId } equals new { integration.TenantId, integration.Id }
                     select new { target, integration }).AsNoTracking().ToListAsync(ct);
                 return targets.OrderBy(t => t.target.Key).Select(t => new Destination(DestinationKeys.Target(t.target.Id), t.integration.Channel, t.integration,
-                    JsonSerializer.Serialize(new { target = t.target.Key, address = t.target.Address, addressRef = t.target.AddressRef }),
+                    JsonSerializer.Serialize(new { target = t.target.Key, address = t.target.Address, addressRef = t.target.AddressRef }, Snapshot),
                     t.integration.Enabled ? null : $"The integration {t.integration.Key} is disabled.")).ToList();
             }
             if (row.Kind == RecipientKind.External && row.Channel is { } channel && row.Address is { } address)
             {
                 var integration = await db.Integrations.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.Channel == channel && i.Enabled)
                     .OrderBy(i => i.Priority).ThenBy(i => i.Key).FirstOrDefaultAsync(ct);
-                return [new Destination(DestinationKeys.External(channel, address), channel, integration, JsonSerializer.Serialize(new { address }),
+                return [new Destination(DestinationKeys.External(channel, address), channel, integration, JsonSerializer.Serialize(new { address }, Snapshot),
                     integration is null ? $"The tenant has no enabled {channel} integration." : null)];
             }
             return [];
         }
 
-        /// <summary>The content for one channel: the tenant's template, else the application's, in <c>en</c>; webhook without one is passthrough.</summary>
-        private static async Task<(string Content, Template? Template, string? Problem)> RenderAsync(NotificationsDbContext db, Guid tenantId, NotificationType type,
-            NotificationRequest request, string channel, RenderModel model, CancellationToken ct)
+        /// <summary>One channel's content, or the problem that stopped it and its failure category.</summary>
+        private sealed record Rendered(string Content, Template? Template, string? Problem, FailureCategory? Category);
+
+        /// <summary>What a delivery stores when its content couldn't be rendered: nothing to send, so a dead-letter retry refuses it.</summary>
+        private const string NoContent = "";
+
+        /// <summary>
+        /// The content for one channel: the tenant's template, else the application's, in <c>en</c>; webhook without one is passthrough. A
+        /// template that fails is a <c>Content</c> failure, recorded on the delivery. One that ran out of time throws, so the step runs again (the
+        /// machine's load can be why), until <paramref name="timeoutIsFinal"/>: then it is recorded like any other failure, so the recipient's
+        /// other channels still go out and history says why this one didn't.
+        /// </summary>
+        private static async Task<Rendered> RenderAsync(NotificationsDbContext db, Guid tenantId, NotificationType type,
+            NotificationRequest request, string channel, RenderModel model, bool timeoutIsFinal, CancellationToken ct)
         {
             var template = await db.Templates.AsNoTracking()
                 .Where(t => t.TypeId == type.Id && t.Channel == channel && t.Locale == Types.TypeRules.DefaultLocale && (t.TenantId == tenantId || t.TenantId == null))
@@ -143,21 +188,21 @@ namespace Juice.Notifications.Delivering
                     id = request.Id, type = request.TypeKey, typeVersion = request.TypeVersion, occurredAt = request.AcceptedAt, tenant = request.TenantId,
                     correlationKey = request.CorrelationKey, data = JsonElement.Parse(request.Data), links = request.Links,
                 });
-                return (ChannelContent.Webhook(envelope, isJson: true), template, null);
+                return new Rendered(ChannelContent.Webhook(envelope, isJson: true), template, null, null);
             }
             if (template is null)
             {
-                return ("{}", null, $"The type {type.Key} v{type.Version} has no {channel} template.");
+                return new Rendered(NoContent, null, $"The type {type.Key} v{type.Version} has no {channel} template.", FailureCategory.Content);
             }
             try
             {
                 var rendered = await TemplateRenderer.RenderAsync(template.Body, model, ct);
-                return (channel == Channels.Email ? ChannelContent.Email(rendered, type.Name) : ChannelContent.Webhook(rendered, ChannelContent.IsJson(rendered)),
-                    template, null);
+                return new Rendered(channel == Channels.Email ? ChannelContent.Email(rendered, type.Name) : ChannelContent.Webhook(rendered, ChannelContent.IsJson(rendered)),
+                    template, null, null);
             }
-            catch (RenderException ex)
+            catch (RenderException ex) when (!ex.Retryable || timeoutIsFinal)
             {
-                return ("{}", template, "render_failed: " + ex.Message);
+                return new Rendered(NoContent, template, "render_failed: " + ex.Message, FailureCategory.Content);
             }
         }
     }
@@ -165,6 +210,6 @@ namespace Juice.Notifications.Delivering
     public static class DeliveryPlanningRegistration
     {
         public static IServiceCollection AddDeliveryPlanning(this IServiceCollection services, StageOptions options, bool runWorkers = true)
-            => services.AddStage<NotificationRecipient, DeliveryPlannerStage>(options, runWorkers);
+            => services.AddSingleton(new DeliveryPlannerLimits(options.MaxStepFailures)).AddStage<NotificationRecipient, DeliveryPlannerStage>(options, runWorkers);
     }
 }

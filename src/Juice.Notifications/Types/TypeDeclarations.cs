@@ -262,10 +262,11 @@ namespace Juice.Notifications.Types
                         fail(at, $"A template is at most {MaxTemplateBytes / 1024} KB.");
                         continue;
                     }
-                    var parsed = Scriban.Template.Parse(body);
-                    if (parsed.HasErrors)
+                    // It parses, and names nothing the sandbox withholds (include, import, date…) in any branch (design §8.2): refused now,
+                    // not at its first delivery. Checked without rendering, so data decides nothing here.
+                    if (Rendering.TemplateRenderer.Check(body) is { } problem)
                     {
-                        fail(at, "The template doesn't parse: " + string.Join("; ", parsed.Messages.Select(m => m.ToString())));
+                        fail(at, problem);
                     }
                 }
                 result[entry.Name] = locales;
@@ -286,23 +287,6 @@ namespace Juice.Notifications.Types
             if (type is null)
             {
                 return Outcome<TypeVersionView>.Invalid(ErrorCodes.InvalidType, "The type declaration has errors.", errors);
-            }
-            // Each template also runs once in the sandbox (design §8.2): what it uses outside it (include, import, the clock) is refused now,
-            // not at its first delivery.
-            var sandbox = new List<FieldError>();
-            foreach (var (channel, locales) in type.Templates)
-            {
-                foreach (var (locale, body) in locales.Where(l => l.Value != TypeRules.Passthrough))
-                {
-                    if (await Rendering.TemplateRenderer.CheckAsync(body, cancellationToken) is { } problem)
-                    {
-                        sandbox.Add(new FieldError(type.Pointers[(channel, locale)], problem));
-                    }
-                }
-            }
-            if (sandbox.Count > 0)
-            {
-                return Outcome<TypeVersionView>.Invalid(ErrorCodes.InvalidType, "A template uses something the sandbox doesn't allow.", sandbox);
             }
             var hash = type.Hash();
             var latest = await TypeQueries.LatestAsync(db, request.ApplicationId, type.Key, cancellationToken);
