@@ -20,23 +20,23 @@ namespace Juice.Notifications.IntegrationTests
     /// </summary>
     public sealed class DeliveryTests(ProducerApp producer) : IClassFixture<ProducerApp>
     {
-        private static CancellationToken Ct => TestContext.Current.CancellationToken;
-        private static readonly string Tenant = $"/api/v1/tenants/{ProducerApp.Tenant}";
+        internal static CancellationToken Ct => TestContext.Current.CancellationToken;
+        internal static readonly string Tenant = $"/api/v1/tenants/{ProducerApp.Tenant}";
         private const string HookSecretVariable = "NOTIFICATIONS_SECRET_TEST_HOOK";
         private const string HookSecret = "test-signing-secret";
 
-        private static JsonElement Json(string json) => JsonElement.Parse(json);
+        internal static JsonElement Json(string json) => JsonElement.Parse(json);
 
-        private static async Task Ok(Task<HttpResponseMessage> call)
+        internal static async Task Ok(Task<HttpResponseMessage> call)
         {
             var response = await call;
             Assert.True(response.IsSuccessStatusCode, $"{response.StatusCode}: {await response.Content.ReadAsStringAsync(Ct)}");
         }
 
-        private static string Short() => Guid.NewGuid().ToString("N")[..10];
+        internal static string Short() => Guid.NewGuid().ToString("N")[..10];
 
         /// <summary>Declares a type, routes it to one new target, sends one request; returns the request id.</summary>
-        private async Task<Guid> SendThroughRouteAsync(HttpClient admin, HttpClient client, string integration, string target, string templates)
+        internal static async Task<Guid> SendThroughRouteAsync(HttpClient admin, HttpClient client, string integration, string target, string templates)
         {
             var type = $"{ProducerApp.Key}.d{Short()}";
             await Ok(client.PutAsJsonAsync($"/api/v1/applications/{ProducerApp.Key}/types", new DeclareTypeBody(type, "Disk full", "alerts", null, "high",
@@ -49,7 +49,7 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>Waits until every delivery of the notification is final (not pending or retrying).</summary>
-        private static async Task<NotificationResponse> DeliveredAsync(HttpClient client, Guid id, int expected = 1)
+        internal static async Task<NotificationResponse> DeliveredAsync(HttpClient client, Guid id, int expected = 1)
         {
             for (var i = 0; i < 150; i++)
             {
@@ -158,7 +158,7 @@ namespace Juice.Notifications.IntegrationTests
         /// <summary>A webhook receiver on this machine's private address (loopback is always blocked); answers with the given statuses, then 200.</summary>
         internal sealed class Receiver : IAsyncDisposable
         {
-            public sealed record Received(string Id, string Timestamp, string Signature, string Body);
+            public sealed record Received(string Id, string Timestamp, string Signature, string Body, string? TraceParent = null);
 
             private readonly WebApplication _app;
             private readonly ConcurrentQueue<int> _statuses;
@@ -180,7 +180,7 @@ namespace Juice.Notifications.IntegrationTests
                 {
                     using var reader = new StreamReader(request.Body);
                     Requests.Enqueue(new Received(request.Headers[WebhookSigner.IdHeader].ToString(), request.Headers[WebhookSigner.TimestampHeader].ToString(),
-                        request.Headers[WebhookSigner.SignatureHeader].ToString(), await reader.ReadToEndAsync()));
+                        request.Headers[WebhookSigner.SignatureHeader].ToString(), await reader.ReadToEndAsync(), request.Headers["traceparent"].FirstOrDefault()));
                     return Results.StatusCode(_statuses.TryDequeue(out var status) ? status : 200);
                 });
             }

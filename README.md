@@ -15,8 +15,11 @@ Phase 1 (core) is in progress. Working end to end today:
 - tenant configuration: integrations, targets, routes and the outbound allowlist, for platform admins and the tenant's own admins;
 - the pipeline: planner, delivery planner and dispatcher, as claim-based workers (PostgreSQL `SKIP LOCKED`, version fencing);
 - delivery by email (SMTP servers from the deployment) and signed webhooks (SSRF policy), with retries and every attempt recorded.
+- delivery history (`GET …/deliveries`, `GET …/deliveries/{id}`) and dead-letter retry (`POST …/deliveries/{id}/retry`);
+- metrics and traces (`Juice.Notifications` meter and activity source), exported over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; a Dockerfile.
 
-Not yet: RabbitMQ intake (waits on a Juice release), configuration provisioning, audit records, and the reviews of milestones 2–7.
+Not yet: RabbitMQ intake (waits on a Juice release), configuration provisioning, audit records, samples, the reviews of milestones 6–8, and
+milestone 9 (proof points and acceptance). Progress is tracked in [`docs/tracking.md`](docs/tracking.md).
 
 ## Build and test
 

@@ -152,7 +152,7 @@ namespace Juice.Notifications.Stages
                 switch (await StepAsync(stageName, worker, claims[i], options, ct))
                 {
                     case StepResult.Completed: completed++; break;
-                    case StepResult.LeaseLost: lost++; break;
+                    case StepResult.LeaseLost: lost++; Telemetry.LeaseLost.Add(1, new KeyValuePair<string, object?>("stage", stageName)); break;
                     default: failed++; break;
                 }
             }

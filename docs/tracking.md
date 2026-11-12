@@ -1,0 +1,67 @@
+# Local tracking (to copy into the build board)
+
+The build board ([artifact](https://claude.ai/artifact/FxoB3GVpdwJtRwYSTgRF4p#tracking)) keeps its state in two collections, `tasks` and
+`milestones`. This file mirrors them so the board can be updated by hand. Each row below is one board document; copy the values into the
+board's fields (status, review, note). Item titles are taken from `phase-1-plan.md` §5; where the board already has a title, keep the board's.
+
+**Values the board accepts**
+
+- task `status`: `todo` · `doing` · `blocked` · `done`
+- milestone `review`: `none` · `r1` · `r2` · `confirm` · `clean` · `owner`
+
+## Milestones (collection `milestones`)
+
+| num | name | items | review | note (as of 12 Nov 2026) |
+|---|---|---|---|---|
+| M1 | Skeleton and persistence | p1-01, p1-02, p1-06 | clean | Reviewed in three rounds; Juice `UnitOfWork` fix released in 10.13.0, bump pending (deferred #2). |
+| M2 | Types and intake | p1-03, p1-04, p1-05 | clean | Commit 007f690. RabbitMQ intake (p1-05) not built: waits on a Juice release. |
+| M3 | Claim store and worker host | p1-07 | clean | Commit 43f1cea. |
+| M4 | Planner and routes | p1-08, p1-09 | clean | Commit 0e7d238. Audit records and configuration provisioning (I12) still open. |
+| M5 | Rendering and delivery planning | p1-10, p1-11 | clean | Commit fbb4684. Round 2: 6 bugs fixed. Confirmation: 2 fixed (renders on a 128 MB stack of their own, depth limit 250; invariant culture). Re-confirmation: no crash or wrong-outcome bugs; 2 low ones fixed (a slow-unwinding template error taken for a timeout; thread start failure taken for a template failure). Deferred #10, #12. |
+| M6 | Providers | p1-12, p1-13 | none | Webhook and SMTP providers exist from the phase 1 core commit; not yet reviewed. |
+| M7 | Dispatcher | p1-14 | none | Dispatcher exists from the phase 1 core commit; not yet reviewed. |
+| M8 | History, dead letters, operations, host | p1-15, p1-16, p1-17 | none | History API and retry built; metrics/traces, Dockerfile and samples to do. |
+| M9 | Proof points and acceptance | p1-g1 … p1-g6 | none | Not started. |
+
+## Items (collection `tasks`, phase `p1`)
+
+| id | kind | title | ref | status | note |
+|---|---|---|---|---|---|
+| p1-01 | task | Solution, packages, build props, CI | M1 | done | |
+| p1-02 | task | Local stack: PostgreSQL, RabbitMQ, Keycloak, Mailpit | M1 | done | |
+| p1-06 | task | DbContext, tables, migrations; applications admin | M1 | done | |
+| p1-03 | task | Type declarations (versioned schema, templates) | M2 | done | |
+| p1-04 | task | HTTP intake with idempotency; notification read | M2 | done | |
+| p1-05 | task | RabbitMQ `NotificationRequested` intake | M2 | blocked | Waits on a Juice release. |
+| p1-07 | task | Claim store, stage worker, concurrency suite | M3 | done | |
+| p1-08 | task | Recipient resolvers and planner stage | M4 | done | |
+| p1-09 | task | Tenant configuration API; provisioning; audit | M4 | doing | API done; provisioning (I12) and audit not built. |
+| p1-10 | task | Template sandbox and channel content | M5 | done | Review clean. |
+| p1-11 | task | Delivery planner stage | M5 | done | Review clean. |
+| p1-12 | task | Channel registry; webhook provider | M6 | done | Not reviewed. |
+| p1-13 | task | SMTP provider (MailKit); secret references | M6 | done | Not reviewed. |
+| p1-14 | task | Dispatcher: outcomes, backoff, unknown-outcome policy | M7 | done | Not reviewed. |
+| p1-15 | task | Delivery history API | M8 | done | List (status, channel, integration, type, request, time; cursor paging) and detail with items and attempts. Not reviewed. |
+| p1-16 | task | Dead-letter retry of one delivery | M8 | done | Same id, attempts kept, fresh budget (migration DeliveryReplays). Audit record waits on the audit work (p1-09). Not reviewed. |
+| p1-17 | task | Metrics, traces, health; App host, Dockerfile, samples | M8 | doing | Done: health, App host, Dockerfile, `Juice.Notifications` meter (requests, deliveries, attempts, unknown outcomes, lease_lost, dispatch_delay, provider_latency), traces from the producer to the provider call, OTLP export in the App. To do: recipients and due_backlog metrics, compose wiring, samples. |
+| p1-g1 | gate | Proof 1: accepted request survives a crash after 202 | M9 | todo | |
+| p1-g2 | gate | Proof 2: duplicate request creates no new work | M9 | todo | Test exists from M2. |
+| p1-g3 | gate | Proof 3: planning safe under retries and concurrency | M9 | todo | Test exists from M4. |
+| p1-g4 | gate | Proof 4: no lost claims; stale writes discarded | M9 | todo | Lease tests exist from M3. |
+| p1-g5 | gate | Proof 5: unknown-outcome policy; no failover | M9 | todo | |
+| p1-g6 | gate | Proof 6: history records every attempt; stable id | M9 | doing | Proof test and the trace test (`A_trace_links_the_request_to_the_provider_call`) pass. |
+
+## Log
+
+Newest first. One line per change to copy to the board.
+
+| date | change |
+|---|---|
+| 2026-11-12 | M5 committed (fbb4684); M8 work committed after it. |
+| 2026-11-12 | M5 review → clean (re-confirmation fixes in); p1-10, p1-11 notes → review clean. |
+| 2026-11-12 | M5 confirmation: 2 bugs fixed; deferred #12 added; re-confirmation running. |
+| 2026-11-12 | p1-17: metrics and traces added; p1-g6 note: trace test green. |
+| 2026-11-12 | M5 review → confirm (round 2 fixes in); deferred #10, #11 added. |
+| 2026-11-12 | p1-17 note: Dockerfile added and smoke-run healthy. |
+| 2026-11-12 | p1-15, p1-16 → done (history API, dead-letter retry); p1-g6 → doing (proof 6 test green); M8 note updated. |
+| 2026-11-12 | Tracking file created from the repository state (commits up to 0e7d238 and the M5 working tree). |

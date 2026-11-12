@@ -141,6 +141,8 @@ namespace Juice.Notifications.Api
         private static IResult Accepted(Guid tenantId, AcceptedView view)
         {
             var response = new AcceptedResponse(view.Id, "accepted", view.Type, view.TypeVersion, view.AcceptedAt);
+            Telemetry.Requests.Add(1, new KeyValuePair<string, object?>("type", view.Type),
+                new KeyValuePair<string, object?>("outcome", view.Duplicate ? "duplicate" : "accepted"));
             return view.Duplicate
                 ? Results.Ok(response)
                 : Results.Accepted($"/api/v1/tenants/{tenantId}/notifications/{view.Id}", response);

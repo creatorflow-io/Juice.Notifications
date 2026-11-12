@@ -10,4 +10,10 @@
     <ProjectReference Include="..\Juice.Notifications.EF.PostgreSQL\Juice.Notifications.EF.PostgreSQL.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />
+  </ItemGroup>
+
 </Project>

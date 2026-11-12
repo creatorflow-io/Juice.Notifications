@@ -52,5 +52,7 @@ namespace Juice.Notifications
         public const string TargetInUse = "target_in_use";
         /// <summary>The caller doesn't administer the tenant in the path (or it doesn't exist: the answer is the same).</summary>
         public const string NotTenantAdmin = "not_tenant_admin";
+        /// <summary>A delivery that isn't failed, was never rendered, or whose request has expired can't be retried.</summary>
+        public const string NotRetryable = "not_retryable";
     }
 }

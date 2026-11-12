@@ -224,7 +224,8 @@ namespace Juice.Notifications.Data
                 Claim(e);
                 e.Property(x => x.Channel).HasMaxLength(20);
                 e.Property(x => x.DestinationKey).HasMaxLength(2100);
-                e.Property(x => x.DestinationSnapshot).HasMaxLength(2000);
+                // text: an address of up to 2,000 characters plus its target and secret reference, as JSON (M5 review).
+                e.Property(x => x.DestinationSnapshot);
                 e.Property(x => x.Locale).HasMaxLength(35);
                 e.Property(x => x.RendererVersion).HasMaxLength(40);
                 e.Property(x => x.Priority).HasConversion<string>().HasMaxLength(20);

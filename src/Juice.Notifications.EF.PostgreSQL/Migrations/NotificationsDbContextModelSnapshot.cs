@@ -282,6 +282,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("attempts");
 
+                    b.Property<int>("AttemptsAtReplay")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts_at_replay");
+
                     b.Property<string>("Channel")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -314,8 +318,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("DestinationSnapshot")
                         .IsRequired()
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)")
+                        .HasColumnType("text")
                         .HasColumnName("destination_snapshot");
 
                     b.Property<string>("FailureCategory")
@@ -370,6 +373,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)")
                         .HasColumnName("renderer_version");
+
+                    b.Property<int>("Replays")
+                        .HasColumnType("integer")
+                        .HasColumnName("replays");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -534,6 +541,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("channel");
 
                     b.Property<string>("DefinitionHash")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
@@ -610,6 +618,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("address_ref");
 
                     b.Property<string>("DefinitionHash")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
@@ -1052,6 +1061,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("id");
 
                     b.Property<string>("DefinitionHash")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")

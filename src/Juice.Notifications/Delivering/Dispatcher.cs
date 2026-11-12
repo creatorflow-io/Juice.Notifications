@@ -64,13 +64,13 @@ namespace Juice.Notifications.Delivering
             {
                 return;
             }
-            var expires = await (
+            var origin = await (
                 from item in db.DeliveryItems.Where(i => i.TenantId == row.TenantId && i.DeliveryId == row.Id)
                 join recipient in db.Recipients on new { item.TenantId, Id = item.RecipientId } equals new { recipient.TenantId, recipient.Id }
                 join notification in db.Notifications on new { recipient.TenantId, Id = recipient.NotificationId } equals new { notification.TenantId, notification.Id }
                 join request in db.Requests on new { notification.TenantId, Id = notification.RequestId } equals new { request.TenantId, request.Id }
-                select request.ExpiresAt).FirstOrDefaultAsync(ct);
-            if (expires is { } at && at <= context.Now)
+                select new { request.ExpiresAt, request.AcceptedAt, request.TraceParent }).FirstOrDefaultAsync(ct);
+            if (origin?.ExpiresAt is { } at && at <= context.Now)
             {
                 Finish(context, row, DeliveryStatus.Expired, null, "The request expired before the delivery was sent.", context.Now);
                 return;
@@ -97,6 +97,16 @@ namespace Juice.Notifications.Delivering
                 return;
             }
 
+            // The producer's trace continues here, so the provider call (a webhook's HTTP request carries it on) links back to the request.
+            using var activity = Telemetry.StartStep("notifications.dispatch", origin?.TraceParent, ActivityKind.Client);
+            activity?.SetTag("notifications.delivery_id", row.Id);
+            activity?.SetTag("notifications.channel", row.Channel);
+            activity?.SetTag("notifications.integration", integration.Key);
+            activity?.SetTag("notifications.attempt", attempt);
+            if (row.FirstAttemptAt is null && origin is not null)
+            {
+                Telemetry.DispatchDelay.Record((context.Now - origin.AcceptedAt).TotalSeconds, new KeyValuePair<string, object?>("channel", row.Channel));
+            }
             var watch = Stopwatch.StartNew();
             SendResult result;
             try
@@ -109,6 +119,13 @@ namespace Juice.Notifications.Delivering
                 logger.LogError(ex, "Provider {Kind} threw sending delivery {Delivery}", integration.Kind, row.Id);
                 result = SendResult.Unknown("The provider failed unexpectedly: " + ex.Message);
             }
+            activity?.SetTag("notifications.outcome", result.Outcome.ToString());
+            if (result.Outcome is not (AttemptOutcome.Delivered or AttemptOutcome.Accepted))
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, result.Error);
+            }
+            Telemetry.ProviderLatency.Record(watch.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("channel", row.Channel),
+                new KeyValuePair<string, object?>("outcome", result.Outcome.ToString()));
             await RecordAndApplyAsync(context, row, integration, attempt, result, (int)watch.ElapsedMilliseconds, provider);
         }
 
@@ -160,6 +177,12 @@ namespace Juice.Notifications.Delivering
                 try
                 {
                     await attempts.SaveChangesAsync(CancellationToken.None);
+                    Telemetry.Attempts.Add(1, new KeyValuePair<string, object?>("outcome", result.Outcome.ToString()),
+                        new KeyValuePair<string, object?>("category", result.Category?.ToString() ?? "none"));
+                    if (result.Outcome == AttemptOutcome.Unknown)
+                    {
+                        Telemetry.UnknownOutcomes.Add(1, new KeyValuePair<string, object?>("channel", row.Channel));
+                    }
                     return attempt;
                 }
                 catch (Exception ex) when (tries < 5 && DbConflicts.Classify(ex) is { Kind: ConflictKind.Unique, Constraint: Constraints.AttemptNumber })
@@ -182,7 +205,8 @@ namespace Juice.Notifications.Delivering
             row.FirstAttemptAt ??= at;
             row.ProviderMessageId = chosen.ProviderMessageId ?? row.ProviderMessageId;
             var max = Math.Max(1, options.Value.MaxAttempts);
-            var attempts = row.Attempts;
+            // Counted from the latest dead-letter retry, which gives a fresh budget; attempt numbers go on from the total.
+            var attempts = row.Attempts - row.AttemptsAtReplay;
             switch (chosen.Outcome)
             {
                 case AttemptOutcome.Delivered:
@@ -195,7 +219,7 @@ namespace Juice.Notifications.Delivering
                     Retry(context, row, chosen.Category, error, attempts, at);
                     break;
                 case AttemptOutcome.RetryableFailure:
-                    Finish(context, row, DeliveryStatus.Failed, chosen.Category, $"{error} (gave up after {attempts} attempts)", at);
+                    Finish(context, row, DeliveryStatus.Failed, chosen.Category, $"{error} (gave up after {attempts} attempts{(row.Replays > 0 ? " since the last retry" : "")})", at);
                     break;
                 case AttemptOutcome.Unknown when attempts < max && SafeToRepeat(row, provider, attempts):
                     Retry(context, row, FailureCategory.Provider, error, attempts, at);
@@ -231,6 +255,7 @@ namespace Juice.Notifications.Delivering
             row.LastError = Truncate(error);
             row.CompletedAt = at;
             context.Done(row, null);
+            Telemetry.Deliveries.Add(1, new KeyValuePair<string, object?>("channel", row.Channel), new KeyValuePair<string, object?>("status", status.ToString()));
         }
 
         /// <summary>Exponential from <see cref="DeliveryOptions.RetryBase"/>, capped at <see cref="DeliveryOptions.RetryMax"/>, with ±20 % jitter.</summary>
