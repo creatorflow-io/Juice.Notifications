@@ -1,0 +1,11 @@
+{
+  "stryker-config": {
+    "project": "Juice.Notifications.csproj",
+    "test-projects": ["../../test/Juice.Notifications.Tests/Juice.Notifications.Tests.csproj"],
+    "mutate": ["**/Planning/RouteMatch.cs", "**/Providers/DestinationPolicy.cs", "**/Providers/SmtpProvider.cs"],
+    "test-runner": "mtp",
+    "reporters": ["json", "html", "progress"],
+    "concurrency": 4,
+    "thresholds": { "high": 80, "low": 60, "break": 0 }
+  }
+}

@@ -70,7 +70,7 @@ namespace Juice.Notifications.Providers
 
         public async Task<SendResult> SendAsync(RenderedDelivery delivery, IntegrationContext integration, CancellationToken ct)
         {
-            SmtpServer? server = null; // assigned on every path that reaches the send (initialized for mutation testing: see build/stryker)
+            SmtpServer? server = null; // assigned on every path that reaches the send (initialized for mutation testing: see test/stryker)
             MimeMessage? message = null;
             try
             {

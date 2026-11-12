@@ -20,9 +20,9 @@ than one part, each part has its own test.
 ## 2. Mutation testing
 
 Stryker.NET 5.1 (`dotnet tool run dotnet-stryker`) with the Microsoft Testing Platform runner; the VSTest runner can't switch mutants
-under xUnit v3 (it scored 7 % with every test passing). Configurations: `build/stryker/unit.json` (unit tests) and
-`build/stryker/integration.json` (integration tests against the local stack, without the crash and load tests, which start their own hosts).
-Run from `src/Juice.Notifications`: `dotnet tool run dotnet-stryker --config-file ../../build/stryker/unit.json --output ../../build/stryker/unit`
+under xUnit v3 (it scored 7 % with every test passing). Configurations: `test/stryker/unit.json` (unit tests) and
+`test/stryker/integration.json` (integration tests against the local stack, without the crash and load tests, which start their own hosts).
+Run from `src/Juice.Notifications`: `dotnet tool run dotnet-stryker --config-file ../../test/stryker/unit.json --output ../../build/stryker/unit`
 (about 5 minutes), and the same with `integration` (about 25 minutes, with the local stack up).
 
 | Core rule | File | Tests | Score | Without message strings |

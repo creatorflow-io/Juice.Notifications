@@ -1,0 +1,26 @@
+{
+  "stryker-config": {
+    "project": "Juice.Notifications.csproj",
+    "test-projects": [
+      "../../test/Juice.Notifications.IntegrationTests/Juice.Notifications.IntegrationTests.csproj"
+    ],
+    "mutate": [
+      "**/Delivering/Dispatcher.cs",
+      "**/Providers/WebhookProvider.cs"
+    ],
+    "test-runner": "mtp",
+    "test-case-filter": "FullyQualifiedName!~CrashTests&FullyQualifiedName!~LoadCheckTests",
+    "reporters": [
+      "json",
+      "html",
+      "progress"
+    ],
+    "concurrency": 4,
+    "additional-timeout": 30000,
+    "thresholds": {
+      "high": 80,
+      "low": 60,
+      "break": 0
+    }
+  }
+}

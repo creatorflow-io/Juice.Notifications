@@ -18,7 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Juice.Notifications.App\Juice.Notifications.App.csproj" />
-    <!-- Direct, so mutation testing (build/stryker/integration.json) finds the core assembly these tests exercise. -->
+    <!-- Direct, so mutation testing (test/stryker/integration.json) finds the core assembly these tests exercise. -->
     <ProjectReference Include="..\..\src\Juice.Notifications\Juice.Notifications.csproj" />
   </ItemGroup>
 
