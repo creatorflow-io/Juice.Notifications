@@ -25,6 +25,8 @@ namespace Juice.Notifications.Tests
         [InlineData("""{ "type": ["workflow.*"] }""", false)]
         [InlineData("""{ "labels": { "env": "prod" } }""", true)]
         [InlineData("""{ "labels": { "env": "staging" } }""", false)]
+        [InlineData("""{ "labels": { "env": "=prod" } }""", true)]
+        [InlineData("""{ "labels": { "env": "=staging" } }""", false)]
         [InlineData("""{ "labels": { "region": "eu" } }""", false)]
         [InlineData("""{ "labels": { "env": "!=staging" } }""", true)]
         [InlineData("""{ "labels": { "env": "!=prod" } }""", false)]
@@ -41,6 +43,21 @@ namespace Juice.Notifications.Tests
         [InlineData("""{ "type": "observability.*", "labels": { "env": "prod", "severity": "in(low)" } }""", false)]
         public void A_route_matches_when_everything_it_names_matches(string match, bool expected) => Assert.Equal(expected, Matches(match));
 
+        /// <summary>Patterns that backtrack without end on the classic engine run in linear time: one tenant's route can't stall the planner.</summary>
+        [Fact]
+        public void Patterns_that_would_backtrack_run_fast_and_never_throw()
+        {
+            var longType = new string('a', 190);
+            var (types, _) = RouteMatch.Parse(JsonElement.Parse("""{ "type": "*a*a*a*a*a*a*a*a*a*a*a*a*a*a*z" }"""));
+            var (label, _) = RouteMatch.Parse(JsonElement.Parse("""{ "labels": { "v": "=~(a+)+$" } }"""));
+            var labels = new Dictionary<string, string> { ["v"] = new string('a', 5000) + "!" };
+
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            Assert.False(types!.Matches(longType, Labels, NotificationPriority.High));
+            Assert.False(label!.Matches("t.x", labels, NotificationPriority.High));
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"took {watch.Elapsed}");
+        }
+
         [Fact]
         public void A_pattern_is_literal_except_for_the_star()
         {
@@ -54,6 +71,16 @@ namespace Juice.Notifications.Tests
         [InlineData("""{ "type": [] }""", "/match/type")]
         [InlineData("""{ "labels": { "a": 5 } }""", "/match/labels/a")]
         [InlineData("""{ "labels": { "a": "=~(" } }""", "/match/labels/a")]
+        // Backreferences and lookarounds need the backtracking engine, which routes don't use.
+        [InlineData("""{ "labels": { "a": "=~(a)\\1" } }""", "/match/labels/a")]
+        [InlineData("""{ "labels": { "a": "=~(?=a)a" } }""", "/match/labels/a")]
+        // A pattern that closes the anchoring group itself would match any value.
+        [InlineData("""{ "labels": { "a": "=~x)|(?:.*" } }""", "/match/labels/a")]
+        // Free-spacing mode would turn the anchors after a '#' into a comment.
+        [InlineData("""{ "labels": { "a": "=~(?x) a # c" } }""", "/match/labels/a")]
+        [InlineData("""{ "labels": { "a": "=~(?ix:a)" } }""", "/match/labels/a")]
+        // Regexes are costly to build: few and short per route.
+        [InlineData("""{ "labels": { "a": "=~a", "b": "=~b", "c": "=~c", "d": "=~d", "e": "=~e", "f": "=~f", "g": "=~g", "h": "=~h", "i": "=~i", "j": "=~j", "k": "=~k" } }""", "/match/labels")]
         [InlineData("""{ "minPriority": "urgent" }""", "/match/minPriority")]
         [InlineData("""{ "severity": "high" }""", "/match/severity")]
         public void A_bad_match_is_refused_at_the_field(string match, string pointer)

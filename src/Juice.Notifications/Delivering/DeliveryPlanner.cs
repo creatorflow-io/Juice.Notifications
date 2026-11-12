@@ -95,7 +95,7 @@ namespace Juice.Notifications.Delivering
             }
         }
 
-        private static async Task<List<Destination>> DestinationsAsync(NotificationsDbContext db, NotificationRecipient row, CancellationToken ct)
+        private async Task<List<Destination>> DestinationsAsync(NotificationsDbContext db, NotificationRecipient row, CancellationToken ct)
         {
             if (row.Kind == RecipientKind.Route)
             {
@@ -103,6 +103,13 @@ namespace Juice.Notifications.Delivering
                 if (route is null)
                 {
                     return []; // deleted since planning: nothing to send to
+                }
+                // A route can name a target that no longer exists (docs/deferred.md #8): say so, rather than reach nobody without a trace.
+                var existing = await db.IntegrationTargets.AsNoTracking().Where(t => t.TenantId == row.TenantId && route.Targets.Contains(t.Key)).Select(t => t.Key).ToListAsync(ct);
+                if (route.Targets.Except(existing, StringComparer.Ordinal).ToList() is { Count: > 0 } missing)
+                {
+                    logger.LogWarning("Route {Route} in tenant {Tenant} names targets that don't exist: {Missing}; recipient {Recipient} doesn't reach them",
+                        route.Key, row.TenantId, string.Join(", ", missing), row.Id);
                 }
                 var targets = await (
                     from target in db.IntegrationTargets.Where(t => t.TenantId == row.TenantId && route.Targets.Contains(t.Key) && t.Enabled)

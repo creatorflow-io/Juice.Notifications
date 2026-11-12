@@ -37,6 +37,14 @@ namespace Juice.Notifications.Planning
 
         public IReadOnlySet<string> Kinds { get; } = new HashSet<string> { RecipientKinds.Route };
 
+        /// <summary>
+        /// Parsed matches by route, valid while the route's match text is the same: parsing builds regexes, which isn't per-notification work.
+        /// Keyed on the text itself, not the definition hash, which a writer other than the API (seeding, provisioning) may not keep current.
+        /// Held by this (singleton) resolver, and emptied when it outgrows <see cref="MaxCachedRoutes"/>, so deleted routes don't pile up.
+        /// </summary>
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, (string Text, RouteMatch? Match)> _parsed = new();
+        private const int MaxCachedRoutes = 10_000;
+
         public async ValueTask<ResolveResult> ResolveAsync(RecipientSpec spec, ResolveContext context, CancellationToken ct)
         {
             var request = context.Request;
@@ -44,12 +52,24 @@ namespace Juice.Notifications.Planning
             var matched = new List<ResolvedDestination>();
             foreach (var route in routes)
             {
-                var (match, errors) = RouteMatch.Parse(JsonElement.Parse(route.Match));
-                if (match is null)
+                if (!_parsed.TryGetValue(route.Id, out var cached) || !string.Equals(cached.Text, route.Match, StringComparison.Ordinal))
                 {
-                    // Matches are checked when saved; one that no longer parses is skipped, not allowed to stop the others.
-                    logger.LogWarning("Route {Route} in tenant {Tenant} has an invalid match and is skipped: {Errors}", route.Key, route.TenantId,
-                        string.Join("; ", errors.Select(e => e.Message)));
+                    if (_parsed.Count >= MaxCachedRoutes)
+                    {
+                        _parsed.Clear();
+                    }
+                    var (parsed, errors) = RouteMatch.Parse(JsonElement.Parse(route.Match));
+                    if (parsed is null)
+                    {
+                        // Matches are checked when saved; one that no longer parses is skipped, not allowed to stop the others.
+                        logger.LogWarning("Route {Route} in tenant {Tenant} has an invalid match and is skipped: {Errors}", route.Key, route.TenantId,
+                            string.Join("; ", errors.Select(e => e.Message)));
+                    }
+                    cached = (route.Match, parsed);
+                    _parsed[route.Id] = cached;
+                }
+                if (cached.Match is not { } match)
+                {
                     continue;
                 }
                 if (match.Matches(request.TypeKey, request.Labels, request.Priority))
@@ -111,7 +131,7 @@ namespace Juice.Notifications.Planning
             }
             var specs = JsonSerializer.Deserialize<List<RecipientSpec>>(request.Recipients, IntakeQueries.Json) ?? [];
             var resolve = new ResolveContext(db, request, context.Now);
-            var planned = new Dictionary<string, ResolvedDestination>(StringComparer.Ordinal);
+            var planned = new Dictionary<string, (ResolvedDestination Destination, string Resolver)>(StringComparer.Ordinal);
             foreach (var spec in specs)
             {
                 var resolver = resolvers.FirstOrDefault(r => spec.Kind is not null && r.Kinds.Contains(spec.Kind));
@@ -122,16 +142,15 @@ namespace Juice.Notifications.Planning
                 }
                 foreach (var destination in (await resolver.ResolveAsync(spec, resolve, ct)).Destinations)
                 {
-                    planned.TryAdd(destination.NamedAs, destination);
+                    planned.TryAdd(destination.NamedAs, (destination, resolver.Key));
                 }
             }
-            foreach (var d in planned.Values)
+            foreach (var (d, resolverKey) in planned.Values)
             {
                 db.Recipients.Add(new NotificationRecipient
                 {
                     TenantId = row.TenantId, NotificationId = row.Id, Kind = d.Kind, RouteId = d.RouteId, RouteKey = d.RouteKey, Channel = d.Channel,
-                    Address = d.Address, Resolver = d.Kind == RecipientKind.Route ? "route" : "address", NamedAs = d.NamedAs, Outcome = RecipientOutcome.Planned,
-                    NextAt = context.Now,
+                    Address = d.Address, Resolver = resolverKey, NamedAs = d.NamedAs, Outcome = RecipientOutcome.Planned, NextAt = context.Now,
                 });
             }
             row.State = NotificationState.Planned;

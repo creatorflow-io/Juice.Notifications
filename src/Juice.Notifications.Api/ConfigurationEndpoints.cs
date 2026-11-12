@@ -44,16 +44,30 @@ namespace Juice.Notifications.Api
                 => DeleteAsync(mediator, db, new DeleteAllowlistEntry(tenantId, destination), ct));
         }
 
-        /// <summary>Two admins creating the same key at once: the loser asks again and sees the winner's row.</summary>
+        /// <summary>
+        /// A write that raced another: two admins creating the same key, a PUT whose row changed since it read it (the definition hash is a
+        /// concurrency token), or a target added to an integration being deleted (foreign key). The loser asks again and sees the current state.
+        /// </summary>
         private static Task<IResult> SendAsync<TView, TResponse>(IMediator mediator, NotificationsDbContext db, IRequest<Outcome<TView>> command,
             Func<TView, TResponse> map, CancellationToken ct)
             => ApiResults.SendAsync(mediator, db, command, outcome => Results.Ok(map(outcome.Value!)),
-                conflict => Task.FromResult<IResult?>(conflict.Kind is ConflictKind.Unique or ConflictKind.Aborted or ConflictKind.RowGone
-                    ? ApiResults.ConcurrentChange() : null), ct);
+                conflict => Task.FromResult<IResult?>(conflict switch
+                {
+                    { Kind: ConflictKind.Unique or ConflictKind.Aborted or ConflictKind.RowGone } => ApiResults.ConcurrentChange(),
+                    // Only the race this endpoint can lose; any other foreign key failing is a bug, and stays a 500 that shows it.
+                    { Kind: ConflictKind.ForeignKey, Constraint: Constraints.TargetIntegration } => ApiResults.ConcurrentChange(),
+                    _ => null,
+                }), ct);
 
+        /// <summary>A delete that raced: the row changed, or a delivery started going through the integration before the commit.</summary>
         private static Task<IResult> DeleteAsync(IMediator mediator, NotificationsDbContext db, IRequest<Outcome<bool>> command, CancellationToken ct)
             => ApiResults.SendAsync(mediator, db, command, _ => Results.NoContent(),
-                conflict => Task.FromResult<IResult?>(conflict.Kind is ConflictKind.Aborted or ConflictKind.RowGone ? ApiResults.ConcurrentChange() : null), ct);
+                conflict => Task.FromResult<IResult?>(conflict switch
+                {
+                    { Kind: ConflictKind.Aborted or ConflictKind.RowGone } => ApiResults.ConcurrentChange(),
+                    { Kind: ConflictKind.ForeignKey, Constraint: Constraints.DeliveryIntegration or Constraints.AttemptIntegration } => ApiResults.ConcurrentChange(),
+                    _ => null,
+                }), ct);
 
         private static IntegrationResponse ToResponse(IntegrationView v)
             => new(v.Key, v.Channel, v.Kind, v.Settings, v.SecretRef, v.Priority, v.Enabled, v.ManagedBy, v.Targets.Select(ToResponse).ToList(), v.UpdatedAt);

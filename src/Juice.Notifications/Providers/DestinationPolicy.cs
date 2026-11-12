@@ -24,9 +24,10 @@ namespace Juice.Notifications.Providers
             {
                 return false;
             }
+            // A trailing dot (the fully qualified spelling) names the same host, on either side.
             return IsCidr
                 ? IPNetwork.TryParse(Destination, out var network) && network.Contains(DestinationPolicy.Normalize(address))
-                : string.Equals(Destination, host, StringComparison.OrdinalIgnoreCase);
+                : string.Equals(Destination.TrimEnd('.'), host.TrimEnd('.'), StringComparison.OrdinalIgnoreCase);
         }
     }
 

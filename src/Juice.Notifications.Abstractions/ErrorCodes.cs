@@ -48,6 +48,8 @@ namespace Juice.Notifications
         public const string IntegrationInUse = "integration_in_use";
         /// <summary>The target key is taken by another integration of the tenant.</summary>
         public const string TargetExists = "target_exists";
+        /// <summary>Routes name the target (or one of the integration's targets); change or delete those routes first.</summary>
+        public const string TargetInUse = "target_in_use";
         /// <summary>The caller doesn't administer the tenant in the path (or it doesn't exist: the answer is the same).</summary>
         public const string NotTenantAdmin = "not_tenant_admin";
     }

@@ -145,10 +145,29 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains(allowlist!, a => a.Destination == "10.20.0.0/16" && a.Ports.SequenceEqual([443, 8080]));
             var badCidr = await admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody("10.20.0.0/40", null), Ct);
             Assert.Equal(HttpStatusCode.BadRequest, badCidr.StatusCode);
+            // A network is stored as the send-time policy reads it (IPNetwork), in its canonical form: 10.20.1.5/16 is 10.20.0.0/16, one entry.
+            var hostBits = await admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody("10.20.1.5/16", [9090]), Ct);
+            Assert.Equal(HttpStatusCode.OK, hostBits.StatusCode);
+            Assert.Equal("10.20.0.0/16", (await hostBits.Content.ReadFromJsonAsync<AllowlistResponse>(Ct))!.Destination);
+            Assert.Single((await admin.GetFromJsonAsync<List<AllowlistResponse>>($"{Tenant}/allowlist", Ct))!, a => a.Destination.StartsWith("10.20.", StringComparison.Ordinal));
             Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"{Tenant}/allowlist?destination=10.20.0.0%2F16", Ct)).StatusCode);
+
+            // PostgreSQL stores no NUL character: a field error, not a 500.
+            var nulSettings = await admin.PutAsJsonAsync($"{Tenant}/integrations/x", new PutIntegrationBody("webhook", "webhook", Json("""{ "a": "b\u0000" }"""), null, null, null), Ct);
+            Assert.Equal(HttpStatusCode.BadRequest, nulSettings.StatusCode);
+            var nulMatch = await admin.PutAsJsonAsync($"{Tenant}/routes/r2", new PutRouteBody(Json("""{ "labels": { "env": "a\u0000" } }"""), ["t1"], null), Ct);
+            Assert.Equal(HttpStatusCode.BadRequest, nulMatch.StatusCode);
 
             var integrations = await admin.GetFromJsonAsync<List<IntegrationResponse>>($"{Tenant}/integrations", Ct);
             Assert.Contains(integrations!, i => i.Key == "hooks" && i.Targets.Any(t => t.Key == "t1" && t.Address == "https://hooks.example.com/x"));
+
+            // A target a route names can't be deleted, alone or with its integration: the route would plan recipients nothing can reach.
+            var targetInUse = await admin.DeleteAsync($"{Tenant}/integrations/hooks/targets/t1", Ct);
+            Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.TargetInUse), (targetInUse.StatusCode, await CodeAsync(targetInUse)));
+            var integrationInUse = await admin.DeleteAsync($"{Tenant}/integrations/hooks", Ct);
+            Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.TargetInUse), (integrationInUse.StatusCode, await CodeAsync(integrationInUse)));
+            Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"{Tenant}/routes/r1", Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"{Tenant}/integrations/hooks/targets/t1", Ct)).StatusCode);
         }
 
         [Fact]
