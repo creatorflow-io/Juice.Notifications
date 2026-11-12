@@ -51,6 +51,9 @@ namespace Juice.Notifications.IntegrationTests
                 await Task.Delay(100, Ct);
             }
             var dispatch = Assert.Single(stopped, a => a.OperationName == "notifications.dispatch");
+            // Every stage on the way is in the same trace.
+            Assert.Contains(stopped, a => a.OperationName == "notifications.plan");
+            Assert.Contains(stopped, a => a.OperationName == "notifications.deliveries");
             Assert.Equal("trace-hooks", dispatch.GetTagItem("notifications.integration"));
             var carried = Assert.Single(receiver.Requests).TraceParent;
             Assert.NotNull(carried);

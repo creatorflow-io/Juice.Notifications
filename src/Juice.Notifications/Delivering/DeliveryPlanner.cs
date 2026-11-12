@@ -50,12 +50,12 @@ namespace Juice.Notifications.Delivering
             // The runner logged the error; the outcome answers "why didn't I get it?".
             row.Outcome = RecipientOutcome.Failed;
             context.Done(row, null);
-            Counted(row);
+            Counted(context, row);
         }
 
         /// <summary>A recipient's outcome once delivery planning is through with it (Planned: it has deliveries).</summary>
-        private static void Counted(NotificationRecipient row)
-            => Telemetry.Recipients.Add(1, new KeyValuePair<string, object?>("outcome", row.Outcome.ToString()));
+        private static void Counted(StageContext context, NotificationRecipient row)
+            => context.AfterCommit.Add(() => Telemetry.Recipients.Add(1, new KeyValuePair<string, object?>("outcome", row.Outcome.ToString())));
 
         public async Task ExecuteAsync(StageContext context, NotificationRecipient row, CancellationToken ct)
         {
@@ -67,11 +67,13 @@ namespace Juice.Notifications.Delivering
             }
             var notification = await db.Notifications.AsNoTracking().SingleAsync(n => n.TenantId == row.TenantId && n.Id == row.NotificationId, ct);
             var request = await db.Requests.AsNoTracking().SingleAsync(r => r.TenantId == row.TenantId && r.Id == notification.RequestId, ct);
+            using var activity = Telemetry.StartStep("notifications.deliveries", request.TraceParent);
+            activity?.SetTag("notifications.recipient_id", row.Id);
             if (request.ExpiresAt is { } expires && expires <= context.Now)
             {
                 row.Outcome = RecipientOutcome.Cancelled;
                 context.Done(row, null);
-                Counted(row);
+                Counted(context, row);
                 return;
             }
             var type = await db.Types.AsNoTracking().SingleAsync(t => t.Id == request.TypeId, ct);
@@ -129,7 +131,7 @@ namespace Juice.Notifications.Delivering
                 row.Outcome = RecipientOutcome.Failed;
             }
             context.Done(row, null);
-            Counted(row);
+            Counted(context, row);
             if (created > 0)
             {
                 context.Wakes.Add(DeliveryStageNames.Dispatcher);

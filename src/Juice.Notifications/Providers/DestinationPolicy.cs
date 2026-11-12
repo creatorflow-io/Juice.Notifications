@@ -58,9 +58,42 @@ namespace Juice.Notifications.Providers
         /// <summary>IPv4-mapped IPv6 (<c>::ffff:127.0.0.1</c>) is judged as the IPv4 address it carries.</summary>
         public static IPAddress Normalize(IPAddress address) => address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
 
+        private static readonly IPNetwork Nat64 = IPNetwork.Parse("64:ff9b::/96");
+        private static readonly IPNetwork Nat64Local = IPNetwork.Parse("64:ff9b:1::/48");
+        private static readonly IPNetwork SixToFour = IPNetwork.Parse("2002::/16");
+        private static readonly IPNetwork Ipv4Compatible = IPNetwork.Parse("::/96");
+
+        /// <summary>
+        /// An address's class. IPv6 forms that carry an IPv4 address are judged as strictly as that address too: a NAT64 gateway turns
+        /// <c>64:ff9b::a9fe:a9fe</c> into 169.254.169.254 (cloud metadata), and 6to4 (<c>2002::/16</c>) relays to the IPv4 it embeds. The
+        /// deprecated IPv4-compatible form (<c>::a.b.c.d</c>) is never reachable.
+        /// </summary>
         public static DestinationClass Classify(IPAddress address)
         {
             var ip = Normalize(address);
+            if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+            {
+                var bytes = ip.GetAddressBytes();
+                if (Ipv4Compatible.Contains(ip))
+                {
+                    return DestinationClass.Blocked;
+                }
+                if (Nat64.Contains(ip) || Nat64Local.Contains(ip))
+                {
+                    return Stricter(Nat64Local.Contains(ip) ? DestinationClass.Private : DestinationClass.Public, ClassifyOwn(new IPAddress(bytes[12..16])));
+                }
+                if (SixToFour.Contains(ip))
+                {
+                    return Stricter(DestinationClass.Public, ClassifyOwn(new IPAddress(bytes[2..6])));
+                }
+            }
+            return ClassifyOwn(ip);
+        }
+
+        private static DestinationClass Stricter(DestinationClass a, DestinationClass b) => (DestinationClass)Math.Max((int)a, (int)b);
+
+        private static DestinationClass ClassifyOwn(IPAddress ip)
+        {
             if (ip.Equals(IPAddress.Broadcast) || Blocked.Any(n => n.Contains(ip)))
             {
                 return DestinationClass.Blocked;
@@ -85,8 +118,12 @@ namespace Juice.Notifications.Providers
                         return $"blocked_address:{Normalize(address)}";
                     case DestinationClass.Private when entry is null:
                         return $"private_address_not_allowlisted:{Normalize(address)}";
+                    // A public address too: 443 only, unless an allowlist entry names this host or address with the port (§13.1).
+                    case DestinationClass.Public when entry is null && port != 443:
+                        return $"port_not_allowed:{port}";
                 }
-                if (scheme != Uri.UriSchemeHttps && !(allowHttpToAllowlisted && entry is not null))
+                // Plain HTTP only to an allowlisted private destination, and only when the deployment allows it at all.
+                if (scheme != Uri.UriSchemeHttps && !(scheme == Uri.UriSchemeHttp && allowHttpToAllowlisted && entry is not null && Classify(address) == DestinationClass.Private))
                 {
                     return "https_required";
                 }

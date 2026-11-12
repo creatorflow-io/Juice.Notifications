@@ -30,7 +30,9 @@ namespace Juice.Notifications.Providers
         /// <summary>The receiver's check, and the reference for receivers in other languages (design §10.4).</summary>
         public static bool Verify(string secret, string id, string timestampHeader, string signatureHeader, string body, DateTimeOffset now, TimeSpan tolerance)
         {
-            if (!long.TryParse(timestampHeader, out var timestamp) || (now - DateTimeOffset.FromUnixTimeSeconds(timestamp)).Duration() > tolerance)
+            // A timestamp outside what a DateTimeOffset holds is refused, not thrown on.
+            if (!long.TryParse(timestampHeader, out var timestamp) || timestamp < 0 || timestamp > 253402300799
+                || (now - DateTimeOffset.FromUnixTimeSeconds(timestamp)).Duration() > tolerance)
             {
                 return false;
             }
@@ -69,7 +71,7 @@ namespace Juice.Notifications.Providers
             var timestamp = clock.GetUtcNow().ToUnixTimeSeconds();
             using var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
-                Content = new StringContent(content.Body, Encoding.UTF8, MediaTypeHeaderValue.Parse(content.ContentType).MediaType!),
+                Content = new TrackedContent(content.Body, MediaTypeHeaderValue.Parse(content.ContentType).MediaType!),
             };
             request.Headers.Add(WebhookSigner.IdHeader, id);
             request.Headers.Add(WebhookSigner.TimestampHeader, timestamp.ToString());
@@ -79,14 +81,38 @@ namespace Juice.Notifications.Providers
             }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(options.Value.ConnectTimeout + options.Value.RequestTimeout);
-            var sent = false;
+            HttpResponseMessage response;
             try
             {
                 var client = await ClientAsync(delivery.TenantId, ct);
-                using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-                sent = true;
-                await DrainAsync(response, timeout.Token);
+                response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            }
+            catch (Exception ex) when (Find<DestinationBlockedException>(ex) is { } blocked)
+            {
+                return SendResult.Permanent(FailureCategory.Policy, blocked.Reason);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested && (ex is HttpRequestException or OperationCanceledException or IOException or TimeoutException))
+            {
+                // Until the body started going out on a connection the receiver accepted, nothing reached it (DNS, connect, TLS, a connect timeout):
+                // another attempt is safe. After that the receiver may have it: unknown (§10.3).
+                var started = ((TrackedContent)request.Content!).Started;
+                return started
+                    ? SendResult.Unknown("No answer after the request was sent: " + ex.Message)
+                    : SendResult.Retry(FailureCategory.Provider, "Couldn't connect: " + ex.Message);
+            }
+            using (response)
+            {
                 var status = (int)response.StatusCode;
+                // The status is the outcome. The body is read only so the connection can be reused, briefly, and nothing it does changes the outcome.
+                try
+                {
+                    using var drain = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                    await DrainAsync(response, drain.Token);
+                }
+                catch (Exception)
+                {
+                    // Ignored: a slow or broken body after the status line.
+                }
                 return status switch
                 {
                     >= 200 and < 300 => SendResult.Delivered(status),
@@ -96,22 +122,37 @@ namespace Juice.Notifications.Providers
                     _ => SendResult.Permanent(FailureCategory.Content, $"{status}: the receiver refused the request", status),
                 };
             }
-            catch (Exception ex) when (Find<DestinationBlockedException>(ex) is { } blocked)
-            {
-                return SendResult.Permanent(FailureCategory.Policy, blocked.Reason);
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested && (ex is HttpRequestException or OperationCanceledException or IOException))
-            {
-                // Before the request went out (connect failed, DNS), another attempt is safe. After it, the receiver may have it: unknown (§10.3).
-                return !sent && IsConnectFailure(ex)
-                    ? SendResult.Retry(FailureCategory.Provider, "Couldn't connect: " + ex.Message)
-                    : SendResult.Unknown("No answer after the request was sent: " + ex.Message);
-            }
         }
 
-        private static bool IsConnectFailure(Exception ex)
-            => ex is HttpRequestException { HttpRequestError: HttpRequestError.ConnectionError or HttpRequestError.NameResolutionError or HttpRequestError.SecureConnectionError }
-            || Find<SocketException>(ex) is not null;
+        /// <summary>
+        /// The request body, which notes when the handler starts writing it: by then the connection is open (and checked) and the request line and
+        /// headers have gone out, so a failure after it may have reached the receiver. Exact bytes: the signature covers them.
+        /// </summary>
+        private sealed class TrackedContent : ByteArrayContent
+        {
+            public TrackedContent(string body, string mediaType) : base(Encoding.UTF8.GetBytes(body))
+                => Headers.ContentType = new MediaTypeHeaderValue(mediaType) { CharSet = "utf-8" };
+
+            public volatile bool Started;
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken cancellationToken)
+            {
+                Started = true;
+                return base.SerializeToStreamAsync(stream, context, cancellationToken);
+            }
+
+            protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            {
+                Started = true;
+                return base.SerializeToStreamAsync(stream, context);
+            }
+
+            protected override void SerializeToStream(Stream stream, TransportContext? context, CancellationToken cancellationToken)
+            {
+                Started = true;
+                base.SerializeToStream(stream, context, cancellationToken);
+            }
+        }
 
         private static T? Find<T>(Exception? ex) where T : Exception
         {
@@ -151,11 +192,11 @@ namespace Juice.Notifications.Providers
                 var fresh = (fingerprint, new Lazy<HttpClient>(() => CreateClient(tenantId)));
                 if (_clients.TryUpdate(tenantId, fresh, current))
                 {
-                    if (current.Client.IsValueCreated)
-                    {
-                        var old = current.Client.Value;
-                        _ = Task.Delay(options.Value.RequestTimeout + TimeSpan.FromSeconds(5), CancellationToken.None).ContinueWith(_ => old.Dispose(), TaskScheduler.Default);
-                    }
+                    // Disposed once any send that took it can have finished (connect plus request, with slack), and also when a racing caller only
+                    // creates it after the swap: whether it exists is asked then, not now.
+                    var replaced = current.Client;
+                    _ = Task.Delay(options.Value.ConnectTimeout + options.Value.RequestTimeout + TimeSpan.FromSeconds(30), CancellationToken.None)
+                        .ContinueWith(_ => { if (replaced.IsValueCreated) replaced.Value.Dispose(); }, TaskScheduler.Default);
                     return fresh.Item2.Value;
                 }
             }

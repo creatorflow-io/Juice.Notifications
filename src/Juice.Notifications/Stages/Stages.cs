@@ -57,6 +57,9 @@ namespace Juice.Notifications.Stages
         /// <summary>The stages to wake once this step commits.</summary>
         public HashSet<string> Wakes { get; } = new(StringComparer.Ordinal);
 
+        /// <summary>What to do once this step commits, and only then (metrics): a step whose save is lost runs again and would count twice.</summary>
+        public List<Action> AfterCommit { get; } = [];
+
         /// <summary>The step is finished with the row: clear the lease and set when it's next due (null: never).</summary>
         public void Done(Claimable row, DateTimeOffset? nextAt)
         {
@@ -231,6 +234,22 @@ namespace Juice.Notifications.Stages
             foreach (var next in context.Wakes)
             {
                 nudges.Wake(next);
+            }
+            RunAfterCommit(context);
+        }
+
+        private void RunAfterCommit(StageContext context)
+        {
+            foreach (var action in context.AfterCommit)
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "An after-commit action failed");
+                }
             }
         }
 

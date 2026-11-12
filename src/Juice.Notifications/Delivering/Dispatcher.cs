@@ -25,7 +25,7 @@ namespace Juice.Notifications.Delivering
     /// turns out to have lost its lease (§11).
     /// </summary>
     public sealed class DispatcherStage(IEnumerable<INotificationProvider> providers, IOptions<DeliveryOptions> options, IServiceScopeFactory scopes,
-        ILogger<DispatcherStage> logger) : IStage<Delivery>
+        ILogger<DispatcherStage> logger, TimeProvider? clock = null) : IStage<Delivery>
     {
         public string Name => DeliveryStageNames.Dispatcher;
 
@@ -41,9 +41,12 @@ namespace Juice.Notifications.Delivering
                 .OrderBy(a => a.Number).FirstOrDefault();
             if (succeeded is not null)
             {
-                Apply(context, row, succeeded, succeeded.Number, null);
+                Apply(context, row, succeeded, succeeded.Number, null, 0);
                 return;
             }
+            // Past every recorded attempt, so a later dead-letter retry doesn't take an old one for a fresh send.
+            row.Attempts = Math.Max(row.Attempts, context.Db.Attempts.AsNoTracking().Where(a => a.TenantId == row.TenantId && a.DeliveryId == row.Id)
+                .Max(a => (int?)a.Number) ?? 0);
             Finish(context, row, DeliveryStatus.Failed, null, "The dispatcher failed repeatedly on this delivery: " + error, context.Now);
         }
 
@@ -64,13 +67,17 @@ namespace Juice.Notifications.Delivering
             {
                 return;
             }
-            var origin = await (
+            var requests = await (
                 from item in db.DeliveryItems.Where(i => i.TenantId == row.TenantId && i.DeliveryId == row.Id)
                 join recipient in db.Recipients on new { item.TenantId, Id = item.RecipientId } equals new { recipient.TenantId, recipient.Id }
                 join notification in db.Notifications on new { recipient.TenantId, Id = recipient.NotificationId } equals new { notification.TenantId, notification.Id }
                 join request in db.Requests on new { notification.TenantId, Id = notification.RequestId } equals new { request.TenantId, request.Id }
-                select new { request.ExpiresAt, request.AcceptedAt, request.TraceParent }).FirstOrDefaultAsync(ct);
-            if (origin?.ExpiresAt is { } at && at <= context.Now)
+                orderby request.Id
+                select new { request.ExpiresAt, request.AcceptedAt, request.TraceParent }).ToListAsync(ct);
+            // The earliest expiry of the requests it carries (several only for a digest), as a dead-letter retry checks it; the first request's trace.
+            var expiresAt = requests.Where(r => r.ExpiresAt != null).Min(r => r.ExpiresAt);
+            var origin = requests.FirstOrDefault();
+            if (expiresAt is { } at && at <= context.Now)
             {
                 Finish(context, row, DeliveryStatus.Expired, null, "The request expired before the delivery was sent.", context.Now);
                 return;
@@ -83,19 +90,17 @@ namespace Juice.Notifications.Delivering
                 return;
             }
             var attempt = row.Attempts + 1;
-            string destination;
-            string? secret;
-            try
+            if (Address(row.DestinationSnapshot) is not { } address)
             {
-                destination = Destination(row.DestinationSnapshot);
-                secret = integration.SecretRef is { } reference ? SecretReferences.Resolve(reference) : null;
-            }
-            catch (InvalidOperationException ex)
-            {
-                // A secret that isn't set yet is a deployment problem someone can fix: try again later rather than give up.
-                await RecordAndApplyAsync(context, row, integration, attempt, SendResult.Retry(FailureCategory.Provider, ex.Message), 0);
+                // A snapshot with no address in it is the delivery's own data: no retry will find one.
+                Finish(context, row, DeliveryStatus.Failed, FailureCategory.Destination, "The delivery has no address.", context.Now);
                 return;
             }
+            // A secret (the integration's, or an address kept as a reference) that isn't set is a deployment problem someone can fix. It isn't
+            // an attempt (nothing was sent): the step fails, so the runner tries it again with its backoff, and gives the delivery up as failed
+            // after its step-failure limit, with the reason.
+            var destination = address.IsReference ? SecretReferences.Resolve(address.Value) : address.Value;
+            var secret = integration.SecretRef is { } reference ? SecretReferences.Resolve(reference) : null;
 
             // The producer's trace continues here, so the provider call (a webhook's HTTP request carries it on) links back to the request.
             using var activity = Telemetry.StartStep("notifications.dispatch", origin?.TraceParent, ActivityKind.Client);
@@ -105,16 +110,22 @@ namespace Juice.Notifications.Delivering
             activity?.SetTag("notifications.attempt", attempt);
             if (row.FirstAttemptAt is null && origin is not null)
             {
-                Telemetry.DispatchDelay.Record((context.Now - origin.AcceptedAt).TotalSeconds, new KeyValuePair<string, object?>("channel", row.Channel));
+                var delay = (context.Now - origin.AcceptedAt).TotalSeconds;
+                var channel = row.Channel;
+                context.AfterCommit.Add(() => Telemetry.DispatchDelay.Record(delay, new KeyValuePair<string, object?>("channel", channel)));
             }
-            var watch = Stopwatch.StartNew();
+            // On the service's clock (TimeProvider), as everything else it records is.
+            var time = clock ?? TimeProvider.System;
+            var started = time.GetTimestamp();
             SendResult result;
             try
             {
+                // Not cancelled by the worker stopping: a send cut off midway may still have gone out, and would be repeated unrecorded under the
+                // same number. The providers' own timeouts bound it (SMTP 25 s, webhook 15 s), within the host's shutdown timeout.
                 result = await provider.SendAsync(new RenderedDelivery(row.Id, row.TenantId, row.Channel, row.Content, destination, attempt, row.Priority, row.Mandatory),
-                    new IntegrationContext(integration.Id, integration.Key, integration.Kind, integration.Settings, secret), ct);
+                    new IntegrationContext(integration.Id, integration.Key, integration.Kind, integration.Settings, secret), CancellationToken.None);
             }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
+            catch (Exception ex)
             {
                 logger.LogError(ex, "Provider {Kind} threw sending delivery {Delivery}", integration.Kind, row.Id);
                 result = SendResult.Unknown("The provider failed unexpectedly: " + ex.Message);
@@ -124,9 +135,11 @@ namespace Juice.Notifications.Delivering
             {
                 activity?.SetStatus(ActivityStatusCode.Error, result.Error);
             }
-            Telemetry.ProviderLatency.Record(watch.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("channel", row.Channel),
+            var elapsed = time.GetElapsedTime(started);
+            Telemetry.ProviderLatency.Record(elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("channel", row.Channel),
                 new KeyValuePair<string, object?>("outcome", result.Outcome.ToString()));
-            await RecordAndApplyAsync(context, row, integration, attempt, result, (int)watch.ElapsedMilliseconds, provider);
+            // Timed from when the send ended, so a slow failure (a timeout) still waits its whole backoff before the next one.
+            await RecordAndApplyAsync(context, row, integration, attempt, result, (int)elapsed.TotalMilliseconds, context.Now + elapsed, provider);
         }
 
         /// <summary>
@@ -134,9 +147,9 @@ namespace Juice.Notifications.Delivering
         /// may have recorded one too, and if either went through, the delivery did.
         /// </summary>
         private async Task RecordAndApplyAsync(StageContext context, Delivery row, Integration integration, int attempt, SendResult result, int durationMs,
-            INotificationProvider? provider = null)
+            DateTimeOffset at, INotificationProvider? provider)
         {
-            await RecordAsync(context, row, integration, attempt, result, durationMs);
+            await RecordAsync(context, row, integration, attempt, result, durationMs, at);
             await ApplyRecordedAsync(context, row, provider, CancellationToken.None);
         }
 
@@ -152,9 +165,16 @@ namespace Juice.Notifications.Delivering
             {
                 return false;
             }
-            var chosen = unapplied.FirstOrDefault(a => a.Outcome is AttemptOutcome.Delivered or AttemptOutcome.Accepted) ?? unapplied[^1];
+            // A send that went through wins; else one whose outcome is unknown (it may have gone out, so the unknown-outcome policy decides,
+            // not a later plain failure from another worker); else the latest.
+            var chosen = unapplied.FirstOrDefault(a => a.Outcome is AttemptOutcome.Delivered or AttemptOutcome.Accepted)
+                ?? unapplied.LastOrDefault(a => a.Outcome == AttemptOutcome.Unknown)
+                ?? unapplied[^1];
             row.FirstAttemptAt ??= unapplied[0].At;
-            Apply(context, row, chosen, unapplied[^1].Number, provider);
+            // The mandatory types' one repeat after an unknown outcome is one per budget (since the latest dead-letter retry), whichever attempt it was.
+            var unknowns = await context.Db.Attempts.AsNoTracking().CountAsync(a => a.TenantId == row.TenantId && a.DeliveryId == row.Id
+                && a.Number > row.AttemptsAtReplay && a.Outcome == AttemptOutcome.Unknown, CancellationToken.None);
+            Apply(context, row, chosen, unapplied[^1].Number, provider, unknowns);
             return true;
         }
 
@@ -162,7 +182,8 @@ namespace Juice.Notifications.Delivering
         /// Writes the attempt in its own transaction, not cancelled by the worker stopping: the outside world saw the send. Numbers are unique per
         /// delivery; a worker whose lease ended while it sent can find its number taken by the new owner, and records under the next one.
         /// </summary>
-        private async Task<int> RecordAsync(StageContext context, Delivery row, Integration integration, int attempt, SendResult result, int durationMs)
+        private async Task<int> RecordAsync(StageContext context, Delivery row, Integration integration, int attempt, SendResult result, int durationMs,
+            DateTimeOffset at)
         {
             for (var tries = 0; ; tries++)
             {
@@ -170,7 +191,7 @@ namespace Juice.Notifications.Delivering
                 var attempts = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
                 attempts.Attempts.Add(new DeliveryAttempt
                 {
-                    TenantId = row.TenantId, DeliveryId = row.Id, Number = attempt, IntegrationId = integration.Id, At = context.Now, Outcome = result.Outcome,
+                    TenantId = row.TenantId, DeliveryId = row.Id, Number = attempt, IntegrationId = integration.Id, At = at, Outcome = result.Outcome,
                     Category = result.Category, StatusCode = result.StatusCode, Error = Truncate(result.Error), DurationMs = durationMs,
                     ProviderMessageId = result.ProviderMessageId is { Length: > 500 } id ? id[..500] : result.ProviderMessageId,
                 });
@@ -197,7 +218,8 @@ namespace Juice.Notifications.Delivering
         /// Applies a recorded attempt's outcome to the row (§10.2), timed from when the attempt happened, not from when it is applied.
         /// <paramref name="count"/> is the attempts made so far, which can pass the chosen attempt's number.
         /// </summary>
-        private void Apply(StageContext context, Delivery row, DeliveryAttempt chosen, int count, INotificationProvider? provider)
+        /// <paramref name="unknowns"/> is how many attempts since the latest dead-letter retry had an unknown outcome, this one included.
+        private void Apply(StageContext context, Delivery row, DeliveryAttempt chosen, int count, INotificationProvider? provider, int unknowns)
         {
             var error = Truncate(chosen.Error);
             var at = chosen.At;
@@ -221,7 +243,7 @@ namespace Juice.Notifications.Delivering
                 case AttemptOutcome.RetryableFailure:
                     Finish(context, row, DeliveryStatus.Failed, chosen.Category, $"{error} (gave up after {attempts} attempts{(row.Replays > 0 ? " since the last retry" : "")})", at);
                     break;
-                case AttemptOutcome.Unknown when attempts < max && SafeToRepeat(row, provider, attempts):
+                case AttemptOutcome.Unknown when attempts < max && SafeToRepeat(row, provider, unknowns):
                     Retry(context, row, FailureCategory.Provider, error, attempts, at);
                     break;
                 case AttemptOutcome.Unknown:
@@ -234,10 +256,10 @@ namespace Juice.Notifications.Delivering
         }
 
         /// <summary>Repeating a send whose outcome is unknown (§10.3).</summary>
-        private static bool SafeToRepeat(Delivery row, INotificationProvider? provider, int attempt)
+        private static bool SafeToRepeat(Delivery row, INotificationProvider? provider, int unknowns)
             => row.Channel == Channels.Webhook          // receivers deduplicate on webhook-id, the same on every attempt
             || provider?.Idempotent == true             // the delivery id is the provider's idempotency key
-            || (row.Mandatory && attempt == 1);         // a duplicate is better than silence, once
+            || (row.Mandatory && unknowns <= 1);       // a duplicate is better than silence, once
 
         private void Retry(StageContext context, Delivery row, FailureCategory? category, string? error, int attempt, DateTimeOffset at)
         {
@@ -255,7 +277,9 @@ namespace Juice.Notifications.Delivering
             row.LastError = Truncate(error);
             row.CompletedAt = at;
             context.Done(row, null);
-            Telemetry.Deliveries.Add(1, new KeyValuePair<string, object?>("channel", row.Channel), new KeyValuePair<string, object?>("status", status.ToString()));
+            var channel = row.Channel;
+            context.AfterCommit.Add(() => Telemetry.Deliveries.Add(1, new KeyValuePair<string, object?>("channel", channel),
+                new KeyValuePair<string, object?>("status", status.ToString())));
         }
 
         /// <summary>Exponential from <see cref="DeliveryOptions.RetryBase"/>, capped at <see cref="DeliveryOptions.RetryMax"/>, with ±20 % jitter.</summary>
@@ -266,20 +290,33 @@ namespace Juice.Notifications.Delivering
             return TimeSpan.FromSeconds(delay * (0.8 + Random.Shared.NextDouble() * 0.4));
         }
 
-        /// <summary>The address in a delivery's snapshot: as stored, or read now from its secret reference.</summary>
-        private static string Destination(string snapshot)
+        private sealed record SnapshotAddress(string Value, bool IsReference);
+
+        /// <summary>The address in a delivery's snapshot, as stored or as a secret reference to read at send time; null when it has none.</summary>
+        private static SnapshotAddress? Address(string snapshot)
         {
-            using var json = JsonDocument.Parse(snapshot);
-            var root = json.RootElement;
-            if (root.TryGetProperty("address", out var address) && address.ValueKind == JsonValueKind.String)
+            try
             {
-                return address.GetString()!;
+                using var json = JsonDocument.Parse(snapshot);
+                var root = json.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    return null;
+                }
+                if (root.TryGetProperty("address", out var address) && address.ValueKind == JsonValueKind.String && address.GetString() is { Length: > 0 } value)
+                {
+                    return new SnapshotAddress(value, false);
+                }
+                if (root.TryGetProperty("addressRef", out var reference) && reference.ValueKind == JsonValueKind.String && reference.GetString() is { Length: > 0 } name)
+                {
+                    return new SnapshotAddress(name, true);
+                }
+                return null;
             }
-            if (root.TryGetProperty("addressRef", out var reference) && reference.ValueKind == JsonValueKind.String)
+            catch (JsonException)
             {
-                return SecretReferences.Resolve(reference.GetString()!);
+                return null;
             }
-            throw new InvalidOperationException("The delivery has no address.");
         }
 
         private static string? Truncate(string? error) => error is { Length: > 2000 } ? error[..2000] : error;

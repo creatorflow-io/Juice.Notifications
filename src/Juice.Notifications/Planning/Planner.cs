@@ -123,6 +123,8 @@ namespace Juice.Notifications.Planning
                 return;
             }
             var request = await db.Requests.AsNoTracking().SingleAsync(r => r.TenantId == row.TenantId && r.Id == row.RequestId, ct);
+            using var activity = Telemetry.StartStep("notifications.plan", request.TraceParent);
+            activity?.SetTag("notifications.notification_id", row.Id);
             if (request.ExpiresAt is { } expires && expires <= context.Now)
             {
                 row.State = NotificationState.Expired;

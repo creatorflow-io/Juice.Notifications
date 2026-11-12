@@ -415,6 +415,11 @@ namespace Juice.Notifications.Configuration
             {
                 return Invalid<AllowlistView>(new FieldError("/ports", "Up to 20 ports, each 1–65535; none means 443 only."));
             }
+            // An entry for what is never reachable (loopback, link-local, metadata) would look like it works and never would.
+            if (Providers.DestinationPolicy.ValidateEntry(new Providers.AllowedDestination(destination, ports)) is { } refused)
+            {
+                return Invalid<AllowlistView>(new FieldError("/destination", refused));
+            }
             var existing = await db.Allowlist.SingleOrDefaultAsync(a => a.TenantId == r.NotificationTenantId && a.Destination == destination, ct);
             if (existing?.ManagedBy == ManagedBy.Configuration)
             {

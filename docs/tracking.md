@@ -18,9 +18,9 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | M3 | Claim store and worker host | p1-07 | clean | Commit 43f1cea. |
 | M4 | Planner and routes | p1-08, p1-09 | clean | Commit 0e7d238. Audit records and configuration provisioning (I12) still open. |
 | M5 | Rendering and delivery planning | p1-10, p1-11 | clean | Commit fbb4684. Round 2: 6 bugs fixed. Confirmation: 2 fixed (renders on a 128 MB stack of their own, depth limit 250; invariant culture). Re-confirmation: no crash or wrong-outcome bugs; 2 low ones fixed (a slow-unwinding template error taken for a timeout; thread start failure taken for a template failure). Deferred #10, #12. |
-| M6 | Providers | p1-12, p1-13 | none | Webhook and SMTP providers exist from the phase 1 core commit; not yet reviewed. |
-| M7 | Dispatcher | p1-14 | none | Dispatcher exists from the phase 1 core commit; not yet reviewed. |
-| M8 | History, dead letters, operations, host | p1-15, p1-16, p1-17 | none | All items built (commit f73ee0a and the next); review next. |
+| M6 | Providers | p1-12, p1-13 | r1 | Round 1: 13 findings; fixed SMTP 4xx/timeout/QUIT/DATA classification and settings checks, webhook sent-or-not detection and body drain, 443-only for public hosts, NAT64/6to4/IPv4-compatible addresses, http only to private, allowlist validation, URL-free traces, Verify range, client cache disposal. Deferred #13–#15. Tests: DestinationPolicyTests, SmtpProviderTests, WebhookProviderTests (M6) / DispatcherTests (M7). |
+| M7 | Dispatcher | p1-14 | r1 | Round 1: 6 bugs fixed (priority claim order, sends not cancelled by stopping, retry over unapplied attempts, mandatory once per budget, backoff from the send end, missing address/secret handling). Tests: DestinationPolicyTests, SmtpProviderTests, WebhookProviderTests (M6) / DispatcherTests (M7). |
+| M8 | History, dead letters, operations, host | p1-15, p1-16, p1-17 | r1 | Round 1: 9 findings; fixed retry over unapplied attempts, offset times, producer sees target not address, single-status parsing, earliest expiry, metrics after commit, backlog gauge per running host, stale fields on retry, plan and delivery-planning spans. Deferred #16. |
 | M9 | Proof points and acceptance | p1-g1 … p1-g6 | none | Not started. |
 
 ## Items (collection `tasks`, phase `p1`)
@@ -57,6 +57,8 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
+| 2026-11-12 | M6, M7, M8 round 1 fixes and tests committed (504 tests green); round 2 next. |
+| 2026-11-12 | M6, M7, M8 → r1 (round 1 reviews started). |
 | 2026-11-12 | p1-17 → done (recipients and due_backlog metrics, compose app profile, samples producer). M8 part 1 is commit f73ee0a. |
 | 2026-11-12 | M5 committed (fbb4684); M8 work committed after it. |
 | 2026-11-12 | M5 review → clean (re-confirmation fixes in); p1-10, p1-11 notes → review clean. |

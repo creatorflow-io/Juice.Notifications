@@ -52,7 +52,9 @@ namespace Juice.Notifications.Api
             DeliveryStatus? parsed = null;
             if (status is not null)
             {
-                if (!Enum.TryParse<DeliveryStatus>(status, ignoreCase: true, out var s) || !Enum.IsDefined(s) || int.TryParse(status, out _))
+                // One status by name: Enum.TryParse would also take "1" and "Sending,Retrying" (their flags OR-ed into another status).
+                if (Enum.GetNames<DeliveryStatus>().FirstOrDefault(n => n.Equals(status, StringComparison.OrdinalIgnoreCase)) is not { } name
+                    || !Enum.TryParse<DeliveryStatus>(name, out var s))
                 {
                     return ApiResults.Problem(StatusCodes.Status400BadRequest, ErrorCodes.InvalidRequest, $"'{status}' isn't a delivery status.",
                         [new FieldError("/status", "One of " + string.Join(", ", Enum.GetNames<DeliveryStatus>()) + ".")]);

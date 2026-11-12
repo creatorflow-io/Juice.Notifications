@@ -40,8 +40,13 @@ namespace Juice.Notifications.History
             // Not claimable while Failed (no NextAt), so no worker holds it; the version still fences two retries at once.
             delivery.Status = DeliveryStatus.Pending;
             delivery.FailureCategory = null;
+            delivery.LastError = null; // the attempts keep each error; the row shows the current one
+            delivery.ProviderMessageId = null;
             delivery.CompletedAt = null;
             delivery.Replays++;
+            // Past every recorded attempt, even one the row never took in (a stale worker's): the dispatcher would apply it instead of sending.
+            delivery.Attempts = Math.Max(delivery.Attempts, await db.Attempts.Where(a => a.TenantId == delivery.TenantId && a.DeliveryId == delivery.Id)
+                .MaxAsync(a => (int?)a.Number, ct) ?? 0);
             delivery.AttemptsAtReplay = delivery.Attempts;
             delivery.StepFailures = 0;
             delivery.ClaimedBy = null;

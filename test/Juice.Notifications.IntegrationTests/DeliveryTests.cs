@@ -145,7 +145,8 @@ namespace Juice.Notifications.IntegrationTests
             using var admin = producer.App.Client(await LocalStack.AdminTokenAsync());
             using var client = await producer.ProducerAsync();
             var target = "local-" + Short();
-            await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody("127.0.0.1", [5280]), Ct));
+            // Refused as an allowlist entry, and blocked at send time whatever the allowlist says.
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody("127.0.0.1", [5280]), Ct)).StatusCode);
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/plain-hooks", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/plain-hooks/targets/{target}", new PutTargetBody("http://127.0.0.1:5280/hook", null, null), Ct));
 

@@ -51,11 +51,13 @@ namespace Juice.Notifications.History
             }
             if (filter.From is { } from)
             {
-                deliveries = deliveries.Where(d => d.CreatedAt >= from);
+                var utcFrom = from.ToUniversalTime(); // the column is timestamptz: Npgsql writes UTC only
+                deliveries = deliveries.Where(d => d.CreatedAt >= utcFrom);
             }
             if (filter.To is { } to)
             {
-                deliveries = deliveries.Where(d => d.CreatedAt < to);
+                var utcTo = to.ToUniversalTime();
+                deliveries = deliveries.Where(d => d.CreatedAt < utcTo);
             }
             if (filter.Before is { } before)
             {
@@ -86,8 +88,25 @@ namespace Juice.Notifications.History
                 orderby attempt.Number
                 select new AttemptView(attempt.Number, attempt.At, attempt.Outcome, attempt.Category, integration.Key, attempt.StatusCode, attempt.DurationMs,
                     attempt.Error, attempt.ProviderMessageId)).AsNoTracking().ToListAsync(ct);
-            return new DeliveryDetail(row, delivery.DestinationSnapshot, delivery.TemplateVersion, delivery.Locale, delivery.RendererVersion,
+            // A producer sees which target, not its address: a tenant admin configured it, and a webhook URL can carry a token (D15).
+            return new DeliveryDetail(row, applicationId is null ? delivery.DestinationSnapshot : ProducerSnapshot(delivery.DestinationSnapshot), delivery.TemplateVersion, delivery.Locale, delivery.RendererVersion,
                 delivery.ProviderMessageId, items, attempts);
+        }
+
+        private static string ProducerSnapshot(string snapshot)
+        {
+            try
+            {
+                using var json = System.Text.Json.JsonDocument.Parse(snapshot);
+                return json.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && json.RootElement.TryGetProperty("target", out var target) && target.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? System.Text.Json.JsonSerializer.Serialize(new { target = target.GetString() })
+                    : "{}";
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return "{}";
+            }
         }
 
         /// <summary>The tenant's deliveries, narrowed to those carrying a recipient of the given application, type or request.</summary>

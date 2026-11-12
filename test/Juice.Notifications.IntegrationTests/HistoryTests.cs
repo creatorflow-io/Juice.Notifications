@@ -112,6 +112,11 @@ namespace Juice.Notifications.IntegrationTests
             var detail = await client.GetFromJsonAsync<DeliveryDetailResponse>($"{Tenant}/deliveries/{failed.Id}", Ct);
             Assert.Equal(DeliveryStatus.Failed, detail!.Delivery.Status);
             Assert.Equal(1, Assert.Single(detail.Attempts).Number);
+            // The producer sees which target, not the address its tenant admin configured; the admin sees both.
+            Assert.DoesNotContain(receiver.Url, detail.DestinationSnapshot);
+            Assert.Contains("\"target\"", detail.DestinationSnapshot);
+            var full = await admin.GetFromJsonAsync<DeliveryDetailResponse>($"{Tenant}/deliveries/{failed.Id}", Ct);
+            Assert.Contains(receiver.Url, full!.DestinationSnapshot);
         }
 
         [Fact]
@@ -139,8 +144,16 @@ namespace Juice.Notifications.IntegrationTests
             Assert.All(second.Items, i => Assert.True(i.CreatedAt <= first.Items[0].CreatedAt));
             Assert.DoesNotContain(first.Items[0].Id, second.Items.Select(i => i.Id));
 
+            // A time with an offset is the same instant in UTC.
+            Assert.Contains(failed.Id, (await List($"request={request}&from={Uri.EscapeDataString(DateTimeOffset.UtcNow.AddHours(-1).ToOffset(TimeSpan.FromHours(7)).ToString("O"))}")).Items.Select(i => i.Id));
+
             var bad = await admin.GetAsync($"{Tenant}/deliveries?status=lost", Ct);
             Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+            // One status by name: not a number, not a list that Enum.TryParse would OR into another status.
+            foreach (var status in new[] { "1", "Sending,Retrying", "pending,failed" })
+            {
+                Assert.Equal(HttpStatusCode.BadRequest, (await admin.GetAsync($"{Tenant}/deliveries?status={Uri.EscapeDataString(status)}", Ct)).StatusCode);
+            }
             Assert.Equal(HttpStatusCode.BadRequest, (await admin.GetAsync($"{Tenant}/deliveries?limit=0", Ct)).StatusCode);
         }
     }

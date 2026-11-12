@@ -27,17 +27,47 @@ namespace Juice.Notifications
         public static readonly Histogram<double> ProviderLatency = Meter.CreateHistogram<double>("notifications.provider_latency", unit: "ms",
             description: "One provider call, by channel and outcome.");
 
-        private static Func<IEnumerable<Measurement<long>>> _backlog = () => [];
+        private static readonly List<Func<IEnumerable<Measurement<long>>>> BacklogSources = [];
         private static int _backlogRegistered;
 
-        /// <summary>The gauge reads whatever the latest registered source counted (the host's <c>BacklogMonitor</c>).</summary>
-        public static void RegisterBacklog(Func<IEnumerable<Measurement<long>>> source)
+        /// <summary>
+        /// The gauge reports the most recently registered source still running (a process normally has one host; tests start several). Dispose the
+        /// result when the source stops, so a stopped host's last count isn't reported for ever.
+        /// </summary>
+        public static IDisposable RegisterBacklog(Func<IEnumerable<Measurement<long>>> source)
         {
-            _backlog = source;
+            lock (BacklogSources)
+            {
+                BacklogSources.Add(source);
+            }
             if (Interlocked.Exchange(ref _backlogRegistered, 1) == 0)
             {
-                Meter.CreateObservableGauge("notifications.due_backlog", () => _backlog(), description: "Rows due now and not leased, by stage.");
+                Meter.CreateObservableGauge("notifications.due_backlog", Backlog, description: "Rows due now and not leased, by stage.");
             }
+            return new Registration(() =>
+            {
+                lock (BacklogSources)
+                {
+                    BacklogSources.Remove(source);
+                }
+            });
+        }
+
+        private static IEnumerable<Measurement<long>> Backlog()
+        {
+            Func<IEnumerable<Measurement<long>>>? current;
+            lock (BacklogSources)
+            {
+                current = BacklogSources.Count > 0 ? BacklogSources[^1] : null;
+            }
+            return current?.Invoke() ?? [];
+        }
+
+        private sealed class Registration(Action dispose) : IDisposable
+        {
+            private Action? _dispose = dispose;
+
+            public void Dispose() => Interlocked.Exchange(ref _dispose, null)?.Invoke();
         }
 
         /// <summary>

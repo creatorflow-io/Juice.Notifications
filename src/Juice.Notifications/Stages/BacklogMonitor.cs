@@ -22,7 +22,7 @@ namespace Juice.Notifications.Stages
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            Telemetry.RegisterBacklog(() => _latest);
+            using var registration = Telemetry.RegisterBacklog(() => _latest);
             using var timer = new PeriodicTimer(Interval, clock);
             do
             {

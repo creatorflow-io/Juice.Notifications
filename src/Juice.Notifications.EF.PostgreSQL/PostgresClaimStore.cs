@@ -99,13 +99,19 @@ namespace Juice.Notifications.Data.PostgreSQL
             var (claimedBy, leaseUntil, nextAt) = (Column(nameof(Claimable.ClaimedBy)), Column(nameof(Claimable.LeaseUntil)), Column(nameof(Claimable.NextAt)));
             var failures = Column(nameof(Claimable.StepFailures));
             var key = $"t.{tenant} = @tenant AND t.{id} = @id AND t.{version} = @version";
+            // Rows with a priority (deliveries) are claimed most urgent first, then by when they fell due (phase-1-plan M7). The column holds the
+            // enum's name, so it is ranked explicitly: sorted as text, Critical would come before High but Low before Normal.
+            var order = entity.FindProperty("Priority") is { } priority
+                ? "CASE d." + Quote(priority.GetColumnName(table)!) + " " + string.Join(" ", Enum.GetValues<NotificationPriority>()
+                    .OrderByDescending(p => p).Select((p, rank) => $"WHEN '{p}' THEN {rank}")) + $" ELSE {Enum.GetValues<NotificationPriority>().Length} END, d.{nextAt}"
+                : $"d.{nextAt}";
             return new Sql(
                 // MATERIALIZED: the locking subquery runs once, whatever plan the update gets.
                 Claim: $"""
                     WITH due AS MATERIALIZED (
                         SELECT d.{tenant}, d.{id} FROM {name} AS d
                         WHERE d.{nextAt} <= @now AND (d.{leaseUntil} IS NULL OR d.{leaseUntil} < now())
-                        ORDER BY d.{nextAt}
+                        ORDER BY {order}
                         LIMIT @batch
                         FOR UPDATE SKIP LOCKED)
                     UPDATE {name} AS t
