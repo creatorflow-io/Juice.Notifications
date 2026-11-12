@@ -139,10 +139,12 @@ namespace Juice.Notifications.IntegrationTests
 
         /// <summary>A delivery due now (unless <paramref name="nextAt"/> says otherwise), with the request, notification and recipient it carries.</summary>
         private async Task<Delivery> DeliveryAsync(string channel = Channels.Email, NotificationPriority priority = NotificationPriority.Normal, bool mandatory = false,
-            string? snapshot = null, DeliveryStatus status = DeliveryStatus.Pending, int attempts = 0, DateTimeOffset? nextAt = null, bool due = true)
+            string? snapshot = null, DeliveryStatus status = DeliveryStatus.Pending, int attempts = 0, DateTimeOffset? nextAt = null, bool due = true,
+            DateTimeOffset? expiresAt = null, Guid? integration = null)
         {
             await using var db = _database.Context();
             var request = Seed.Request(Tenant, _seed.App, _seed.Type, Guid.NewGuid().ToString("N"));
+            db.Entry(request).Property(r => r.ExpiresAt).CurrentValue = expiresAt;
             var notification = Seed.Notification(Tenant, request.Id);
             notification.State = NotificationState.Planned;
             notification.NextAt = null;
@@ -150,12 +152,12 @@ namespace Juice.Notifications.IntegrationTests
             var destination = channel == Channels.Webhook ? "ext:webhook:https://example.com/hook" : "ext:email:a@example.com";
             var delivery = new Delivery
             {
-                TenantId = Tenant, Channel = channel, IntegrationId = channel == Channels.Webhook ? _seed.Webhook : _seed.Email, DestinationKey = destination,
+                TenantId = Tenant, Channel = channel, IntegrationId = integration ?? (channel == Channels.Webhook ? _seed.Webhook : _seed.Email), DestinationKey = destination,
                 DestinationSnapshot = snapshot ?? (channel == Channels.Webhook ? Hook : Mail), Locale = "en", RendererVersion = "test", Content = Content,
                 CreatedAt = _clock.GetUtcNow(), Priority = priority, Mandatory = mandatory, Status = status, Attempts = attempts,
                 NextAt = due ? nextAt ?? _clock.GetUtcNow() : null,
             };
-            var item = new DeliveryItem { TenantId = Tenant, DeliveryId = delivery.Id, RecipientId = recipient.Id, DestinationKey = destination, Channel = channel };
+            var item = new DeliveryItem { TenantId = Tenant, DeliveryId = delivery.Id, RecipientId = recipient.Id, RequestId = request.Id, DestinationKey = destination, Channel = channel };
             db.AddRange(request, notification, recipient, delivery, item);
             await db.SaveChangesAsync(Ct);
             return delivery;
@@ -630,6 +632,132 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(DeliveryStatus.Retrying, row.Status);
             Assert.Equal([1, 2, 3], attempts.Select(a => a.Number));
             Assert.Equal(1, _email.Sends);
+        }
+
+        private static readonly StageOptions GivesUpFast = new() { Batch = 1, Lease = TimeSpan.FromSeconds(60), MaxStepFailures = 2 };
+
+        /// <summary>Runs passes until the step has failed its limit and the stage gave the row up (each failure backs the row off a little).</summary>
+        private async Task FailUntilGivenUpAsync(Guid id)
+        {
+            for (var i = 0; i < 4; i++)
+            {
+                await PassAsync(options: GivesUpFast);
+                if ((await ReadAsync(id)).Row.NextAt is not { } next)
+                {
+                    return;
+                }
+                AdvanceTo(next);
+            }
+        }
+
+        /// <summary>
+        /// The step keeps failing after a send that went through and was recorded: the stage gives the row up, but as what the recorded attempt
+        /// says (Accepted), never as Failed, and without sending again.
+        /// </summary>
+        [Fact]
+        public async Task Giving_up_after_a_recorded_success_keeps_the_success()
+        {
+            LocalStack.RequireAvailable();
+            var delivery = await DeliveryAsync();
+            _faults.Kills = 100;
+
+            await FailUntilGivenUpAsync(delivery.Id);
+
+            var (row, attempts) = await ReadAsync(delivery.Id);
+            Assert.Equal((DeliveryStatus.Accepted, 1), (row.Status, row.Attempts));
+            Assert.Equal(AttemptOutcome.Accepted, Assert.Single(attempts).Outcome);
+            Assert.Equal(1, _email.Sends);
+        }
+
+        /// <summary>Given up after a recorded refusal: Failed, with the count moved past every recorded attempt (so a later retry sends afresh).</summary>
+        [Fact]
+        public async Task Giving_up_after_a_recorded_refusal_fails_past_every_recorded_attempt()
+        {
+            LocalStack.RequireAvailable();
+            _email.Then(SendResult.Permanent(FailureCategory.Destination, "550 no such user", 550));
+            var delivery = await DeliveryAsync();
+            _faults.Kills = 100;
+
+            await FailUntilGivenUpAsync(delivery.Id);
+
+            var (row, attempts) = await ReadAsync(delivery.Id);
+            Assert.Equal(DeliveryStatus.Failed, row.Status);
+            Assert.Equal(attempts.Max(a => a.Number), row.Attempts);
+            Assert.StartsWith("The dispatcher failed repeatedly", row.LastError);
+        }
+
+        /// <summary>A delivery whose request expired is closed as Expired without a send; one that expires later is sent.</summary>
+        [Fact]
+        public async Task An_expired_request_is_closed_as_expired_without_a_send()
+        {
+            LocalStack.RequireAvailable();
+            var expired = await DeliveryAsync(expiresAt: _clock.GetUtcNow());
+            await PassAsync();
+            var later = await DeliveryAsync(expiresAt: _clock.GetUtcNow().AddMinutes(5));
+            await PassAsync();
+
+            Assert.Equal(DeliveryStatus.Expired, (await ReadAsync(expired.Id)).Row.Status);
+            Assert.Equal(DeliveryStatus.Accepted, (await ReadAsync(later.Id)).Row.Status);
+            Assert.Equal([later.Id], _email.Seen.Select(s => s.Delivery));
+        }
+
+        /// <summary>A disabled integration, or one no provider sends through, fails the delivery as Provider without a send.</summary>
+        [Fact]
+        public async Task A_disabled_integration_or_one_without_a_provider_fails_as_provider()
+        {
+            LocalStack.RequireAvailable();
+            Guid unknownKind;
+            await using (var db = _database.Context())
+            {
+                var integration = new Integration
+                {
+                    TenantId = Tenant, Key = "nobody-sends", Channel = Channels.Email, Kind = "carrier-pigeon", Settings = "{}", DefinitionHash = "d", UpdatedAt = Seed.Now,
+                };
+                db.Add(integration);
+                await db.Integrations.Where(i => i.Id == _seed.Webhook).ExecuteUpdateAsync(u => u.SetProperty(i => i.Enabled, false), Ct);
+                await db.SaveChangesAsync(Ct);
+                unknownKind = integration.Id;
+            }
+            var disabled = await DeliveryAsync(Channels.Webhook);
+            await PassAsync();
+            var noProvider = await DeliveryAsync(integration: unknownKind);
+            await PassAsync();
+
+            foreach (var (id, says) in new[] { (disabled.Id, "disabled"), (noProvider.Id, "No provider") })
+            {
+                var (row, attempts) = await ReadAsync(id);
+                Assert.Equal((DeliveryStatus.Failed, FailureCategory.Provider), (row.Status, row.FailureCategory));
+                Assert.Contains(says, row.LastError);
+                Assert.Empty(attempts);
+            }
+            Assert.Equal(0, _webhook.Sends + _email.Sends);
+        }
+
+        /// <summary>Retryable failures until the attempts run out (8): the eighth fails the delivery, keeping its category; no ninth send.</summary>
+        [Fact]
+        public async Task Retryable_failures_give_up_when_the_attempts_run_out()
+        {
+            LocalStack.RequireAvailable();
+            for (var i = 0; i < 9; i++)
+            {
+                _email.Then(SendResult.Retry(FailureCategory.RateLimited, "429"));
+            }
+            var delivery = await DeliveryAsync();
+            for (var i = 0; i < 10; i++)
+            {
+                await PassAsync();
+                if ((await ReadAsync(delivery.Id)).Row.NextAt is not { } next)
+                {
+                    break;
+                }
+                AdvanceTo(next);
+            }
+
+            var (row, attempts) = await ReadAsync(delivery.Id);
+            Assert.Equal((DeliveryStatus.Failed, FailureCategory.RateLimited, 8), (row.Status, row.FailureCategory, row.Attempts));
+            Assert.Contains("gave up after 8 attempts", row.LastError);
+            Assert.Equal(8, attempts.Count);
+            Assert.Equal(8, _email.Sends);
         }
 
         /// <summary>A snapshot with no address, or one that isn't JSON, is the delivery's own data: <c>Failed {Destination}</c> at once, nothing sent.</summary>

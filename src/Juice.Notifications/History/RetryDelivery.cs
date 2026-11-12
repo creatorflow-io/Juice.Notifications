@@ -67,9 +67,7 @@ namespace Juice.Notifications.History
         /// <summary>When the request a delivery carries expires, if it does (the earliest, for a digest).</summary>
         public static Task<DateTimeOffset?> ExpiresAtAsync(NotificationsDbContext db, Guid tenantId, Guid deliveryId, CancellationToken ct)
             => (from item in db.DeliveryItems.Where(i => i.TenantId == tenantId && i.DeliveryId == deliveryId)
-                join recipient in db.Recipients on new { item.TenantId, Id = item.RecipientId } equals new { recipient.TenantId, recipient.Id }
-                join notification in db.Notifications on new { recipient.TenantId, Id = recipient.NotificationId } equals new { notification.TenantId, notification.Id }
-                join request in db.Requests on new { notification.TenantId, Id = notification.RequestId } equals new { request.TenantId, request.Id }
+                join request in db.Requests on new { item.TenantId, Id = item.RequestId } equals new { request.TenantId, request.Id }
                 where request.ExpiresAt != null
                 select request.ExpiresAt).MinAsync(ct);
     }

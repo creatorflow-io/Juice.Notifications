@@ -89,5 +89,39 @@ namespace Juice.Notifications.Tests
             Assert.Null(parsed);
             Assert.Contains(errors, e => e.Pointer == pointer);
         }
+
+        private static string Types(int count, string extra = "") => "[" + string.Join(",", Enumerable.Range(0, count).Select(i => $"\"t{i}.*\"")) + extra + "]";
+
+        private static string LabelMap(int count, Func<int, string> matcher)
+            => "{" + string.Join(",", Enumerable.Range(0, count).Select(i => $"\"l{i}\": \"{matcher(i)}\"")) + "}";
+
+        /// <summary>The limits are inclusive: exactly the most is accepted, one more is refused (mutation testing found these boundaries untested).</summary>
+        [Fact]
+        public void Limits_accept_the_most_and_refuse_one_more()
+        {
+            static bool Ok(string match) => RouteMatch.Parse(JsonElement.Parse(match)).Match is not null;
+
+            Assert.True(Ok($$"""{ "type": {{Types(20)}} }"""));
+            Assert.False(Ok($$"""{ "type": {{Types(21)}} }"""));
+            Assert.True(Ok($$"""{ "labels": {{LabelMap(RouteMatch.MaxLabelMatchers, i => "=v")}} }"""));
+            Assert.False(Ok($$"""{ "labels": {{LabelMap(RouteMatch.MaxLabelMatchers + 1, i => "=v")}} }"""));
+            Assert.True(Ok($$"""{ "labels": {{LabelMap(RouteMatch.MaxRegexMatchers, i => "=~a")}} }"""));
+            Assert.True(Ok($$"""{ "labels": { "a": "=~{{new string('a', RouteMatch.MaxRegexLength)}}" } }"""));
+            Assert.False(Ok($$"""{ "labels": { "a": "=~{{new string('a', RouteMatch.MaxRegexLength + 1)}}" } }"""));
+            Assert.True(Ok($$"""{ "labels": { "a": "{{new string('a', RouteMatch.MaxPatternLength)}}" } }"""));
+            Assert.False(Ok($$"""{ "labels": { "a": "{{new string('a', RouteMatch.MaxPatternLength + 1)}}" } }"""));
+            // A list of types is strings only, and every one a valid pattern.
+            Assert.False(Ok("""{ "type": ["a.*", 5] }"""));
+            Assert.False(Ok("""{ "type": ["a.*", "Not Valid"] }"""));
+            Assert.False(Ok("""{ "labels": [] }"""));
+        }
+
+        /// <summary><c>in(…)</c> needs its closing parenthesis; without it the matcher is a plain value.</summary>
+        [Fact]
+        public void In_needs_its_closing_parenthesis()
+        {
+            Assert.True(Matches("""{ "labels": { "env": "in(dev, prod)" } }"""));
+            Assert.False(Matches("""{ "labels": { "env": "in(dev, prod" } }"""));
+        }
     }
 }

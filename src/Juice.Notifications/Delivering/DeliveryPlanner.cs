@@ -127,7 +127,8 @@ namespace Juice.Notifications.Delivering
                 }
                 db.DeliveryItems.Add(new DeliveryItem
                 {
-                    TenantId = row.TenantId, DeliveryId = delivery.Id, RecipientId = row.Id, DestinationKey = destination.Key, Channel = destination.Channel,
+                    TenantId = row.TenantId, DeliveryId = delivery.Id, RecipientId = row.Id, RequestId = request.Id, DestinationKey = destination.Key,
+                    Channel = destination.Channel,
                 });
                 created++;
             }

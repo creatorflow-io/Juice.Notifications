@@ -251,6 +251,8 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.TenantId, x.DeliveryId });
                 e.HasOne<Delivery>().WithMany().HasForeignKey(x => new { x.TenantId, x.DeliveryId }).OnDelete(DeleteBehavior.Cascade);
                 e.HasOne<NotificationRecipient>().WithMany().HasForeignKey(x => new { x.TenantId, x.RecipientId }).OnDelete(DeleteBehavior.Cascade);
+                e.HasIndex(x => new { x.TenantId, x.RequestId });
+                e.HasOne<NotificationRequest>().WithMany().HasForeignKey(x => new { x.TenantId, x.RequestId }).OnDelete(DeleteBehavior.Cascade);
             });
 
             model.Entity<DeliveryAttempt>(e =>

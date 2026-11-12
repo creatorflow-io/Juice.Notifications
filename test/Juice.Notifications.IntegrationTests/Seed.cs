@@ -44,9 +44,10 @@ namespace Juice.Notifications.IntegrationTests
             DestinationSnapshot = "https://example.com/hook", Locale = "en", RendererVersion = "test", Content = "{}", CreatedAt = Now,
         };
 
-        public static DeliveryItem Item(Guid tenantId, Guid deliveryId, Guid recipientId) => new()
+        public static DeliveryItem Item(Guid tenantId, Guid deliveryId, Guid recipientId, Guid requestId) => new()
         {
-            TenantId = tenantId, DeliveryId = deliveryId, RecipientId = recipientId, DestinationKey = "ext:webhook:https://example.com/hook", Channel = Channels.Webhook,
+            TenantId = tenantId, DeliveryId = deliveryId, RecipientId = recipientId, RequestId = requestId, DestinationKey = "ext:webhook:https://example.com/hook",
+            Channel = Channels.Webhook,
         };
 
         public static DeliveryAttempt Attempt(Guid tenantId, Guid deliveryId, Guid integrationId, int number = 1) => new()

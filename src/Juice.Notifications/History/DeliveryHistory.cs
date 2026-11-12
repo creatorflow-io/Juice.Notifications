@@ -157,9 +157,7 @@ namespace Juice.Notifications.History
             }
             var carried =
                 from item in db.DeliveryItems
-                join recipient in db.Recipients on new { item.TenantId, Id = item.RecipientId } equals new { recipient.TenantId, recipient.Id }
-                join notification in db.Notifications on new { recipient.TenantId, Id = recipient.NotificationId } equals new { notification.TenantId, notification.Id }
-                join request in requests on new { notification.TenantId, Id = notification.RequestId } equals new { request.TenantId, request.Id }
+                join request in requests on new { item.TenantId, Id = item.RequestId } equals new { request.TenantId, request.Id }
                 select item;
             return deliveries.Where(d => carried.Any(i => i.TenantId == d.TenantId && i.DeliveryId == d.Id));
         }
@@ -170,9 +168,7 @@ namespace Juice.Notifications.History
                join integration in db.Integrations on new { d.TenantId, Id = d.IntegrationId } equals new { integration.TenantId, integration.Id }
                let request = (
                    from item in db.DeliveryItems.Where(i => i.TenantId == tenantId && i.DeliveryId == d.Id)
-                   join recipient in db.Recipients on new { item.TenantId, Id = item.RecipientId } equals new { recipient.TenantId, recipient.Id }
-                   join notification in db.Notifications on new { recipient.TenantId, Id = recipient.NotificationId } equals new { notification.TenantId, notification.Id }
-                   join r in db.Requests on new { notification.TenantId, Id = notification.RequestId } equals new { r.TenantId, r.Id }
+                   join r in db.Requests on new { item.TenantId, Id = item.RequestId } equals new { r.TenantId, r.Id }
                    orderby r.Id
                    select new { r.Id, r.TypeKey }).FirstOrDefault()
                orderby d.Id descending

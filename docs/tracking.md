@@ -21,7 +21,7 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | M6 | Providers | p1-12, p1-13 | clean | Round 1: 13 findings; fixed SMTP 4xx/timeout/QUIT/DATA classification and settings checks, webhook sent-or-not detection and body drain, 443-only for public hosts, NAT64/6to4/IPv4-compatible addresses, http only to private, allowlist validation, URL-free traces, Verify range, client cache disposal. Deferred #13–#15. Tests: DestinationPolicyTests, SmtpProviderTests, WebhookProviderTests (M6) / DispatcherTests (M7). Round 2: 4 fixed (SMTP drop mid-body retryable, legacy settings editable, punycode sender, NAT64 local-use at every RFC 6052 position; allowlist CIDRs judged as a whole). Confirmation: 2 fixed (sender checked by building it as the send does; allowlist refuses embedded blocked ranges). Re-check (e8740d4): 3 low fixed (stale attempts outside the retry budget; producers get no provider message id; tenant-template render errors hidden from producers). |
 | M7 | Dispatcher | p1-14 | clean | Round 1: 6 bugs fixed (priority claim order, sends not cancelled by stopping, retry over unapplied attempts, mandatory once per budget, backoff from the send end, missing address/secret handling). Tests: DestinationPolicyTests, SmtpProviderTests, WebhookProviderTests (M6) / DispatcherTests (M7). Round 2: 4 fixed (claim index on integer priority, refusal beats stale unknown, 45 s shutdown + 50 s stop grace, 60 s dispatcher lease floor). Confirmation: 1 fixed (a refusal outranks an unknown only when newer); options copied, not mutated. Re-check (e8740d4): 3 low fixed (stale attempts outside the retry budget; producers get no provider message id; tenant-template render errors hidden from producers). |
 | M8 | History, dead letters, operations, host | p1-15, p1-16, p1-17 | clean | Round 1: 9 findings; fixed retry over unapplied attempts, offset times, producer sees target not address, single-status parsing, earliest expiry, metrics after commit, backlog gauge per running host, stale fields on retry, plan and delivery-planning spans. Deferred #16. Round 2: 6 fixed (producer-safe error texts, https MetadataAddress checked at start, no System.Net.Http meter, stale failure after a retry ignored (ReplayedAt), planner failures counted, sample exit code). Re-check (e8740d4): 3 low fixed (stale attempts outside the retry budget; producers get no provider message id; tenant-template render errors hidden from producers). |
-| M9 | Proof points and acceptance | p1-g1 … p1-g6 | none | Not started. |
+| M9 | Proof points and acceptance | p1-g1 … p1-g6 | none | All six proofs have passing tests; mutation testing and load check done (docs/phase-1-acceptance.md). Code changes from M9 (delivery items carry their request id, recipients get CreatedAt) to review. |
 
 ## Items (collection `tasks`, phase `p1`)
 
@@ -44,12 +44,12 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | p1-15 | task | Delivery history API | M8 | done | List (status, channel, integration, type, request, time; cursor paging) and detail with items and attempts. Review clean. |
 | p1-16 | task | Dead-letter retry of one delivery | M8 | done | Same id, attempts kept, fresh budget (migration DeliveryReplays). Audit record waits on the audit work (p1-09). Review clean. |
 | p1-17 | task | Metrics, traces, health; App host, Dockerfile, samples | M8 | done | Meter (all §14 metrics but failovers and escalations, which are phase 4), traces producer → provider, OTLP export, Dockerfile, compose `app` profile, `samples/` producer (email + verified signed webhook). Review clean. |
-| p1-g1 | gate | Proof 1: accepted request survives a crash after 202 | M9 | todo | |
-| p1-g2 | gate | Proof 2: duplicate request creates no new work | M9 | todo | Test exists from M2. |
-| p1-g3 | gate | Proof 3: planning safe under retries and concurrency | M9 | todo | Test exists from M4. |
-| p1-g4 | gate | Proof 4: no lost claims; stale writes discarded | M9 | todo | Lease tests exist from M3. |
-| p1-g5 | gate | Proof 5: unknown-outcome policy; no failover | M9 | todo | |
-| p1-g6 | gate | Proof 6: history records every attempt; stable id | M9 | doing | Proof test and the trace test (`A_trace_links_the_request_to_the_provider_call`) pass. |
+| p1-g1 | gate | Proof 1: accepted request survives a crash after 202 | M9 | done | `CrashTests` (child-process host killed after 202). |
+| p1-g2 | gate | Proof 2: duplicate request creates no new work | M9 | done | `ProducerApiTests.Concurrent_identical_requests…` |
+| p1-g3 | gate | Proof 3: planning safe under retries and concurrency | M9 | done | `PlannerConcurrencyTests` |
+| p1-g4 | gate | Proof 4: no lost claims; stale writes discarded | M9 | done | `DispatcherTests.Dispatcher_killed_after_send…`, `ClaimConcurrencyTests` |
+| p1-g5 | gate | Proof 5: unknown-outcome policy; no failover | M9 | done | `DispatcherTests`, `WebhookProviderTests`, `SmtpProviderTests`; 400 → Content pending owner decision (deferred #15). |
+| p1-g6 | gate | Proof 6: history records every attempt; stable id | M9 | done | `HistoryTests.Delivery_id_is_stable…`, `TelemetryTests` |
 
 ## Log
 
@@ -57,6 +57,7 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
+| 2026-11-12 | p1-g1 … p1-g6 → done; M9 acceptance record written (mutation scores, load p95 0.71 s); M9 code review next. |
 | 2026-11-12 | M6, M7, M8 → clean (re-check fixes committed); p1-12 … p1-17 review clean. Next: M9. |
 | 2026-11-12 | M6, M7 confirmation fixes and M8 round 2 committed; M8 confirmation and M6/M7 re-check running. |
 | 2026-11-12 | M6, M7 → confirm (round 2 fixes committed); M8 round 2 review running. |

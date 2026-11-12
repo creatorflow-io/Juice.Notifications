@@ -265,6 +265,16 @@ namespace Juice.Notifications.Tests
         [InlineData("2002:7f00::/24", new int[0], false)]
         [InlineData("2002:a9fe::/32", new int[0], false)]
         [InlineData("2002:a00::/24", new int[0], true)] // 10.0.0.0/8 by 6to4: private, allowlistable
+        // Single addresses are judged by their class, IPv4 /32 and IPv6 /128 alike; a /127 is a range (mutation testing).
+        [InlineData("127.0.0.1/32", new int[0], false)]
+        [InlineData("64:ff9b::7f00:1/128", new int[0], false)]
+        [InlineData("10.0.0.1/32", new int[0], true)]
+        [InlineData("fd00::1/128", new int[0], true)]
+        // Embedded prefixes at their exact edges: a /96 NAT64 or mapped range carries all of IPv4; a /16 6to4 range likewise.
+        [InlineData("64:ff9b::/96", new int[0], true)]
+        [InlineData("2002::/16", new int[0], true)]
+        [InlineData("64:ff9b::7f00:0/104", new int[] { 443 }, false)]
+        [InlineData("2002:7f00::/23", new int[0], true)] // 126.0.0.0/7: only half of it is loopback
         public void Allowlist_entries_are_validated(string destination, int[] ports, bool valid)
         {
             var error = DestinationPolicy.ValidateEntry(Entry(destination, ports));

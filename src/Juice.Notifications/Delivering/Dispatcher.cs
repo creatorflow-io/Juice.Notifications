@@ -68,10 +68,10 @@ namespace Juice.Notifications.Delivering
                 return;
             }
             var requests = await (
+                // The item names its request: one indexed step, not a join through recipients and notifications (which, planned while the tables
+                // had no statistics, timed out in the M9 load check).
                 from item in db.DeliveryItems.Where(i => i.TenantId == row.TenantId && i.DeliveryId == row.Id)
-                join recipient in db.Recipients on new { item.TenantId, Id = item.RecipientId } equals new { recipient.TenantId, recipient.Id }
-                join notification in db.Notifications on new { recipient.TenantId, Id = recipient.NotificationId } equals new { notification.TenantId, notification.Id }
-                join request in db.Requests on new { notification.TenantId, Id = notification.RequestId } equals new { request.TenantId, request.Id }
+                join request in db.Requests on new { item.TenantId, Id = item.RequestId } equals new { request.TenantId, request.Id }
                 orderby request.Id
                 select new { request.ExpiresAt, request.AcceptedAt, request.TraceParent }).ToListAsync(ct);
             // The earliest expiry of the requests it carries (several only for a digest), as a dead-letter retry checks it; the first request's trace.

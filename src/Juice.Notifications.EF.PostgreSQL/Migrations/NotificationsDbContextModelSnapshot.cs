@@ -518,11 +518,18 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("recipient_id");
 
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
                     b.HasKey("TenantId", "Id")
                         .HasName("pk_delivery_items");
 
                     b.HasIndex("TenantId", "DeliveryId")
                         .HasDatabaseName("ix_delivery_items_tenant_id_delivery_id");
+
+                    b.HasIndex("TenantId", "RequestId")
+                        .HasDatabaseName("ix_delivery_items_tenant_id_request_id");
 
                     b.HasIndex("TenantId", "RecipientId", "DestinationKey", "Channel")
                         .IsUnique()
@@ -1244,6 +1251,13 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_delivery_items_notification_recipients_tenant_id_recipient_");
+
+                    b.HasOne("Juice.Notifications.Data.NotificationRequest", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "RequestId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_delivery_items_requests_tenant_id_request_id");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.IntegrationTarget", b =>

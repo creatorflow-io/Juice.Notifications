@@ -259,7 +259,7 @@ namespace Juice.Notifications.IntegrationTests
             var request = Assert.Single(receiver.Requests);
             Assert.Equal("POST /hook HTTP/1.1", request.RequestLine);
             Assert.Equal(Body, request.Body);
-            Assert.StartsWith("application/json", request.Headers["content-type"]);
+            Assert.Equal("application/json; charset=utf-8", request.Headers["content-type"]); // the signed bytes are UTF-8, and the receiver is told
             Assert.Equal(id.ToString(), request.Headers[WebhookSigner.IdHeader]);
             Assert.True(WebhookSigner.Verify(Secret, request.Headers[WebhookSigner.IdHeader], request.Headers[WebhookSigner.TimestampHeader],
                 request.Headers[WebhookSigner.SignatureHeader], request.Body, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5)));
@@ -277,6 +277,8 @@ namespace Juice.Notifications.IntegrationTests
         [InlineData(400, AttemptOutcome.PermanentFailure, FailureCategory.Content)]
         [InlineData(401, AttemptOutcome.PermanentFailure, FailureCategory.Content)]
         [InlineData(422, AttemptOutcome.PermanentFailure, FailureCategory.Content)]
+        [InlineData(300, AttemptOutcome.PermanentFailure, FailureCategory.Content)] // 2xx ends at 299 (mutation testing)
+        [InlineData(299, AttemptOutcome.Delivered, null)]
         public async Task The_status_is_the_outcome(int status, AttemptOutcome outcome, FailureCategory? category)
         {
             LocalStack.RequireAvailable();
@@ -284,6 +286,34 @@ namespace Juice.Notifications.IntegrationTests
 
             Is(await SendAsync(receiver.Url()), outcome, category, status);
             Assert.Single(receiver.Requests);
+        }
+
+        /// <summary>Only http and https: any other scheme fails as the destination's, without connecting.</summary>
+        [Theory]
+        [InlineData("ftp://example.com/hook")]
+        [InlineData("file:///etc/passwd")]
+        [InlineData("not a url")]
+        public async Task Only_http_and_https_are_sent(string url)
+        {
+            LocalStack.RequireAvailable();
+            Is(await SendAsync(url), AttemptOutcome.PermanentFailure, FailureCategory.Destination);
+        }
+
+        /// <summary>
+        /// A redirect is never followed (it could point anywhere, past the destination policy): the 3xx is the receiver's answer, a refusal of this
+        /// request, and the address it names is never asked.
+        /// </summary>
+        [Fact]
+        public async Task A_redirect_is_not_followed()
+        {
+            LocalStack.RequireAvailable();
+            await using var elsewhere = await ReceiverAsync(Status(200));
+            await using var receiver = await ReceiverAsync(async (stream, _, ct) => await stream.WriteAsync(Encoding.ASCII.GetBytes(
+                $"HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere.Url()}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), ct));
+
+            Is(await SendAsync(receiver.Url()), AttemptOutcome.PermanentFailure, FailureCategory.Content, 307);
+            Assert.Single(receiver.Requests);
+            Assert.Empty(elsewhere.Requests);
         }
 
         /// <summary>A receiver that read the request and never answers may have acted on it: unknown, not retryable.</summary>

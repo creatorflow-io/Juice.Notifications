@@ -264,6 +264,11 @@ namespace Juice.Notifications.Data
         public Guid Id { get; init; } = Guid.CreateVersion7();
         public Guid DeliveryId { get; init; }
         public Guid RecipientId { get; init; }
+        /// <summary>
+        /// The request the recipient came from (its notification's), kept here so the dispatcher reaches it in one indexed step rather than
+        /// through recipients and notifications (M9 load check: that join, planned while the tables had no statistics, timed out).
+        /// </summary>
+        public Guid RequestId { get; init; }
         public required string DestinationKey { get; init; }
         public required string Channel { get; init; }
     }

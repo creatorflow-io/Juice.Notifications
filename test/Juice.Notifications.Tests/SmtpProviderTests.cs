@@ -216,6 +216,9 @@ namespace Juice.Notifications.Tests
         [InlineData("RCPT", "450 4.2.1 mailbox busy", 450)]
         [InlineData("DATA", "451 4.3.0 try later", 451)]
         [InlineData("BODY", "452 4.3.1 queue full", 452)]
+        // The edges of 4xx (mutation testing): 400 is "not now", 500 is not.
+        [InlineData("RCPT", "400 4.0.0 try later", 400)]
+        [InlineData("BODY", "499 4.0.0 try later", 499)]
         public async Task Any_4xx_is_retryable(string step, string reply, int status)
         {
             var (result, _) = await SendThroughAsync(new() { [step] = Act.Say(reply) });
@@ -231,6 +234,7 @@ namespace Juice.Notifications.Tests
         [InlineData("DATA", "554 5.5.1 no valid recipients", FailureCategory.Content, 554)]
         [InlineData("BODY", "554 5.7.1 message refused as spam", FailureCategory.Content, 554)]
         [InlineData("BODY", "552 5.3.4 message too big", FailureCategory.Content, 552)]
+        [InlineData("RCPT", "500 5.0.0 refused", FailureCategory.Destination, 500)]
         public async Task A_5xx_is_permanent_and_says_whose_fault(string step, string reply, FailureCategory category, int status)
         {
             var (result, _) = await SendThroughAsync(new() { [step] = Act.Say(reply) });

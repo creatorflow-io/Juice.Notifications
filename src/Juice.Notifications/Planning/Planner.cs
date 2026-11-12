@@ -153,6 +153,7 @@ namespace Juice.Notifications.Planning
                 {
                     TenantId = row.TenantId, NotificationId = row.Id, Kind = d.Kind, RouteId = d.RouteId, RouteKey = d.RouteKey, Channel = d.Channel,
                     Address = d.Address, Resolver = resolverKey, NamedAs = d.NamedAs, Outcome = RecipientOutcome.Planned, NextAt = context.Now,
+                    CreatedAt = context.Now, // was left unset: every recipient read as created in year 1 (found by the M9 load check)
                 });
             }
             row.State = NotificationState.Planned;

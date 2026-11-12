@@ -41,7 +41,7 @@ namespace Juice.Notifications.IntegrationTests
                 var recipient = Seed.Recipient(tenant, notification.Id);
                 var delivery = Seed.Delivery(tenant, integration.Id);
                 db.AddRange(integration, request, notification, recipient, delivery,
-                    Seed.Item(tenant, delivery.Id, recipient.Id), Seed.Attempt(tenant, delivery.Id, integration.Id));
+                    Seed.Item(tenant, delivery.Id, recipient.Id, request.Id), Seed.Attempt(tenant, delivery.Id, integration.Id));
                 return new Chain(app.Id, type.Id, integration.Id, request.Id, notification.Id, recipient.Id, delivery.Id);
             }
             A = Build(TenantA);
@@ -93,6 +93,7 @@ namespace Juice.Notifications.IntegrationTests
             "delivery → another tenant's integration",
             "delivery item → another tenant's delivery",
             "delivery item → another tenant's recipient",
+            "delivery item → another tenant's request",
             "attempt → another tenant's delivery",
             "attempt → another tenant's integration",
         ];
@@ -117,9 +118,15 @@ namespace Juice.Notifications.IntegrationTests
                 // A destination key b's recipient doesn't have yet, so only the reference can fail.
                 "delivery item → another tenant's delivery" => new DeliveryItem
                 {
-                    TenantId = tenantB, DeliveryId = a.Delivery, RecipientId = b.Recipient, DestinationKey = "ext:webhook:https://example.com/other", Channel = Channels.Webhook,
+                    TenantId = tenantB, DeliveryId = a.Delivery, RecipientId = b.Recipient, RequestId = b.Request, DestinationKey = "ext:webhook:https://example.com/other",
+                    Channel = Channels.Webhook,
                 },
-                "delivery item → another tenant's recipient" => Seed.Item(tenantB, b.Delivery, a.Recipient),
+                "delivery item → another tenant's recipient" => Seed.Item(tenantB, b.Delivery, a.Recipient, b.Request),
+                "delivery item → another tenant's request" => new DeliveryItem
+                {
+                    TenantId = tenantB, DeliveryId = b.Delivery, RecipientId = b.Recipient, RequestId = a.Request, DestinationKey = "ext:webhook:https://example.com/third",
+                    Channel = Channels.Webhook,
+                },
                 "attempt → another tenant's delivery" => Seed.Attempt(tenantB, a.Delivery, b.Integration),
                 // Number 2: the chain's delivery already has attempt 1, and attempt numbers are unique per delivery.
                 "attempt → another tenant's integration" => Seed.Attempt(tenantB, b.Delivery, a.Integration, number: 2),
