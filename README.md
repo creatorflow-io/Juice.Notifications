@@ -18,7 +18,7 @@ Phase 1 (core) is in progress. Working end to end today:
 - delivery history (`GET …/deliveries`, `GET …/deliveries/{id}`) and dead-letter retry (`POST …/deliveries/{id}/retry`);
 - metrics and traces (`Juice.Notifications` meter and activity source), exported over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; a Dockerfile.
 
-Not yet: RabbitMQ intake (waits on a Juice release), configuration provisioning, audit records, samples, the reviews of milestones 6–8, and
+Not yet: RabbitMQ intake (waits on a Juice release), configuration provisioning, audit records, samples, and
 milestone 9 (proof points and acceptance). Progress is tracked in [`docs/tracking.md`](docs/tracking.md).
 
 ## Build and test

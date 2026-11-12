@@ -593,6 +593,45 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal([1, 2, 3], attempts.Select(a => a.Number));
         }
 
+        /// <summary>
+        /// A stale unknown outcome recorded after a retry doesn't count against the retry's fresh budget: a mandatory type still gets its one
+        /// repeat after the retry's own unknown outcome.
+        /// </summary>
+        [Fact]
+        public async Task A_stale_unknown_after_a_retry_doesnt_take_the_mandatory_repeat()
+        {
+            LocalStack.RequireAvailable();
+            var delivery = await DeliveryAsync(mandatory: true, status: DeliveryStatus.Failed, attempts: 1, due: false);
+            await using (var db = _database.Context())
+            {
+                db.Attempts.Add(new DeliveryAttempt { TenantId = Tenant, DeliveryId = delivery.Id, Number = 1, IntegrationId = _seed.Email,
+                    At = _clock.GetUtcNow(), Outcome = AttemptOutcome.RetryableFailure, Category = FailureCategory.Provider, Error = "first" });
+                await db.SaveChangesAsync(Ct);
+            }
+            _clock.Advance(TimeSpan.FromSeconds(10));
+            await using (var scope = _services!.CreateAsyncScope())
+            {
+                using var context = NotificationsMessageContext.Begin("test");
+                await scope.ServiceProvider.GetRequiredService<IMediator>().Send(new RetryDelivery(Tenant, delivery.Id), Ct);
+                await scope.ServiceProvider.GetRequiredService<NotificationsDbContext>().SaveChangesAsync(Ct);
+            }
+            await using (var db = _database.Context())
+            {
+                // A stale worker's send, begun before the retry, recorded after it: unknown.
+                db.Attempts.Add(new DeliveryAttempt { TenantId = Tenant, DeliveryId = delivery.Id, Number = 2, IntegrationId = _seed.Email,
+                    At = _clock.GetUtcNow().AddSeconds(-5), DurationMs = 1000, Outcome = AttemptOutcome.Unknown, Category = FailureCategory.Provider, Error = "stale" });
+                await db.SaveChangesAsync(Ct);
+            }
+            _email.Then(SendResult.Unknown("dropped after DATA"));
+
+            await PassAsync();
+
+            var (row, attempts) = await ReadAsync(delivery.Id);
+            Assert.Equal(DeliveryStatus.Retrying, row.Status);
+            Assert.Equal([1, 2, 3], attempts.Select(a => a.Number));
+            Assert.Equal(1, _email.Sends);
+        }
+
         /// <summary>A snapshot with no address, or one that isn't JSON, is the delivery's own data: <c>Failed {Destination}</c> at once, nothing sent.</summary>
         [Theory]
         [InlineData("""{"name":"alice"}""")]

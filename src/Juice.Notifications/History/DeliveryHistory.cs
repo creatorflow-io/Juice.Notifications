@@ -91,11 +91,12 @@ namespace Juice.Notifications.History
             if (applicationId is not null)
             {
                 row = ForProducer(row);
-                attempts = attempts.Select(a => a with { Error = ProducerError(a.Error, a.Category, a.StatusCode, a.Outcome) }).ToList();
+                // The provider's message id is its server's reply text (an SMTP 250 can name internal hosts): not the producer's.
+                attempts = attempts.Select(a => a with { Error = ProducerError(a.Error, a.Category, a.StatusCode, a.Outcome), ProviderMessageId = null }).ToList();
             }
             // A producer sees which target, not its address: a tenant admin configured it, and a webhook URL can carry a token (D15).
             return new DeliveryDetail(row, applicationId is null ? delivery.DestinationSnapshot : ProducerSnapshot(delivery.DestinationSnapshot), delivery.TemplateVersion, delivery.Locale, delivery.RendererVersion,
-                delivery.ProviderMessageId, items, attempts);
+                applicationId is null ? delivery.ProviderMessageId : null, items, attempts);
         }
 
         /// <summary>
@@ -106,7 +107,7 @@ namespace Juice.Notifications.History
         private static string? ProducerError(string? error, FailureCategory? category, int? status, AttemptOutcome? outcome = null)
         {
             // The service's own texts about the request (its template, its expiry, its type) say nothing the producer doesn't know.
-            if (error is null || error.StartsWith("render_failed", StringComparison.Ordinal) || error.StartsWith("The request expired", StringComparison.Ordinal)
+            if (error is null || error.StartsWith("render_failed: ", StringComparison.Ordinal) || error.StartsWith("The request expired", StringComparison.Ordinal)
                 || error.StartsWith("The type ", StringComparison.Ordinal))
             {
                 return error;

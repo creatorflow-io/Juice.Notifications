@@ -190,10 +190,12 @@ namespace Juice.Notifications.Delivering
                 ?? (refusal is not null && (unknown is null || refusal.At >= unknown.At) ? refusal : unknown)
                 ?? unapplied[^1];
             row.FirstAttemptAt ??= unapplied[0].At;
-            // The mandatory types' one repeat after an unknown outcome is one per budget (since the latest dead-letter retry), whichever attempt it was.
-            var unknowns = await context.Db.Attempts.AsNoTracking().CountAsync(a => a.TenantId == row.TenantId && a.DeliveryId == row.Id
-                && a.Number > row.AttemptsAtReplay && a.Outcome == AttemptOutcome.Unknown, CancellationToken.None);
-            Apply(context, row, chosen, count, provider, unknowns);
+            // The budget, the backoff step and the mandatory types' one repeat after an unknown outcome count the attempts since the latest
+            // dead-letter retry, and only sends that began after it: a stale worker's send recorded after the retry is numbered past, not counted.
+            var sinceReplay = (await context.Db.Attempts.AsNoTracking().Where(a => a.TenantId == row.TenantId && a.DeliveryId == row.Id
+                && a.Number > row.AttemptsAtReplay).Select(a => new { a.At, a.DurationMs, a.Outcome }).ToListAsync(CancellationToken.None))
+                .Where(a => row.ReplayedAt is not { } replayed || a.At - TimeSpan.FromMilliseconds(a.DurationMs) >= replayed).ToList();
+            Apply(context, row, chosen, count, provider, sinceReplay.Count(a => a.Outcome == AttemptOutcome.Unknown), sinceReplay.Count);
             return true;
         }
 
@@ -238,7 +240,8 @@ namespace Juice.Notifications.Delivering
         /// <paramref name="count"/> is the attempts made so far, which can pass the chosen attempt's number.
         /// </summary>
         /// <paramref name="unknowns"/> is how many attempts since the latest dead-letter retry had an unknown outcome, this one included.
-        private void Apply(StageContext context, Delivery row, DeliveryAttempt chosen, int count, INotificationProvider? provider, int unknowns)
+        /// <paramref name="made"/> is how many count against the budget (sends begun since the latest retry); by default all numbered since it.
+        private void Apply(StageContext context, Delivery row, DeliveryAttempt chosen, int count, INotificationProvider? provider, int unknowns, int? made = null)
         {
             var error = Truncate(chosen.Error);
             var at = chosen.At;
@@ -247,7 +250,7 @@ namespace Juice.Notifications.Delivering
             row.ProviderMessageId = chosen.ProviderMessageId ?? row.ProviderMessageId;
             var max = Math.Max(1, options.Value.MaxAttempts);
             // Counted from the latest dead-letter retry, which gives a fresh budget; attempt numbers go on from the total.
-            var attempts = row.Attempts - row.AttemptsAtReplay;
+            var attempts = made ?? row.Attempts - row.AttemptsAtReplay;
             switch (chosen.Outcome)
             {
                 case AttemptOutcome.Delivered:

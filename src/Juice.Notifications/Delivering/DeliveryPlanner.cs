@@ -218,7 +218,9 @@ namespace Juice.Notifications.Delivering
             }
             catch (RenderException ex) when (!ex.Retryable || timeoutIsFinal)
             {
-                return new Rendered(NoContent, template, "render_failed: " + ex.Message, FailureCategory.Content);
+                // A tenant's own template (an override its admin wrote) is marked so: its error quotes the template, which only admins see.
+                return new Rendered(NoContent, template, (template.TenantId is null ? "render_failed: " : "render_failed (tenant template): ") + ex.Message,
+                    FailureCategory.Content);
             }
         }
     }
