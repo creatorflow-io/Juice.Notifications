@@ -253,6 +253,8 @@ namespace Juice.Notifications.Data
         public int Replays { get; set; }
         /// <summary>The attempts made before the latest retry: its attempt budget, backoff and unknown-outcome rule count from here.</summary>
         public int AttemptsAtReplay { get; set; }
+        /// <summary>When the latest retry was made: a failure from a send that started before it (a stale worker's) doesn't answer the retry.</summary>
+        public DateTimeOffset? ReplayedAt { get; set; }
     }
 
     /// <summary>Links a delivery to a recipient it carries: one normally, several for a digest (design D19).</summary>

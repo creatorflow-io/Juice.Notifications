@@ -65,7 +65,7 @@ namespace Juice.Notifications.History
                 deliveries = deliveries.Where(d => d.Id.CompareTo(before) < 0);
             }
             var rows = await Rows(tenantId, deliveries.OrderByDescending(d => d.Id).Take(limit + 1)).ToListAsync(ct);
-            var page = rows.Take(limit).ToList();
+            var page = rows.Take(limit).Select(r => filter.ApplicationId is null ? r : ForProducer(r)).ToList();
             return new DeliveryPage(page, rows.Count > limit ? page[^1].Id : null);
         }
 
@@ -88,10 +88,34 @@ namespace Juice.Notifications.History
                 orderby attempt.Number
                 select new AttemptView(attempt.Number, attempt.At, attempt.Outcome, attempt.Category, integration.Key, attempt.StatusCode, attempt.DurationMs,
                     attempt.Error, attempt.ProviderMessageId)).AsNoTracking().ToListAsync(ct);
+            if (applicationId is not null)
+            {
+                row = ForProducer(row);
+                attempts = attempts.Select(a => a with { Error = ProducerError(a.Error, a.Category, a.StatusCode, a.Outcome) }).ToList();
+            }
             // A producer sees which target, not its address: a tenant admin configured it, and a webhook URL can carry a token (D15).
             return new DeliveryDetail(row, applicationId is null ? delivery.DestinationSnapshot : ProducerSnapshot(delivery.DestinationSnapshot), delivery.TemplateVersion, delivery.Locale, delivery.RendererVersion,
                 delivery.ProviderMessageId, items, attempts);
         }
+
+        /// <summary>
+        /// What a producer may read of an error. Provider texts quote what the tenant admin configured (an SMTP server echoes the recipient, .NET
+        /// names the webhook's host, the policy names an address, a give-up names a secret reference), so a producer gets the category and status
+        /// instead. A render failure is about the producer's own template and data, so it is kept.
+        /// </summary>
+        private static string? ProducerError(string? error, FailureCategory? category, int? status, AttemptOutcome? outcome = null)
+        {
+            // The service's own texts about the request (its template, its expiry, its type) say nothing the producer doesn't know.
+            if (error is null || error.StartsWith("render_failed", StringComparison.Ordinal) || error.StartsWith("The request expired", StringComparison.Ordinal)
+                || error.StartsWith("The type ", StringComparison.Ordinal))
+            {
+                return error;
+            }
+            var what = outcome == AttemptOutcome.Unknown || error.StartsWith("unknown_outcome", StringComparison.Ordinal) ? "unknown_outcome" : "failed";
+            return $"{what}: {category?.ToString() ?? "Provider"}{(status is { } s ? $" ({s})" : "")}; details are in the tenant's delivery history";
+        }
+
+        private static DeliveryRow ForProducer(DeliveryRow row) => row with { LastError = ProducerError(row.LastError, row.FailureCategory, null) };
 
         private static string ProducerSnapshot(string snapshot)
         {

@@ -166,18 +166,34 @@ namespace Juice.Notifications.Delivering
             {
                 return false;
             }
-            // What the receiver said beats what nobody heard: a send that went through wins; else a definite refusal (a 404, a 550: another
-            // send would be refused too); else an unknown outcome (it may have gone out, so the unknown-outcome policy decides rather than a
-            // retryable failure, which only shows that one send didn't); else the latest.
+            // A failure from a send that started before the latest dead-letter retry (a stale worker's, recorded after the retry) doesn't answer
+            // it: numbered past, but not applied, so the retry still sends. One that went through still finishes the delivery.
+            var count = unapplied[^1].Number;
+            if (row.ReplayedAt is { } replayed)
+            {
+                var answers = unapplied.Where(a => a.Outcome is AttemptOutcome.Delivered or AttemptOutcome.Accepted
+                    || a.At - TimeSpan.FromMilliseconds(a.DurationMs) >= replayed).ToList();
+                if (answers.Count == 0)
+                {
+                    row.Attempts = count;
+                    return false;
+                }
+                unapplied = answers;
+            }
+            // A send that went through wins. Else a definite refusal (a 404, a 550) and an unknown outcome are weighed by which is newer: the newer
+            // refusal decides (another send would be refused too), but an older one may come from a stale worker on settings since fixed, while the
+            // newer send may have gone out, so then the unknown-outcome policy decides. A retryable failure only shows that one send didn't: else
+            // the latest. A stale worker's attempt is timed from its own (earlier) step, so it sorts before the current owner's.
+            var refusal = unapplied.LastOrDefault(a => a.Outcome == AttemptOutcome.PermanentFailure);
+            var unknown = unapplied.LastOrDefault(a => a.Outcome == AttemptOutcome.Unknown);
             var chosen = unapplied.FirstOrDefault(a => a.Outcome is AttemptOutcome.Delivered or AttemptOutcome.Accepted)
-                ?? unapplied.LastOrDefault(a => a.Outcome == AttemptOutcome.PermanentFailure)
-                ?? unapplied.LastOrDefault(a => a.Outcome == AttemptOutcome.Unknown)
+                ?? (refusal is not null && (unknown is null || refusal.At >= unknown.At) ? refusal : unknown)
                 ?? unapplied[^1];
             row.FirstAttemptAt ??= unapplied[0].At;
             // The mandatory types' one repeat after an unknown outcome is one per budget (since the latest dead-letter retry), whichever attempt it was.
             var unknowns = await context.Db.Attempts.AsNoTracking().CountAsync(a => a.TenantId == row.TenantId && a.DeliveryId == row.Id
                 && a.Number > row.AttemptsAtReplay && a.Outcome == AttemptOutcome.Unknown, CancellationToken.None);
-            Apply(context, row, chosen, unapplied[^1].Number, provider, unknowns);
+            Apply(context, row, chosen, count, provider, unknowns);
             return true;
         }
 
@@ -337,11 +353,13 @@ namespace Juice.Notifications.Delivering
             services.AddSingleton<INotificationProvider, SmtpProvider>();
             // The lease has to outlast a send, or another worker claims the row mid-send (§11): SMTP takes up to connect + 2 × request + QUIT, about
             // 27 s with the defaults; 60 s leaves room for recording and saving. A host passing a shorter lease gets this floor.
-            if (options.Lease < MinLease)
+            // A copy: the caller's options (perhaps shared with other stages) stay as they were.
+            var dispatcher = new StageOptions
             {
-                options.Lease = MinLease;
-            }
-            return services.AddStage<Delivery, DispatcherStage>(options, runWorkers);
+                Batch = options.Batch, Lease = options.Lease < MinLease ? MinLease : options.Lease, Poll = options.Poll, Workers = options.Workers,
+                MaxStepFailures = options.MaxStepFailures, FailureBackoff = options.FailureBackoff, FailureBackoffMax = options.FailureBackoffMax,
+            };
+            return services.AddStage<Delivery, DispatcherStage>(dispatcher, runWorkers);
         }
     }
 }

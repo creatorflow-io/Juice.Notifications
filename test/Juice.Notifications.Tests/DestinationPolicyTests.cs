@@ -258,6 +258,13 @@ namespace Juice.Notifications.Tests
         [InlineData("fe80::/10", new int[0], false)]
         [InlineData("64:ff9b::a9fe:a9fe/128", new int[0], false)]
         [InlineData("::/96", new int[0], false)]
+        // Blocked ranges in their IPv6 forms: NAT64, IPv4-mapped, 6to4 (M6 confirmation).
+        [InlineData("64:ff9b::7f00:0/104", new int[0], false)]
+        [InlineData("64:ff9b::a9fe:0/112", new int[0], false)]
+        [InlineData("::ffff:127.0.0.0/104", new int[0], false)]
+        [InlineData("2002:7f00::/24", new int[0], false)]
+        [InlineData("2002:a9fe::/32", new int[0], false)]
+        [InlineData("2002:a00::/24", new int[0], true)] // 10.0.0.0/8 by 6to4: private, allowlistable
         public void Allowlist_entries_are_validated(string destination, int[] ports, bool valid)
         {
             var error = DestinationPolicy.ValidateEntry(Entry(destination, ports));

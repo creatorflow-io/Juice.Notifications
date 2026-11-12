@@ -372,6 +372,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("character varying(40)")
                         .HasColumnName("renderer_version");
 
+                    b.Property<DateTimeOffset?>("ReplayedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("replayed_at");
+
                     b.Property<int>("Replays")
                         .HasColumnType("integer")
                         .HasColumnName("replays");

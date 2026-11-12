@@ -172,6 +172,13 @@ namespace Juice.Notifications.Api
                 throw new InvalidOperationException(
                     $"Auth:Authority '{auth.Authority}' is not https. Use https, or set Auth:RequireHttpsMetadata to false for local development.");
             }
+            // Refused here, at start: JwtBearer would only refuse it on the first request, and then answer 500 to every one.
+            if (auth.RequireHttpsMetadata && !string.IsNullOrWhiteSpace(auth.MetadataAddress)
+                && !auth.MetadataAddress.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Auth:MetadataAddress '{auth.MetadataAddress}' is not https. Use https, or set Auth:RequireHttpsMetadata to false.");
+            }
             services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 .AddJwtBearer(options =>
                 {

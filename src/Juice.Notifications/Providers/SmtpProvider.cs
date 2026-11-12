@@ -46,15 +46,26 @@ namespace Juice.Notifications.Providers
                 var known = string.Join(", ", options.Value.SmtpServers.Keys.Order());
                 return $"settings.server names one of the deployment's SMTP servers: {(known.Length > 0 ? known : "none are configured")}.";
             }
-            // The bare address as the send parses it: no display name, no angle brackets, no surrounding spaces (" a@example.com " passed a trimmed
-            // check and failed every send). Compared by form, not text: MimeKit decodes a punycode domain, so a@xn--bcher-kva.de reads back as
-            // a@bücher.de.
-            if (s.From is null || s.From != s.From.Trim() || s.From.Contains('<') || !MailboxAddress.TryParse(s.From, out var from)
-                || !string.IsNullOrEmpty(from.Name) || !from.Address.Contains('@'))
+            // The bare address, checked by building it exactly as the send does (new MailboxAddress(name, from)): TryParse accepts forms the
+            // constructor refuses ("(c) a@example.com", "a@example.com>"), which would fail every send. No surrounding spaces or angle brackets,
+            // and a domain ("a@b" quoted has none). A punycode domain builds fine (MimeKit decodes it).
+            if (s.From is null || s.From != s.From.Trim() || s.From.Contains('<') || s.From.Contains('>') || !Builds(s.From))
             {
                 return "settings.from is the sender's bare email address.";
             }
             return s.FromName is { Length: > 200 } ? "settings.fromName is up to 200 characters." : null;
+        }
+
+        private static bool Builds(string from)
+        {
+            try
+            {
+                return !string.IsNullOrEmpty(new MailboxAddress("", from).Domain);
+            }
+            catch (Exception ex) when (ex is ParseException or ArgumentException)
+            {
+                return false;
+            }
         }
 
         public async Task<SendResult> SendAsync(RenderedDelivery delivery, IntegrationContext integration, CancellationToken ct)

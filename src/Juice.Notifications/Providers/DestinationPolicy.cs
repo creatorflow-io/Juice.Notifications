@@ -160,9 +160,34 @@ namespace Juice.Notifications.Providers
             // (0.0.0.0/0, a /64 inside 64:ff9b:1::/48) isn't judged by its base address; its blocked parts stay blocked at send time.
             var single = network.PrefixLength == (network.BaseAddress.AddressFamily == AddressFamily.InterNetwork ? 32 : 128);
             return (single ? Classify(network.BaseAddress) == DestinationClass.Blocked
-                    : Blocked.Append(Ipv4Compatible).Any(b => b.PrefixLength <= network.PrefixLength && b.BaseAddress.AddressFamily == network.BaseAddress.AddressFamily && b.Contains(network.BaseAddress)))
+                    : WhollyBlocked(network) || (Embedded(network) is { } v4 && WhollyBlocked(v4)))
                 ? $"allowlist '{entry.Destination}': loopback, link-local, metadata and reserved addresses are never reachable"
                 : null;
+        }
+
+        private static bool WhollyBlocked(IPNetwork network)
+            => Blocked.Append(Ipv4Compatible).Any(b => b.PrefixLength <= network.PrefixLength
+                && b.BaseAddress.AddressFamily == network.BaseAddress.AddressFamily && b.Contains(network.BaseAddress));
+
+
+        /// <summary>
+        /// The IPv4 network an IPv6 network carries, when it fixes all of the IPv4 prefix: inside 64:ff9b::/96 or ::ffff:0:0/96 (bytes 12–15), or
+        /// 6to4 2002::/16 (bytes 2–5). Null otherwise.
+        /// </summary>
+        private static IPNetwork? Embedded(IPNetwork network)
+        {
+            var bytes = network.BaseAddress.GetAddressBytes();
+            // IPv4-mapped by its bytes (::ffff:0:0/96): IPNetwork.Contains doesn't match mapped addresses as plain IPv6.
+            var mapped = bytes.Length == 16 && bytes[..10].All(b => b == 0) && bytes[10] == 0xff && bytes[11] == 0xff;
+            if (network.PrefixLength >= 96 && (Nat64.Contains(network.BaseAddress) || mapped))
+            {
+                return new IPNetwork(new IPAddress(bytes[12..16]), network.PrefixLength - 96);
+            }
+            if (network.PrefixLength >= 16 && SixToFour.Contains(network.BaseAddress))
+            {
+                return new IPNetwork(new IPAddress(bytes[2..6]), Math.Min(32, network.PrefixLength - 16));
+            }
+            return null;
         }
 
         /// <summary>A socket to the first address of <paramref name="addresses"/> that accepts, after they all passed <see cref="Check"/>.</summary>

@@ -48,6 +48,7 @@ namespace Juice.Notifications.History
             delivery.Attempts = Math.Max(delivery.Attempts, await db.Attempts.Where(a => a.TenantId == delivery.TenantId && a.DeliveryId == delivery.Id)
                 .MaxAsync(a => (int?)a.Number, ct) ?? 0);
             delivery.AttemptsAtReplay = delivery.Attempts;
+            delivery.ReplayedAt = now;
             delivery.StepFailures = 0;
             delivery.ClaimedBy = null;
             delivery.LeaseUntil = null;

@@ -396,6 +396,34 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
+        /// The reverse: a stale worker's refusal (say a 401 signed with a secret since rotated) is older than the current owner's send, whose
+        /// outcome is unknown. The newer send may have gone out, so the unknown-outcome policy decides: a webhook is repeated, not failed.
+        /// </summary>
+        [Fact]
+        public async Task An_older_stale_refusal_doesnt_outweigh_a_newer_unknown_outcome()
+        {
+            LocalStack.RequireAvailable();
+            var delivery = await DeliveryAsync(Channels.Webhook);
+            _webhook.OnSend = async () =>
+            {
+                await using var db = _database.Context();
+                db.Attempts.Add(new DeliveryAttempt
+                {
+                    TenantId = Tenant, DeliveryId = delivery.Id, Number = 1, IntegrationId = _seed.Webhook, At = _clock.GetUtcNow().AddSeconds(-30),
+                    Outcome = AttemptOutcome.PermanentFailure, Category = FailureCategory.Content, StatusCode = 401, Error = "stale: 401",
+                });
+                await db.SaveChangesAsync(Ct);
+            };
+            _webhook.Then(SendResult.Unknown("no answer"));
+
+            await PassAsync();
+
+            var (row, attempts) = await ReadAsync(delivery.Id);
+            Assert.Equal(DeliveryStatus.Retrying, row.Status);
+            Assert.Equal([AttemptOutcome.PermanentFailure, AttemptOutcome.Unknown], attempts.Select(a => a.Outcome));
+        }
+
+        /// <summary>
         /// Proof 4: the worker dies after the send, before its step is saved. The attempt is recorded anyway; once the row is due again another
         /// worker applies it instead of sending blindly, and a webhook unknown is then re-sent under the same delivery id.
         /// </summary>
@@ -511,6 +539,57 @@ namespace Juice.Notifications.IntegrationTests
             var (row, attempts) = await ReadAsync(delivery.Id);
             Assert.Equal((DeliveryStatus.Accepted, 3, 2), (row.Status, row.Attempts, row.AttemptsAtReplay));
             Assert.Equal([(delivery.Id, 3)], _email.Seen.Select(s => (s.Delivery, s.Attempt)));
+            Assert.Equal([1, 2, 3], attempts.Select(a => a.Number));
+        }
+
+        /// <summary>
+        /// A stale worker's failure, recorded just after a dead-letter retry (its send began before the retry), doesn't answer the retry: it is
+        /// numbered past, and the retry still sends.
+        /// </summary>
+        [Fact]
+        public async Task A_stale_failure_recorded_after_a_retry_does_not_use_up_the_retry()
+        {
+            LocalStack.RequireAvailable();
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var first = 1;
+            _email.OnSend = async () =>
+            {
+                if (Interlocked.Exchange(ref first, 0) == 1)
+                {
+                    entered.TrySetResult();
+                    await release.Task;
+                }
+            };
+            // w2's send is refused; w1's (stale) send, still in flight, is refused too; the retry's send goes through.
+            _email.Then(SendResult.Permanent(FailureCategory.Destination, "w2: 550"), SendResult.Permanent(FailureCategory.Destination, "w1 stale: 550"));
+            var delivery = await DeliveryAsync();
+
+            var stale = Task.Run(() => PassAsync("w1"));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+            await using (var expire = _database.Context())
+            {
+                // w1's lease ends while it sends (leases are on the database clock).
+                await expire.Deliveries.Where(d => d.Id == delivery.Id).ExecuteUpdateAsync(u => u.SetProperty(d => d.LeaseUntil, DateTimeOffset.UtcNow.AddMinutes(-1)), Ct);
+            }
+            await PassAsync("w2");
+            Assert.Equal(DeliveryStatus.Failed, (await ReadAsync(delivery.Id)).Row.Status);
+
+            _clock.Advance(TimeSpan.FromSeconds(1)); // the retry comes after w1's send began
+            await using (var scope = _services!.CreateAsyncScope())
+            {
+                using var context = NotificationsMessageContext.Begin("test");
+                await scope.ServiceProvider.GetRequiredService<IMediator>().Send(new RetryDelivery(Tenant, delivery.Id), Ct);
+                await scope.ServiceProvider.GetRequiredService<NotificationsDbContext>().SaveChangesAsync(Ct);
+            }
+            release.SetResult(); // w1's send ends now and records its attempt
+            await stale;
+            var sendsBefore = _email.Sends;
+            await PassAsync("w3");
+
+            var (row, attempts) = await ReadAsync(delivery.Id);
+            Assert.Equal(DeliveryStatus.Accepted, row.Status);
+            Assert.Equal(sendsBefore + 1, _email.Sends);
             Assert.Equal([1, 2, 3], attempts.Select(a => a.Number));
         }
 

@@ -18,7 +18,8 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOIN
         // Not the System.Net.Http spans: they record a webhook's full URL, which can be a secret (an addressRef target, D15). The dispatch span
         // names the integration instead, and HttpClient still carries the trace context on to the receiver.
         .WithTracing(tracing => tracing.AddSource(Telemetry.Name).AddAspNetCoreInstrumentation())
-        .WithMetrics(metrics => metrics.AddMeter(Telemetry.Name).AddAspNetCoreInstrumentation().AddMeter("System.Net.Http"))
+        // Not the System.Net.Http meter either: it tags every series with the webhook's host (server.address), part of the same secret.
+        .WithMetrics(metrics => metrics.AddMeter(Telemetry.Name).AddAspNetCoreInstrumentation())
         .UseOtlpExporter();
 }
 

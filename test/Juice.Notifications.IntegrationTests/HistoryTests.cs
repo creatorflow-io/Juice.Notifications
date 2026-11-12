@@ -117,6 +117,10 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains("\"target\"", detail.DestinationSnapshot);
             var full = await admin.GetFromJsonAsync<DeliveryDetailResponse>($"{Tenant}/deliveries/{failed.Id}", Ct);
             Assert.Contains(receiver.Url, full!.DestinationSnapshot);
+            // Error texts quote what the admin configured (a server's reply, a host): the producer gets the category and status instead.
+            Assert.Equal("failed: Destination; details are in the tenant's delivery history", detail.Delivery.LastError);
+            Assert.Equal("failed: Destination (404); details are in the tenant's delivery history", detail.Attempts[0].Error);
+            Assert.Contains("404", full.Delivery.LastError);
         }
 
         [Fact]

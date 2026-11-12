@@ -77,7 +77,9 @@ foreach (var hook in receiver.Received)
 var history = await admin.GetFromJsonAsync<DeliveryPageResponse>($"{t}/deliveries?request={accepted.Id}");
 Console.WriteLine($"\nHistory: {history!.Items.Count} deliveries for request {accepted.Id} (GET {t}/deliveries?request={accepted.Id}).");
 Console.WriteLine("Read the email in Mailpit: http://localhost:8026");
-return detail.Deliveries.All(d => d.Status is DeliveryStatus.Delivered or DeliveryStatus.Accepted) && receiver.Received.All(h => webhookSecret.Length == 0 || h.Verified) ? 0 : 1;
+// Both deliveries made and taken, and the webhook actually received (and verified when signed): an empty list is not a success.
+return detail.Deliveries.Count >= 2 && detail.Deliveries.All(d => d.Status is DeliveryStatus.Delivered or DeliveryStatus.Accepted)
+    && !receiver.Received.IsEmpty && receiver.Received.All(h => webhookSecret.Length == 0 || h.Verified) ? 0 : 1;
 
 static JsonElement Json(string json) => JsonElement.Parse(json);
 

@@ -332,6 +332,9 @@ namespace Juice.Notifications.Tests
         [InlineData("""{ "server": "fake", "from": "sender@example.com " }""", "settings.from")]
         [InlineData("""{ "server": "fake", "from": "Alerts <sender@example.com>" }""", "settings.from")]
         [InlineData("""{ "server": "fake", "from": "a@example.com, b@example.com" }""", "settings.from")]
+        [InlineData("""{ "server": "fake", "from": "(c) a@example.com" }""", "settings.from")]
+        [InlineData("""{ "server": "fake", "from": "a@example.com>" }""", "settings.from")]
+        [InlineData("""{ "server": "fake", "from": "\"a@b\"" }""", "settings.from")] // a quoted local part, no domain
         [InlineData("""{ "server": 1, "from": "sender@example.com" }""", "wrong type")]
         [InlineData("""{ "server": "fake", "from": ["sender@example.com"] }""", "wrong type")]
         [InlineData("""{ "server": "fake", "from": "sender@example.com", "fromName": 7 }""", "wrong type")]

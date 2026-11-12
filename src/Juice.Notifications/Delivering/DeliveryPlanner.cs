@@ -118,6 +118,13 @@ namespace Juice.Notifications.Delivering
                     LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? context.Now : null, CompletedAt = problem is null ? null : context.Now,
                 };
                 db.Deliveries.Add(delivery);
+                if (problem is not null)
+                {
+                    // Failed here, never by the dispatcher: counted with the deliveries it finishes (by channel and status).
+                    var channel = delivery.Channel;
+                    context.AfterCommit.Add(() => Telemetry.Deliveries.Add(1, new KeyValuePair<string, object?>("channel", channel),
+                        new KeyValuePair<string, object?>("status", nameof(DeliveryStatus.Failed))));
+                }
                 db.DeliveryItems.Add(new DeliveryItem
                 {
                     TenantId = row.TenantId, DeliveryId = delivery.Id, RecipientId = row.Id, DestinationKey = destination.Key, Channel = destination.Channel,
