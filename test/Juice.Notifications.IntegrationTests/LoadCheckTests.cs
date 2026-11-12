@@ -75,16 +75,21 @@ namespace Juice.Notifications.IntegrationTests
                 var key = $"{type}-{i}"; // unique per run: a key seen before is a duplicate, answered with the original
                 sends.Add(Task.Run(async () =>
                 {
-                    var response = await client.PostAsJsonAsync($"{Tenant}/notifications", new SendNotificationBody(type, null, key, null, null, null, null, null,
-                        DeliveryTests.Json("""{ "n": 1 }"""), null, null), Ct);
-                    if (response.IsSuccessStatusCode)
+                    try
                     {
-                        accepted.Add((await response.Content.ReadFromJsonAsync<AcceptedResponse>(Ct))!.Id);
+                        var response = await client.PostAsJsonAsync($"{Tenant}/notifications", new SendNotificationBody(type, null, key, null, null, null, null, null,
+                            DeliveryTests.Json("""{ "n": 1 }"""), null, null), Ct);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            accepted.Add((await response.Content.ReadFromJsonAsync<AcceptedResponse>(Ct))!.Id);
+                            return;
+                        }
                     }
-                    else
+                    catch (Exception ex) when (ex is HttpRequestException || (ex is TaskCanceledException && !Ct.IsCancellationRequested))
                     {
-                        Interlocked.Increment(ref failures);
+                        // A send that failed in transit is a refusal too: counted, so the run still reports.
                     }
+                    Interlocked.Increment(ref failures);
                 }, Ct));
             }
             await Task.WhenAll(sends);

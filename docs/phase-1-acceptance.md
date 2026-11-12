@@ -1,6 +1,6 @@
 # Phase 1 acceptance record
 
-**Status:** draft, 12 November 2026. It records the M9 gate (`phase-1-plan.md` §5 M9, §6): each proof point with the test that shows it, the
+**Status:** 12 November 2026, all gate checks passed; M9 reviewed. It records the M9 gate (`phase-1-plan.md` §5 M9, §6): each proof point with the test that shows it, the
 mutation score on the core rules, the load check, and the demo steps. Commit references are on `main`.
 
 ## 1. Proof points

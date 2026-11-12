@@ -93,7 +93,60 @@ namespace Juice.Notifications.IntegrationTests
                 _address = address;
             }
 
+            /// <summary>
+            /// Starts the host and waits until it is ready. A port taken between choosing it and the child binding it makes the child exit at
+            /// once: then another port is tried.
+            /// </summary>
             public static async Task<ChildHost> StartAsync(string connectionString, bool runStages)
+            {
+                for (var tries = 1; ; tries++)
+                {
+                    var host = Launch(connectionString, runStages);
+                    try
+                    {
+                        if (await host.ReadyAsync())
+                        {
+                            return host;
+                        }
+                    }
+                    catch
+                    {
+                        // Cancelled, timed out, or anything else: never leave the child running.
+                        await host.DisposeAsync();
+                        throw;
+                    }
+                    var exitCode = host._process.ExitCode;
+                    await host.DisposeAsync();
+                    Assert.True(tries < 3, $"the host exited with {exitCode}, {tries} times");
+                }
+            }
+
+            /// <summary>True once ready; false if the process exited first (a port taken by someone else); throws if it never becomes ready.</summary>
+            private async Task<bool> ReadyAsync()
+            {
+                using var probe = new HttpClient { BaseAddress = _address, Timeout = TimeSpan.FromSeconds(2) };
+                for (var i = 0; i < 300; i++)
+                {
+                    if (_process.HasExited)
+                    {
+                        return false;
+                    }
+                    try
+                    {
+                        if ((await probe.GetAsync("/health/ready", Ct)).IsSuccessStatusCode)
+                        {
+                            return true;
+                        }
+                    }
+                    catch (Exception ex) when (ex is HttpRequestException || (ex is TaskCanceledException && !Ct.IsCancellationRequested))
+                    {
+                    }
+                    await Task.Delay(100, Ct);
+                }
+                throw new TimeoutException("The host never became ready.");
+            }
+
+            private static ChildHost Launch(string connectionString, bool runStages)
             {
                 var app = AppPath();
                 Assert.SkipWhen(app is null, "Juice.Notifications.App isn't built next to the tests");
@@ -126,24 +179,22 @@ namespace Juice.Notifications.IntegrationTests
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
                 var host = new ChildHost(process, address);
-                using var probe = new HttpClient { BaseAddress = address };
-                for (var i = 0; i < 300; i++)
+                // If the test runner itself goes away, the child goes with it.
+                AppDomain.CurrentDomain.ProcessExit += (_, _) =>
                 {
-                    Assert.False(process.HasExited, $"the host exited with {(process.HasExited ? process.ExitCode : 0)}");
                     try
                     {
-                        if ((await probe.GetAsync("/health/ready", Ct)).IsSuccessStatusCode)
+                        if (!process.HasExited)
                         {
-                            return host;
+                            process.Kill(entireProcessTree: true);
                         }
                     }
-                    catch (HttpRequestException)
+                    catch (InvalidOperationException)
                     {
+                        // Already gone and disposed.
                     }
-                    await Task.Delay(100, Ct);
-                }
-                await host.DisposeAsync();
-                throw new TimeoutException("The host never became ready.");
+                };
+                return host;
             }
 
             public HttpClient Client(string token)
