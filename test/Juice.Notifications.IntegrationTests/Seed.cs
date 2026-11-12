@@ -49,9 +49,9 @@ namespace Juice.Notifications.IntegrationTests
             TenantId = tenantId, DeliveryId = deliveryId, RecipientId = recipientId, DestinationKey = "ext:webhook:https://example.com/hook", Channel = Channels.Webhook,
         };
 
-        public static DeliveryAttempt Attempt(Guid tenantId, Guid deliveryId, Guid integrationId) => new()
+        public static DeliveryAttempt Attempt(Guid tenantId, Guid deliveryId, Guid integrationId, int number = 1) => new()
         {
-            TenantId = tenantId, DeliveryId = deliveryId, Number = 1, IntegrationId = integrationId, At = Now, Outcome = AttemptOutcome.Delivered,
+            TenantId = tenantId, DeliveryId = deliveryId, Number = number, IntegrationId = integrationId, At = Now, Outcome = AttemptOutcome.Delivered,
         };
     }
 }

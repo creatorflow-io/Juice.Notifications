@@ -30,6 +30,13 @@ namespace Juice.Notifications.Delivering
 
         private sealed record Destination(string Key, string Channel, Integration? Integration, string Snapshot, string? Problem);
 
+        public void GiveUp(StageContext context, NotificationRecipient row, string error)
+        {
+            // The runner logged the error; the outcome answers "why didn't I get it?".
+            row.Outcome = RecipientOutcome.Failed;
+            context.Done(row, null);
+        }
+
         public async Task ExecuteAsync(StageContext context, NotificationRecipient row, CancellationToken ct)
         {
             var db = context.Db;

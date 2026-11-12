@@ -42,7 +42,7 @@ namespace Juice.Notifications
 
     /// <summary>What happened to a recipient, so "why didn't I get it?" has an answer.</summary>
     [JsonConverter(typeof(JsonStringEnumConverter<RecipientOutcome>))]
-    public enum RecipientOutcome { Pending, Planned, Muted, OptedOut, Deferred, Cancelled, Truncated, ResolverUnavailable }
+    public enum RecipientOutcome { Pending, Planned, Muted, OptedOut, Deferred, Cancelled, Truncated, ResolverUnavailable, Failed }
 
     /// <summary>A delivery's state (design §10.2).</summary>
     [JsonConverter(typeof(JsonStringEnumConverter<DeliveryStatus>))]

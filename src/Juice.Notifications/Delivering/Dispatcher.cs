@@ -29,12 +29,39 @@ namespace Juice.Notifications.Delivering
     {
         public string Name => DeliveryStageNames.Dispatcher;
 
+        /// <summary>
+        /// The step itself kept failing (not a send: those are attempts): failed, visible in history and replayable. Unless a send already
+        /// succeeded and was recorded, only its result never reached the row: then the delivery is what that attempt says.
+        /// </summary>
+        public void GiveUp(StageContext context, Delivery row, string error)
+        {
+            var succeeded = context.Db.Attempts.AsNoTracking()
+                .Where(a => a.TenantId == row.TenantId && a.DeliveryId == row.Id && a.Number > row.Attempts
+                    && (a.Outcome == AttemptOutcome.Delivered || a.Outcome == AttemptOutcome.Accepted))
+                .OrderBy(a => a.Number).FirstOrDefault();
+            if (succeeded is not null)
+            {
+                Apply(context, row, succeeded, succeeded.Number, null);
+                return;
+            }
+            Finish(context, row, DeliveryStatus.Failed, null, "The dispatcher failed repeatedly on this delivery: " + error, context.Now);
+        }
+
         public async Task ExecuteAsync(StageContext context, Delivery row, CancellationToken ct)
         {
             var db = context.Db;
             if (row.Status is not (DeliveryStatus.Pending or DeliveryStatus.Retrying))
             {
                 context.Done(row, null);
+                return;
+            }
+            var integration = await db.Integrations.AsNoTracking().SingleAsync(i => i.TenantId == row.TenantId && i.Id == row.IntegrationId, ct);
+            var provider = providers.FirstOrDefault(p => p.Channel == row.Channel && p.Kind == integration.Kind);
+            // First, before expiry or anything that would end the delivery without sending: an attempt is written in its own transaction right
+            // after the send, so it stays when the step's save is lost (a lease that ended, a failure after the send). One the row hasn't taken
+            // in yet went out, so its outcome is the delivery's, not a fresh send.
+            if (await ApplyRecordedAsync(context, row, provider, ct))
+            {
                 return;
             }
             var expires = await (
@@ -45,17 +72,17 @@ namespace Juice.Notifications.Delivering
                 select request.ExpiresAt).FirstOrDefaultAsync(ct);
             if (expires is { } at && at <= context.Now)
             {
-                Finish(context, row, DeliveryStatus.Expired, null, "The request expired before the delivery was sent.");
+                Finish(context, row, DeliveryStatus.Expired, null, "The request expired before the delivery was sent.", context.Now);
                 return;
             }
-            var integration = await db.Integrations.AsNoTracking().SingleAsync(i => i.TenantId == row.TenantId && i.Id == row.IntegrationId, ct);
-            var provider = providers.FirstOrDefault(p => p.Channel == row.Channel && p.Kind == integration.Kind);
             if (provider is null || !integration.Enabled)
             {
                 Finish(context, row, DeliveryStatus.Failed, FailureCategory.Provider,
-                    provider is null ? $"No provider sends {row.Channel} through '{integration.Kind}'." : $"The integration {integration.Key} is disabled.");
+                    provider is null ? $"No provider sends {row.Channel} through '{integration.Kind}'." : $"The integration {integration.Key} is disabled.",
+                    context.Now);
                 return;
             }
+            var attempt = row.Attempts + 1;
             string destination;
             string? secret;
             try
@@ -66,11 +93,10 @@ namespace Juice.Notifications.Delivering
             catch (InvalidOperationException ex)
             {
                 // A secret that isn't set yet is a deployment problem someone can fix: try again later rather than give up.
-                await RecordAndApplyAsync(context, row, integration, SendResult.Retry(FailureCategory.Provider, ex.Message), 0, ct);
+                await RecordAndApplyAsync(context, row, integration, attempt, SendResult.Retry(FailureCategory.Provider, ex.Message), 0);
                 return;
             }
 
-            var attempt = row.Attempts + 1;
             var watch = Stopwatch.StartNew();
             SendResult result;
             try
@@ -83,51 +109,102 @@ namespace Juice.Notifications.Delivering
                 logger.LogError(ex, "Provider {Kind} threw sending delivery {Delivery}", integration.Kind, row.Id);
                 result = SendResult.Unknown("The provider failed unexpectedly: " + ex.Message);
             }
-            await RecordAndApplyAsync(context, row, integration, result, (int)watch.ElapsedMilliseconds, ct, provider);
+            await RecordAndApplyAsync(context, row, integration, attempt, result, (int)watch.ElapsedMilliseconds, provider);
         }
 
-        private async Task RecordAndApplyAsync(StageContext context, Delivery row, Integration integration, SendResult result, int durationMs, CancellationToken ct,
+        /// <summary>
+        /// Records the attempt, then applies what the recorded attempts say. Usually that is this one; but a worker whose lease ended while it sent
+        /// may have recorded one too, and if either went through, the delivery did.
+        /// </summary>
+        private async Task RecordAndApplyAsync(StageContext context, Delivery row, Integration integration, int attempt, SendResult result, int durationMs,
             INotificationProvider? provider = null)
         {
-            var attempt = row.Attempts + 1;
-            var error = Truncate(result.Error);
-            await using (var scope = scopes.CreateAsyncScope())
+            await RecordAsync(context, row, integration, attempt, result, durationMs);
+            await ApplyRecordedAsync(context, row, provider, CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Applies the attempts recorded after the row's count, if any: the first that went through (Delivered or Accepted), otherwise the latest.
+        /// The row's count moves past all of them, so none is applied twice. False when there are none.
+        /// </summary>
+        private async Task<bool> ApplyRecordedAsync(StageContext context, Delivery row, INotificationProvider? provider, CancellationToken ct)
+        {
+            var unapplied = await context.Db.Attempts.AsNoTracking().Where(a => a.TenantId == row.TenantId && a.DeliveryId == row.Id && a.Number > row.Attempts)
+                .OrderBy(a => a.Number).ToListAsync(ct);
+            if (unapplied.Count == 0)
             {
+                return false;
+            }
+            var chosen = unapplied.FirstOrDefault(a => a.Outcome is AttemptOutcome.Delivered or AttemptOutcome.Accepted) ?? unapplied[^1];
+            row.FirstAttemptAt ??= unapplied[0].At;
+            Apply(context, row, chosen, unapplied[^1].Number, provider);
+            return true;
+        }
+
+        /// <summary>
+        /// Writes the attempt in its own transaction, not cancelled by the worker stopping: the outside world saw the send. Numbers are unique per
+        /// delivery; a worker whose lease ended while it sent can find its number taken by the new owner, and records under the next one.
+        /// </summary>
+        private async Task<int> RecordAsync(StageContext context, Delivery row, Integration integration, int attempt, SendResult result, int durationMs)
+        {
+            for (var tries = 0; ; tries++)
+            {
+                await using var scope = scopes.CreateAsyncScope();
                 var attempts = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
                 attempts.Attempts.Add(new DeliveryAttempt
                 {
                     TenantId = row.TenantId, DeliveryId = row.Id, Number = attempt, IntegrationId = integration.Id, At = context.Now, Outcome = result.Outcome,
-                    Category = result.Category, StatusCode = result.StatusCode, Error = error, DurationMs = durationMs,
+                    Category = result.Category, StatusCode = result.StatusCode, Error = Truncate(result.Error), DurationMs = durationMs,
+                    ProviderMessageId = result.ProviderMessageId is { Length: > 500 } id ? id[..500] : result.ProviderMessageId,
                 });
-                await attempts.SaveChangesAsync(ct);
+                try
+                {
+                    await attempts.SaveChangesAsync(CancellationToken.None);
+                    return attempt;
+                }
+                catch (Exception ex) when (tries < 5 && DbConflicts.Classify(ex) is { Kind: ConflictKind.Unique, Constraint: Constraints.AttemptNumber })
+                {
+                    attempt = 1 + (await attempts.Attempts.AsNoTracking().Where(a => a.TenantId == row.TenantId && a.DeliveryId == row.Id)
+                        .MaxAsync(a => (int?)a.Number, CancellationToken.None) ?? 0);
+                }
             }
+        }
 
-            row.Attempts = attempt;
-            row.FirstAttemptAt ??= context.Now;
-            row.ProviderMessageId = result.ProviderMessageId ?? row.ProviderMessageId;
+        /// <summary>
+        /// Applies a recorded attempt's outcome to the row (§10.2), timed from when the attempt happened, not from when it is applied.
+        /// <paramref name="count"/> is the attempts made so far, which can pass the chosen attempt's number.
+        /// </summary>
+        private void Apply(StageContext context, Delivery row, DeliveryAttempt chosen, int count, INotificationProvider? provider)
+        {
+            var error = Truncate(chosen.Error);
+            var at = chosen.At;
+            row.Attempts = Math.Max(row.Attempts, count);
+            row.FirstAttemptAt ??= at;
+            row.ProviderMessageId = chosen.ProviderMessageId ?? row.ProviderMessageId;
             var max = Math.Max(1, options.Value.MaxAttempts);
-            switch (result.Outcome)
+            var attempts = row.Attempts;
+            switch (chosen.Outcome)
             {
                 case AttemptOutcome.Delivered:
-                    Finish(context, row, DeliveryStatus.Delivered, null, null);
+                    Finish(context, row, DeliveryStatus.Delivered, null, null, at);
                     break;
                 case AttemptOutcome.Accepted:
-                    Finish(context, row, DeliveryStatus.Accepted, null, null);
+                    Finish(context, row, DeliveryStatus.Accepted, null, null, at);
                     break;
-                case AttemptOutcome.RetryableFailure when attempt < max:
-                    Retry(context, row, result.Category, error, attempt);
+                case AttemptOutcome.RetryableFailure when attempts < max:
+                    Retry(context, row, chosen.Category, error, attempts, at);
                     break;
                 case AttemptOutcome.RetryableFailure:
-                    Finish(context, row, DeliveryStatus.Failed, result.Category, $"{error} (gave up after {attempt} attempts)");
+                    Finish(context, row, DeliveryStatus.Failed, chosen.Category, $"{error} (gave up after {attempts} attempts)", at);
                     break;
-                case AttemptOutcome.Unknown when attempt < max && SafeToRepeat(row, provider, attempt):
-                    Retry(context, row, FailureCategory.Provider, error, attempt);
+                case AttemptOutcome.Unknown when attempts < max && SafeToRepeat(row, provider, attempts):
+                    Retry(context, row, FailureCategory.Provider, error, attempts, at);
                     break;
                 case AttemptOutcome.Unknown:
-                    Finish(context, row, DeliveryStatus.Failed, FailureCategory.Provider, "unknown_outcome: " + error);
+                    Finish(context, row, DeliveryStatus.Failed, FailureCategory.Provider, "unknown_outcome: " + error, at);
                     break;
                 default:
-                    Finish(context, row, DeliveryStatus.Failed, result.Category, error);
+                    Finish(context, row, DeliveryStatus.Failed, chosen.Category, error, at);
                     break;
             }
         }
@@ -138,21 +215,21 @@ namespace Juice.Notifications.Delivering
             || provider?.Idempotent == true             // the delivery id is the provider's idempotency key
             || (row.Mandatory && attempt == 1);         // a duplicate is better than silence, once
 
-        private void Retry(StageContext context, Delivery row, FailureCategory? category, string? error, int attempt)
+        private void Retry(StageContext context, Delivery row, FailureCategory? category, string? error, int attempt, DateTimeOffset at)
         {
             row.Status = DeliveryStatus.Retrying;
             row.FailureCategory = category;
             row.LastError = error;
-            context.Done(row, context.Now + Backoff(attempt));
+            context.Done(row, at + Backoff(attempt));
             context.Wakes.Remove(Name);
         }
 
-        private static void Finish(StageContext context, Delivery row, DeliveryStatus status, FailureCategory? category, string? error)
+        private static void Finish(StageContext context, Delivery row, DeliveryStatus status, FailureCategory? category, string? error, DateTimeOffset at)
         {
             row.Status = status;
             row.FailureCategory = category;
             row.LastError = Truncate(error);
-            row.CompletedAt = context.Now;
+            row.CompletedAt = at;
             context.Done(row, null);
         }
 

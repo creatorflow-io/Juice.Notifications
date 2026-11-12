@@ -254,7 +254,9 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Outcome).HasConversion<string>().HasMaxLength(20);
                 e.Property(x => x.Category).HasConversion<string>().HasMaxLength(20);
                 e.Property(x => x.Error).HasMaxLength(2000);
-                e.HasIndex(x => new { x.TenantId, x.DeliveryId, x.Number });
+                e.Property(x => x.ProviderMessageId).HasMaxLength(500);
+                // One attempt per number: two workers recording at once (one whose lease ended) can't both take it.
+                e.HasIndex(x => new { x.TenantId, x.DeliveryId, x.Number }).IsUnique().HasDatabaseName(Constraints.AttemptNumber);
                 e.HasOne<Delivery>().WithMany().HasForeignKey(x => new { x.TenantId, x.DeliveryId }).OnDelete(DeleteBehavior.Cascade);
                 e.HasOne<Integration>().WithMany().HasForeignKey(x => new { x.TenantId, x.IntegrationId }).OnDelete(DeleteBehavior.Restrict);
             });

@@ -377,6 +377,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("status");
 
+                    b.Property<int>("StepFailures")
+                        .HasColumnType("integer")
+                        .HasColumnName("step_failures");
+
                     b.Property<int>("TemplateVersion")
                         .HasColumnType("integer")
                         .HasColumnName("template_version");
@@ -448,6 +452,11 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("outcome");
 
+                    b.Property<string>("ProviderMessageId")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("provider_message_id");
+
                     b.Property<int?>("StatusCode")
                         .HasColumnType("integer")
                         .HasColumnName("status_code");
@@ -459,7 +468,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_delivery_attempts_tenant_id_integration_id");
 
                     b.HasIndex("TenantId", "DeliveryId", "Number")
-                        .HasDatabaseName("ix_delivery_attempts_tenant_id_delivery_id_number");
+                        .IsUnique()
+                        .HasDatabaseName("ix_delivery_attempts_number");
 
                     b.ToTable("delivery_attempts", "notifications");
                 });
@@ -684,6 +694,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("state");
 
+                    b.Property<int>("StepFailures")
+                        .HasColumnType("integer")
+                        .HasColumnName("step_failures");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
@@ -788,6 +802,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasMaxLength(63)
                         .HasColumnType("character varying(63)")
                         .HasColumnName("route_key");
+
+                    b.Property<int>("StepFailures")
+                        .HasColumnType("integer")
+                        .HasColumnName("step_failures");
 
                     b.Property<int>("Version")
                         .IsConcurrencyToken()

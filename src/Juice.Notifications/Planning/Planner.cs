@@ -84,6 +84,15 @@ namespace Juice.Notifications.Planning
 
         public string Name => StageName;
 
+        public void GiveUp(StageContext context, Notification row, string error)
+        {
+            row.State = NotificationState.Failed;
+            var message = "Planning failed repeatedly: " + error;
+            row.Error = message.Length > 2000 ? message[..2000] : message; // the column's length
+            row.UpdatedAt = context.Now;
+            context.Done(row, null);
+        }
+
         public async Task ExecuteAsync(StageContext context, Notification row, CancellationToken ct)
         {
             var db = context.Db;

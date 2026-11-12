@@ -3,11 +3,10 @@ using Juice.Notifications.Data.PostgreSQL;
 using Juice.Notifications.Stages;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Juice.Notifications.IntegrationTests
 {
-    /// <summary>A clock tests move by hand, so a lease ends exactly when a test says.</summary>
+    /// <summary>A clock tests move by hand, so a row is due exactly when a test says. (Leases run on the database's clock.)</summary>
     public sealed class ManualClock(DateTimeOffset start) : TimeProvider
     {
         private long _ticks = start.UtcTicks;
@@ -34,18 +33,74 @@ namespace Juice.Notifications.IntegrationTests
             context.Done(row, null);
             return Task.CompletedTask;
         }
+
+        public void GiveUp(StageContext context, Notification row, string error) => context.Done(row, null);
     }
 
-    /// <summary>Faults for named workers: a pause before persisting, or a crash right after claiming.</summary>
+    /// <summary>Writes a child row with a unique key (as the planner writes recipients), then finishes its row.</summary>
+    public sealed class ChildStage : IStage<Notification>
+    {
+        public string Name => "child";
+
+        public Task ExecuteAsync(StageContext context, Notification row, CancellationToken ct)
+        {
+            context.Db.Recipients.Add(Child(row, "child"));
+            row.WorkflowStep++;
+            row.Error = row.ClaimedBy;
+            context.Done(row, null);
+            return Task.CompletedTask;
+        }
+
+        public void GiveUp(StageContext context, Notification row, string error) => context.Done(row, null);
+
+        internal static NotificationRecipient Child(Notification row, string namedAs) => new()
+        {
+            TenantId = row.TenantId, NotificationId = row.Id, Kind = RecipientKind.Route, Resolver = "test", NamedAs = namedAs, Outcome = RecipientOutcome.Planned,
+        };
+    }
+
+    /// <summary>Writes a child row named after the worker and forgets to finish its row: the runner must still fence the write.</summary>
+    public sealed class ForgetfulStage : IStage<Notification>
+    {
+        public string Name => "forgetful";
+
+        public Task ExecuteAsync(StageContext context, Notification row, CancellationToken ct)
+        {
+            context.Db.Recipients.Add(ChildStage.Child(row, row.ClaimedBy!));
+            return Task.CompletedTask;
+        }
+
+        public void GiveUp(StageContext context, Notification row, string error) => context.Done(row, null);
+    }
+
+    /// <summary>Always throws, as a step on a poison row does; gives up by marking the notification failed.</summary>
+    public sealed class FailingStage : IStage<Notification>
+    {
+        public string Name => "failing";
+
+        public Task ExecuteAsync(StageContext context, Notification row, CancellationToken ct) => throw new InvalidOperationException("poison row");
+
+        public void GiveUp(StageContext context, Notification row, string error)
+        {
+            row.State = NotificationState.Failed;
+            row.Error = error;
+            context.Done(row, null);
+        }
+    }
+
+    /// <summary>Faults for named workers: a pause before persisting, or something to do right after a claim.</summary>
     public sealed class ScriptedFaults : IStageFaults
     {
         public string? PauseWorker { get; set; }
         public TaskCompletionSource Paused { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Resume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public string? CrashWorker { get; set; }
+        public Action<string, Claim>? OnClaim { get; set; }
 
         public Task AfterClaimAsync(string stage, string worker, Claim claim, CancellationToken ct)
-            => worker == CrashWorker ? throw new InvalidOperationException("crashed after claiming") : Task.CompletedTask;
+        {
+            OnClaim?.Invoke(worker, claim);
+            return Task.CompletedTask;
+        }
 
         public async Task BeforePersistAsync(string stage, string worker, Claim claim, CancellationToken ct)
         {
@@ -59,12 +114,16 @@ namespace Juice.Notifications.IntegrationTests
 
     /// <summary>
     /// The claim store's concurrency suite (design §11, phase-1-plan M3), on the real PostgreSQL: rows complete exactly once under many workers,
-    /// a stale worker's write affects nothing, and a crashed worker's row is due again after its lease. Phase 4 runs the same suite on SQL Server.
+    /// a stale worker writes nothing (its child rows included), a crashed worker's row is due again after its lease, a poison row is given up,
+    /// and a stopping worker hands back what it didn't start. Phase 4 runs the same suite on SQL Server.
     /// </summary>
     public sealed class ClaimConcurrencyTests : IAsyncLifetime
     {
         private static CancellationToken Ct => TestContext.Current.CancellationToken;
         private static readonly StageOptions Options = new() { Batch = 20, Lease = TimeSpan.FromSeconds(30) };
+        // Leases run on the database's clock, so a test that outlives one waits for real: a short lease keeps that short.
+        private static readonly StageOptions ShortLease = new() { Batch = 20, Lease = TimeSpan.FromSeconds(1) };
+        private static readonly TimeSpan PastShortLease = TimeSpan.FromMilliseconds(1500);
         private readonly ScratchDatabase _database = new();
         private readonly ManualClock _clock = new(new DateTimeOffset(2026, 11, 11, 9, 0, 0, TimeSpan.Zero));
         private readonly ScriptedFaults _faults = new();
@@ -91,6 +150,9 @@ namespace Juice.Notifications.IntegrationTests
             services.AddSingleton<IStageFaults>(_faults);
             services.AddPostgresClaimStore();
             services.AddStage<Notification, MarkStage>(Options, runWorkers: false);
+            services.AddStage<Notification, ChildStage>(Options, runWorkers: false);
+            services.AddStage<Notification, ForgetfulStage>(Options, runWorkers: false);
+            services.AddStage<Notification, FailingStage>(Options, runWorkers: false);
             _services = services.BuildServiceProvider();
         }
 
@@ -103,7 +165,10 @@ namespace Juice.Notifications.IntegrationTests
             await _database.DisposeAsync();
         }
 
-        private StageRunner<Notification, MarkStage> Runner => _services!.GetRequiredService<StageRunner<Notification, MarkStage>>();
+        private StageRunner<Notification, TStage> Runner<TStage>() where TStage : IStage<Notification>
+            => _services!.GetRequiredService<StageRunner<Notification, TStage>>();
+
+        private StageRunner<Notification, MarkStage> Runner() => Runner<MarkStage>();
 
         /// <summary>Due notifications, each with its request.</summary>
         private async Task<List<Guid>> DueAsync(int count)
@@ -128,6 +193,12 @@ namespace Juice.Notifications.IntegrationTests
             return await db.Notifications.AsNoTracking().Where(n => ids.Contains(n.Id)).ToListAsync(Ct);
         }
 
+        private async Task<List<string>> ChildrenAsync(Guid notification)
+        {
+            await using var db = _database.Context();
+            return await db.Recipients.AsNoTracking().Where(r => r.NotificationId == notification).Select(r => r.NamedAs).ToListAsync(Ct);
+        }
+
         [Fact]
         public async Task Eight_workers_complete_each_of_1000_due_rows_exactly_once()
         {
@@ -139,7 +210,7 @@ namespace Juice.Notifications.IntegrationTests
                 var results = new List<PassResult>();
                 while (true)
                 {
-                    var pass = await Runner.RunOnceAsync($"worker-{w}", Options, Ct);
+                    var pass = await Runner().RunOnceAsync($"worker-{w}", Options, Ct);
                     results.Add(pass);
                     if (pass.Claimed == 0)
                     {
@@ -165,11 +236,11 @@ namespace Juice.Notifications.IntegrationTests
             var ids = await DueAsync(1);
             _faults.PauseWorker = "slow";
 
-            var slow = Runner.RunOnceAsync("slow", Options, Ct);
+            var slow = Runner().RunOnceAsync("slow", ShortLease, Ct);
             await _faults.Paused.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
-            Assert.Equal(0, (await Runner.RunOnceAsync("fast", Options, Ct)).Claimed); // the lease still holds
-            _clock.Advance(Options.Lease + TimeSpan.FromSeconds(1));
-            var fast = await Runner.RunOnceAsync("fast", Options, Ct);
+            Assert.Equal(0, (await Runner().RunOnceAsync("fast", ShortLease, Ct)).Claimed); // the lease still holds
+            await Task.Delay(PastShortLease, Ct);
+            var fast = await Runner().RunOnceAsync("fast", ShortLease, Ct);
             _faults.Resume.SetResult();
             var stale = await slow;
 
@@ -179,21 +250,112 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal((1, "fast", (DateTimeOffset?)null), (row.WorkflowStep, row.Error, row.NextAt));
         }
 
+        /// <summary>The stale worker's child row hits the unique key the newer worker's row already took: lease_lost, and one child.</summary>
         [Fact]
-        public async Task A_worker_that_crashes_after_claiming_leaves_its_row_due_again_after_the_lease()
+        public async Task A_stale_worker_that_trips_a_unique_key_loses_its_lease_and_writes_no_child()
+        {
+            LocalStack.RequireAvailable();
+            var ids = await DueAsync(1);
+            _faults.PauseWorker = "slow";
+
+            var slow = Runner<ChildStage>().RunOnceAsync("slow", ShortLease, Ct);
+            await _faults.Paused.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+            await Task.Delay(PastShortLease, Ct);
+            var fast = await Runner<ChildStage>().RunOnceAsync("fast", ShortLease, Ct);
+            _faults.Resume.SetResult();
+            var stale = await slow;
+
+            Assert.Equal(1, fast.Completed);
+            Assert.Equal((0, 1, 0), (stale.Completed, stale.LeaseLost, stale.Failed));
+            Assert.Equal(["child"], await ChildrenAsync(ids[0]));
+            Assert.Equal((1, "fast"), (Assert.Single(await RowsAsync(ids)).WorkflowStep, Assert.Single(await RowsAsync(ids)).Error));
+        }
+
+        /// <summary>A step that writes only other rows and never finishes its own is still fenced: the stale worker's child row isn't written.</summary>
+        [Fact]
+        public async Task A_stale_worker_whose_step_forgets_its_row_still_writes_nothing()
+        {
+            LocalStack.RequireAvailable();
+            var ids = await DueAsync(1);
+            _faults.PauseWorker = "slow";
+
+            var slow = Runner<ForgetfulStage>().RunOnceAsync("slow", ShortLease, Ct);
+            await _faults.Paused.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+            await Task.Delay(PastShortLease, Ct);
+            var fast = await Runner<ForgetfulStage>().RunOnceAsync("fast", ShortLease, Ct);
+            _faults.Resume.SetResult();
+            var stale = await slow;
+
+            Assert.Equal(1, fast.Completed);
+            Assert.Equal(1, stale.LeaseLost);
+            Assert.Equal(["fast"], await ChildrenAsync(ids[0]));
+        }
+
+        /// <summary>The worker dies right after claiming (nothing hands its rows back): they are due again once the lease ends.</summary>
+        [Fact]
+        public async Task Rows_of_a_worker_that_dies_after_claiming_are_due_again_after_the_lease()
         {
             LocalStack.RequireAvailable();
             var ids = await DueAsync(3);
-            _faults.CrashWorker = "doomed";
+            await using (var scope = _services!.CreateAsyncScope())
+            {
+                var claimed = await scope.ServiceProvider.GetRequiredService<IClaimStore>()
+                    .ClaimAsync<Notification>("doomed", 20, ShortLease.Lease, _clock.GetUtcNow(), Ct);
+                Assert.Equal(3, claimed.Count);
+            }
 
-            var crashed = await Runner.RunOnceAsync("doomed", Options, Ct);
-            Assert.Equal((3, 3), (crashed.Claimed, crashed.Failed));
-            Assert.Equal(0, (await Runner.RunOnceAsync("rescuer", Options, Ct)).Claimed); // still leased
-            _clock.Advance(Options.Lease + TimeSpan.FromSeconds(1));
-            var rescued = await Runner.RunOnceAsync("rescuer", Options, Ct);
+            Assert.Equal(0, (await Runner().RunOnceAsync("rescuer", ShortLease, Ct)).Claimed); // still leased
+            await Task.Delay(PastShortLease, Ct);
+            var rescued = await Runner().RunOnceAsync("rescuer", ShortLease, Ct);
 
             Assert.Equal((3, 3), (rescued.Claimed, rescued.Completed));
             Assert.All(await RowsAsync(ids), r => Assert.Equal((1, "rescuer"), (r.WorkflowStep, r.Error)));
+        }
+
+        /// <summary>A step that always throws backs off (counted, not due at once) and is given up at the limit, visible as failed.</summary>
+        [Fact]
+        public async Task A_poison_row_backs_off_and_is_given_up_at_the_limit()
+        {
+            LocalStack.RequireAvailable();
+            var ids = await DueAsync(1);
+            var options = new StageOptions { Batch = 20, Lease = TimeSpan.FromSeconds(30), MaxStepFailures = 3, FailureBackoff = TimeSpan.FromSeconds(10) };
+            var runner = Runner<FailingStage>();
+
+            Assert.Equal(1, (await runner.RunOnceAsync("w", options, Ct)).Failed);
+            Assert.Equal(0, (await runner.RunOnceAsync("w", options, Ct)).Claimed); // backing off, not due at once
+            var row = Assert.Single(await RowsAsync(ids));
+            Assert.Equal((1, (string?)null, (DateTimeOffset?)_clock.GetUtcNow().AddSeconds(10)), (row.StepFailures, row.ClaimedBy, row.NextAt));
+
+            _clock.Advance(TimeSpan.FromSeconds(10));
+            Assert.Equal(1, (await runner.RunOnceAsync("w", options, Ct)).Failed);
+            Assert.Equal(0, (await runner.RunOnceAsync("w", options, Ct)).Claimed);
+            _clock.Advance(TimeSpan.FromSeconds(20)); // the backoff doubled
+            Assert.Equal(1, (await runner.RunOnceAsync("w", options, Ct)).Failed);
+
+            row = Assert.Single(await RowsAsync(ids));
+            Assert.Equal((NotificationState.Failed, (DateTimeOffset?)null, (string?)null), (row.State, row.NextAt, row.ClaimedBy));
+            Assert.Equal("poison row", row.Error);
+            _clock.Advance(TimeSpan.FromHours(1));
+            Assert.Equal(0, (await runner.RunOnceAsync("w", options, Ct)).Claimed);
+        }
+
+        /// <summary>A worker stopped after its first step hands the rest of its batch back at once instead of holding them for a lease.</summary>
+        [Fact]
+        public async Task A_stopping_worker_hands_back_the_rows_it_did_not_start()
+        {
+            LocalStack.RequireAvailable();
+            var ids = await DueAsync(3);
+            using var stop = new CancellationTokenSource();
+            _faults.OnClaim = (worker, _) => stop.Cancel();
+
+            var pass = await Runner().RunOnceAsync("stopping", Options, stop.Token);
+            _faults.OnClaim = null;
+
+            Assert.Equal(3, pass.Claimed);
+            var rows = await RowsAsync(ids);
+            // The step that was running keeps its lease; the two never started are free for another worker now.
+            Assert.Equal(2, rows.Count(r => r.ClaimedBy is null && r.LeaseUntil is null));
+            Assert.Equal(2, (await Runner().RunOnceAsync("other", Options, Ct)).Completed);
         }
 
         [Fact]
@@ -208,9 +370,9 @@ namespace Juice.Notifications.IntegrationTests
                 await db.SaveChangesAsync(Ct);
             }
 
-            Assert.Equal(1, (await Runner.RunOnceAsync("w", Options, Ct)).Completed);
+            Assert.Equal(1, (await Runner().RunOnceAsync("w", Options, Ct)).Completed);
             _clock.Advance(TimeSpan.FromMinutes(5));
-            Assert.Equal(1, (await Runner.RunOnceAsync("w", Options, Ct)).Completed);
+            Assert.Equal(1, (await Runner().RunOnceAsync("w", Options, Ct)).Completed);
             Assert.All(await RowsAsync(ids), r => Assert.Equal(1, r.WorkflowStep));
         }
     }

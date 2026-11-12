@@ -20,6 +20,8 @@ namespace Juice.Notifications.Data
         public string? ClaimedBy { get; set; }
         public DateTimeOffset? LeaseUntil { get; set; }
         public DateTimeOffset? NextAt { get; set; }
+        /// <summary>Steps on this row that threw in a row; the runner backs off on each and gives the row up at the stage's limit.</summary>
+        public int StepFailures { get; set; }
     }
 
     /// <summary>A registered producer, platform-wide. It owns the types under <c>{Key}.*</c> and sends for the tenants it's linked to.</summary>
@@ -273,6 +275,8 @@ namespace Juice.Notifications.Data
         public FailureCategory? Category { get; init; }
         public int? StatusCode { get; init; }
         public string? Error { get; init; }
+        /// <summary>The provider's id for the message, so an attempt applied later (its step's save was lost) still carries it.</summary>
+        public string? ProviderMessageId { get; init; }
         public int DurationMs { get; init; }
     }
 }

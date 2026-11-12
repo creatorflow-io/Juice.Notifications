@@ -49,5 +49,42 @@ namespace Juice.Notifications.Tests
             Assert.Null(DbConflicts.Classify(new DbUpdateException("down")));
             Assert.Null(DbConflicts.Classify(new TimeoutException()));
         }
+
+        /// <summary>A broken or unreachable connection says nothing about the work; a stage doesn't count it against the row.</summary>
+        [Fact]
+        public void A_broken_connection_is_a_connection_failure()
+        {
+            Assert.True(DbConflicts.IsConnectionFailure(new NpgsqlException("Exception while writing to stream", new IOException("reset"))));
+            Assert.True(DbConflicts.IsConnectionFailure(new DbUpdateException("save failed", new NpgsqlException("Failed to connect to 127.0.0.1:5432", new System.Net.Sockets.SocketException()))));
+            // Opening timed out, or no connection was free in the pool: a timeout, but not the work's.
+            Assert.True(DbConflicts.IsConnectionFailure(new NpgsqlException("Failed to connect to 127.0.0.1:5432", new TimeoutException())));
+            Assert.True(DbConflicts.IsConnectionFailure(new NpgsqlException("The connection pool has been exhausted, either raise 'Max Pool Size'", new TimeoutException())));
+            // The server is going away or full.
+            Assert.True(DbConflicts.IsConnectionFailure(Pg(PostgresErrorCodes.AdminShutdown)));
+            Assert.True(DbConflicts.IsConnectionFailure(Pg(PostgresErrorCodes.TooManyConnections)));
+            Assert.True(DbConflicts.IsConnectionFailure(Pg(PostgresErrorCodes.ConnectionFailure)));
+        }
+
+        /// <summary>An I/O error from the work itself (a secret file, an HTTP call) counts against the row.</summary>
+        [Fact]
+        public void An_io_error_outside_the_database_is_not_a_connection_failure()
+        {
+            Assert.False(DbConflicts.IsConnectionFailure(new IOException("the secret file is locked")));
+            Assert.False(DbConflicts.IsConnectionFailure(new HttpRequestException("refused", new System.Net.Sockets.SocketException())));
+        }
+
+        /// <summary>
+        /// Npgsql calls a deadlock, a serialization failure and a command timeout transient, but each is the work's own: a row that keeps
+        /// deadlocking or timing out must count toward being given up, not retry forever.
+        /// </summary>
+        [Fact]
+        public void A_server_answer_or_a_timeout_is_not_a_connection_failure()
+        {
+            Assert.True(Pg(PostgresErrorCodes.DeadlockDetected).IsTransient); // what the stage must not go by
+            Assert.False(DbConflicts.IsConnectionFailure(new DbUpdateException("save failed", Pg(PostgresErrorCodes.DeadlockDetected))));
+            Assert.False(DbConflicts.IsConnectionFailure(Pg(PostgresErrorCodes.SerializationFailure)));
+            Assert.False(DbConflicts.IsConnectionFailure(new NpgsqlException("Exception while reading from stream", new TimeoutException())));
+            Assert.False(DbConflicts.IsConnectionFailure(new InvalidOperationException("a row that won't load")));
+        }
     }
 }

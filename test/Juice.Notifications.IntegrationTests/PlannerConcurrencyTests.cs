@@ -112,23 +112,30 @@ namespace Juice.Notifications.IntegrationTests
             await AssertOneSetEachAsync(racing);
 
             // A worker paused past its lease, after it resolved: another plans the row, and the paused worker's set is discarded.
+            // Leases run on the database's clock: a short lease, and a real wait past it.
+            var shortLease = new StageOptions { Batch = 10, Lease = TimeSpan.FromSeconds(1) };
+            var pastLease = TimeSpan.FromMilliseconds(1500);
             var paused = await PlanningAsync(1);
             _faults.PauseWorker = "slow";
-            var slow = Runner.RunOnceAsync("slow", Options, Ct);
+            var slow = Runner.RunOnceAsync("slow", shortLease, Ct);
             await _faults.Paused.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
-            _clock.Advance(Options.Lease + TimeSpan.FromSeconds(1));
-            Assert.Equal(1, (await Runner.RunOnceAsync("fast", Options, Ct)).Completed);
+            await Task.Delay(pastLease, Ct);
+            Assert.Equal(1, (await Runner.RunOnceAsync("fast", shortLease, Ct)).Completed);
             _faults.Resume.SetResult();
             Assert.Equal(1, (await slow).LeaseLost);
             await AssertOneSetEachAsync(paused);
 
-            // A worker that crashed after claiming: planned once its lease ends.
+            // A worker that died right after claiming (nothing hands its rows back): planned once its lease ends.
             var crashed = await PlanningAsync(2);
             _faults.PauseWorker = null;
-            _faults.CrashWorker = "doomed";
-            Assert.Equal(2, (await Runner.RunOnceAsync("doomed", Options, Ct)).Failed);
-            _clock.Advance(Options.Lease + TimeSpan.FromSeconds(1));
-            Assert.Equal(2, (await Runner.RunOnceAsync("rescuer", Options, Ct)).Completed);
+            await using (var scope = _services!.CreateAsyncScope())
+            {
+                Assert.Equal(2, (await scope.ServiceProvider.GetRequiredService<IClaimStore>()
+                    .ClaimAsync<Notification>("doomed", 10, shortLease.Lease, _clock.GetUtcNow(), Ct)).Count);
+            }
+            Assert.Equal(0, (await Runner.RunOnceAsync("rescuer", shortLease, Ct)).Claimed);
+            await Task.Delay(pastLease, Ct);
+            Assert.Equal(2, (await Runner.RunOnceAsync("rescuer", shortLease, Ct)).Completed);
             await AssertOneSetEachAsync(crashed);
         }
 

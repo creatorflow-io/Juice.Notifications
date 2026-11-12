@@ -121,7 +121,8 @@ namespace Juice.Notifications.IntegrationTests
                 },
                 "delivery item → another tenant's recipient" => Seed.Item(tenantB, b.Delivery, a.Recipient),
                 "attempt → another tenant's delivery" => Seed.Attempt(tenantB, a.Delivery, b.Integration),
-                "attempt → another tenant's integration" => Seed.Attempt(tenantB, b.Delivery, a.Integration),
+                // Number 2: the chain's delivery already has attempt 1, and attempt numbers are unique per delivery.
+                "attempt → another tenant's integration" => Seed.Attempt(tenantB, b.Delivery, a.Integration, number: 2),
                 _ => throw new ArgumentOutOfRangeException(nameof(reference)),
             };
             await using var db = fixture.Database.Context();
