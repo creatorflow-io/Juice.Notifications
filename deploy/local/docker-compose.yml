@@ -4,6 +4,7 @@
 #   RabbitMQ     localhost:5673    management UI http://localhost:15673 (from M2: NotificationRequested intake)
 #   Keycloak     http://localhost:8081   realm "juice" (admin console: admin / KEYCLOAK_ADMIN_PASSWORD)
 #   Mailpit      SMTP localhost:1026, UI http://localhost:8026 (from M6: the SMTP provider's test sink)
+#   app          http://localhost:5280 with --profile app (the service from the Dockerfile; otherwise scripts/run-app.sh)
 #
 # Ports avoid the Juice.Observability stack's, so both can run at once. Images are pinned; change versions here and in README.md together.
 name: juice-notifications
@@ -46,6 +47,8 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run scripts/init.sh}
       KC_HOSTNAME: http://localhost:8081
+      # Tokens name localhost:8081 as issuer; a container (the app profile) reads metadata and keys from keycloak:8080.
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       NOTIFICATIONS_ADMIN_CLIENT_SECRET: ${NOTIFICATIONS_ADMIN_CLIENT_SECRET}
       SAMPLE_PRODUCER_CLIENT_SECRET: ${SAMPLE_PRODUCER_CLIENT_SECRET}
       TENANT_ADMIN_CLIENT_SECRET: ${TENANT_ADMIN_CLIENT_SECRET}
@@ -64,6 +67,30 @@ services:
     ports:
       - "127.0.0.1:1026:1025"
       - "127.0.0.1:8026:8025"
+
+  # The service itself, from the repository's Dockerfile: `docker compose --profile app up -d --build --wait`. Off by default, so tests and
+  # scripts/run-app.sh (the same port) keep working without it.
+  app:
+    profiles: ["app"]
+    build:
+      context: ../..
+    environment:
+      ConnectionStrings__Notifications: "Host=postgres;Port=5432;Database=notifications;Username=notifications;Password=${POSTGRES_PASSWORD}"
+      Database__Migrate: "true"
+      Auth__Authority: http://localhost:8081/realms/juice
+      Auth__MetadataAddress: http://keycloak:8080/realms/juice/.well-known/openid-configuration
+      Auth__RequireHttpsMetadata: "false"
+      Delivery__AllowHttpToAllowlisted: "true"
+      Delivery__SmtpServers__local__Host: mailpit
+      Delivery__SmtpServers__local__Port: "1025"
+      Delivery__SmtpServers__local__Security: None
+      NOTIFICATIONS_SECRET_SAMPLE_HOOK: ${SAMPLE_WEBHOOK_SECRET:-}
+    ports:
+      - "127.0.0.1:5280:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+      mailpit: { condition: service_started }
 
 volumes:
   postgres-data:

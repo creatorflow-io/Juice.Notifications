@@ -23,6 +23,12 @@ namespace Juice.Notifications.Api
         public bool RequireHttpsMetadata { get; set; } = true;
 
         /// <summary>
+        /// Where to read the identity provider's metadata when the service reaches it by another address than the token's issuer (a container
+        /// calling <c>keycloak:8080</c> while tokens name <c>localhost:8081</c>). The issuer is still <see cref="Authority"/>.
+        /// </summary>
+        public string? MetadataAddress { get; set; }
+
+        /// <summary>
         /// How a producer token shows it was issued to a client acting as itself (client credentials), not to a person signing in through that
         /// client. <see cref="ProducerProofs.ClientIdClaim"/> (default): the token's <c>client_id</c> equals <c>azp</c>, and the identity
         /// provider puts <c>client_id</c> on client-credentials tokens only (Keycloak: a user-session-note mapper, deploy/local).
@@ -97,6 +103,8 @@ namespace Juice.Notifications.Api
             var dispatcher = new Stages.StageOptions { Lease = TimeSpan.FromSeconds(60) };
             configuration.GetSection("Stages:Dispatcher").Bind(dispatcher); // settings override the defaults one by one
             services.AddDispatching(dispatcher, runStages);
+            services.AddSingleton<Stages.BacklogMonitor>();
+            services.AddHostedService(sp => sp.GetRequiredService<Stages.BacklogMonitor>());
             services.ConfigureHttpJsonOptions(options =>
                 options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
@@ -167,6 +175,11 @@ namespace Juice.Notifications.Api
                     options.Authority = auth.Authority;
                     options.Audience = auth.Audience;
                     options.RequireHttpsMetadata = auth.RequireHttpsMetadata;
+                    if (!string.IsNullOrWhiteSpace(auth.MetadataAddress))
+                    {
+                        options.MetadataAddress = auth.MetadataAddress;
+                        options.TokenValidationParameters.ValidIssuer = auth.Authority;
+                    }
                     options.MapInboundClaims = false;
                     options.TokenValidationParameters.NameClaimType = "preferred_username";
                     options.TokenValidationParameters.RoleClaimType = "roles";

@@ -35,6 +35,9 @@ namespace Juice.Notifications.IntegrationTests
             _factory.CreateClient().Dispose();
         }
 
+        /// <summary>The host's services.</summary>
+        public IServiceProvider Services => _factory!.Services;
+
         /// <summary>A client with no token, or with the given one.</summary>
         public HttpClient Client(string? token = null)
         {

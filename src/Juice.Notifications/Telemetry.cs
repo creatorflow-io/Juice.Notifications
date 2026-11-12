@@ -27,6 +27,19 @@ namespace Juice.Notifications
         public static readonly Histogram<double> ProviderLatency = Meter.CreateHistogram<double>("notifications.provider_latency", unit: "ms",
             description: "One provider call, by channel and outcome.");
 
+        private static Func<IEnumerable<Measurement<long>>> _backlog = () => [];
+        private static int _backlogRegistered;
+
+        /// <summary>The gauge reads whatever the latest registered source counted (the host's <c>BacklogMonitor</c>).</summary>
+        public static void RegisterBacklog(Func<IEnumerable<Measurement<long>>> source)
+        {
+            _backlog = source;
+            if (Interlocked.Exchange(ref _backlogRegistered, 1) == 0)
+            {
+                Meter.CreateObservableGauge("notifications.due_backlog", () => _backlog(), description: "Rows due now and not leased, by stage.");
+            }
+        }
+
         /// <summary>
         /// An activity for one stage step on a request, continuing the producer's trace (its <c>traceparent</c>, kept on the request) so a trace runs
         /// from the producer through every stage to the provider call. A linked new trace when the request carried none.

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- A producer against the local stack (phase-1-plan M8): declares a type, sends to Mailpit and to a signed webhook it receives itself. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Juice.Notifications.Api.Contracts\Juice.Notifications.Api.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

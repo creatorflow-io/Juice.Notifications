@@ -50,7 +50,12 @@ namespace Juice.Notifications.Delivering
             // The runner logged the error; the outcome answers "why didn't I get it?".
             row.Outcome = RecipientOutcome.Failed;
             context.Done(row, null);
+            Counted(row);
         }
+
+        /// <summary>A recipient's outcome once delivery planning is through with it (Planned: it has deliveries).</summary>
+        private static void Counted(NotificationRecipient row)
+            => Telemetry.Recipients.Add(1, new KeyValuePair<string, object?>("outcome", row.Outcome.ToString()));
 
         public async Task ExecuteAsync(StageContext context, NotificationRecipient row, CancellationToken ct)
         {
@@ -66,6 +71,7 @@ namespace Juice.Notifications.Delivering
             {
                 row.Outcome = RecipientOutcome.Cancelled;
                 context.Done(row, null);
+                Counted(row);
                 return;
             }
             var type = await db.Types.AsNoTracking().SingleAsync(t => t.Id == request.TypeId, ct);
@@ -123,6 +129,7 @@ namespace Juice.Notifications.Delivering
                 row.Outcome = RecipientOutcome.Failed;
             }
             context.Done(row, null);
+            Counted(row);
             if (created > 0)
             {
                 context.Wakes.Add(DeliveryStageNames.Dispatcher);

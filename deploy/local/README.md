@@ -20,6 +20,29 @@ docker compose up -d --wait
 scripts/run-app.sh                    # the service on http://localhost:5280, migrating the database first
 ```
 
+Or run the service as its container image instead of `run-app.sh` (same port; stop it before running `run-app.sh`):
+
+```bash
+docker compose --profile app up -d --build --wait
+docker compose --profile app stop app
+```
+
+The container reads Keycloak's metadata from `keycloak:8080` (`Auth:MetadataAddress`) while tokens name `localhost:8081` as issuer, which
+Keycloak's `KC_HOSTNAME_BACKCHANNEL_DYNAMIC` allows.
+
+## Samples
+
+With the service running, from `services/notifications`:
+
+```bash
+deploy/local/scripts/demo.sh                                  # curl: register, configure email, declare, send
+dotnet run --project samples/Juice.Notifications.Samples.Producer
+```
+
+The sample producer also receives a signed webhook on this machine's private address and verifies it, as a receiver would. The service signs
+with `SAMPLE_WEBHOOK_SECRET` from `.env` (passed to it as `NOTIFICATIONS_SECRET_SAMPLE_HOOK` by `run-app.sh` and the `app` service). It
+exits non-zero when a delivery doesn't arrive.
+
 ## Clients in realm `juice`
 
 | Client | Grant | Roles | Use |

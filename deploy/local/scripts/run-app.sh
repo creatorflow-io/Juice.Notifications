@@ -10,5 +10,7 @@ export Auth__Authority=http://localhost:8081/realms/juice
 export Auth__RequireHttpsMetadata=false
 export ASPNETCORE_URLS=http://localhost:5280
 export ASPNETCORE_ENVIRONMENT=Development
+# The signing secret the sample producer's webhook integration names (env:NOTIFICATIONS_SECRET_SAMPLE_HOOK).
+export NOTIFICATIONS_SECRET_SAMPLE_HOOK="${SAMPLE_WEBHOOK_SECRET:-}"
 
 exec dotnet run --project "$here/../../src/Juice.Notifications.App" --no-launch-profile

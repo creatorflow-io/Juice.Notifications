@@ -56,5 +56,16 @@ namespace Juice.Notifications.IntegrationTests
             Assert.NotNull(carried);
             Assert.Equal(trace.ToString(), carried.Split('-')[1]);
         }
+
+        /// <summary>The due backlog is counted per stage from the database, for the gauge to report without waiting on it.</summary>
+        [Fact]
+        public async Task The_due_backlog_is_counted_for_each_stage()
+        {
+            LocalStack.RequireAvailable();
+            var monitor = (Stages.BacklogMonitor)producer.App.Services.GetService(typeof(Stages.BacklogMonitor))!;
+            await monitor.CountAsync(Ct);
+            Assert.Equal(["planner", "delivery-planner", "dispatcher"], monitor.Latest.Select(m => (string)m.Tags[0].Value!));
+            Assert.All(monitor.Latest, m => Assert.True(m.Value >= 0));
+        }
     }
 }

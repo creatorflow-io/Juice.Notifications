@@ -20,7 +20,7 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | M5 | Rendering and delivery planning | p1-10, p1-11 | clean | Commit fbb4684. Round 2: 6 bugs fixed. Confirmation: 2 fixed (renders on a 128 MB stack of their own, depth limit 250; invariant culture). Re-confirmation: no crash or wrong-outcome bugs; 2 low ones fixed (a slow-unwinding template error taken for a timeout; thread start failure taken for a template failure). Deferred #10, #12. |
 | M6 | Providers | p1-12, p1-13 | none | Webhook and SMTP providers exist from the phase 1 core commit; not yet reviewed. |
 | M7 | Dispatcher | p1-14 | none | Dispatcher exists from the phase 1 core commit; not yet reviewed. |
-| M8 | History, dead letters, operations, host | p1-15, p1-16, p1-17 | none | History API and retry built; metrics/traces, Dockerfile and samples to do. |
+| M8 | History, dead letters, operations, host | p1-15, p1-16, p1-17 | none | All items built (commit f73ee0a and the next); review next. |
 | M9 | Proof points and acceptance | p1-g1 … p1-g6 | none | Not started. |
 
 ## Items (collection `tasks`, phase `p1`)
@@ -43,7 +43,7 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | p1-14 | task | Dispatcher: outcomes, backoff, unknown-outcome policy | M7 | done | Not reviewed. |
 | p1-15 | task | Delivery history API | M8 | done | List (status, channel, integration, type, request, time; cursor paging) and detail with items and attempts. Not reviewed. |
 | p1-16 | task | Dead-letter retry of one delivery | M8 | done | Same id, attempts kept, fresh budget (migration DeliveryReplays). Audit record waits on the audit work (p1-09). Not reviewed. |
-| p1-17 | task | Metrics, traces, health; App host, Dockerfile, samples | M8 | doing | Done: health, App host, Dockerfile, `Juice.Notifications` meter (requests, deliveries, attempts, unknown outcomes, lease_lost, dispatch_delay, provider_latency), traces from the producer to the provider call, OTLP export in the App. To do: recipients and due_backlog metrics, compose wiring, samples. |
+| p1-17 | task | Metrics, traces, health; App host, Dockerfile, samples | M8 | done | Meter (all §14 metrics but failovers and escalations, which are phase 4), traces producer → provider, OTLP export, Dockerfile, compose `app` profile, `samples/` producer (email + verified signed webhook). Not reviewed. |
 | p1-g1 | gate | Proof 1: accepted request survives a crash after 202 | M9 | todo | |
 | p1-g2 | gate | Proof 2: duplicate request creates no new work | M9 | todo | Test exists from M2. |
 | p1-g3 | gate | Proof 3: planning safe under retries and concurrency | M9 | todo | Test exists from M4. |
@@ -57,6 +57,7 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
+| 2026-11-12 | p1-17 → done (recipients and due_backlog metrics, compose app profile, samples producer). M8 part 1 is commit f73ee0a. |
 | 2026-11-12 | M5 committed (fbb4684); M8 work committed after it. |
 | 2026-11-12 | M5 review → clean (re-confirmation fixes in); p1-10, p1-11 notes → review clean. |
 | 2026-11-12 | M5 confirmation: 2 bugs fixed; deferred #12 added; re-confirmation running. |

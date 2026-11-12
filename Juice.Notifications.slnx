@@ -8,6 +8,9 @@
     <Project Path="src/Juice.Notifications.Api/Juice.Notifications.Api.csproj" />
     <Project Path="src/Juice.Notifications.App/Juice.Notifications.App.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Juice.Notifications.Samples.Producer/Juice.Notifications.Samples.Producer.csproj" />
+  </Folder>
   <Folder Name="/test/">
     <Project Path="test/Juice.Notifications.Tests/Juice.Notifications.Tests.csproj" />
     <Project Path="test/Juice.Notifications.IntegrationTests/Juice.Notifications.IntegrationTests.csproj" />
