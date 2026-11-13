@@ -22,7 +22,7 @@ jobs:
         run: dotnet restore Juice.Notifications.slnx
         env:
           GITHUB_PACKAGE_USERNAME: ${{ github.actor }}
-          GITHUB_PACKAGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_PACKAGE_TOKEN: ${{ secrets.GIT_HUB_PAT }} # the org token every Juice repo reads the GitHub feed with; GITHUB_TOKEN gets 403
       - name: Build
         run: dotnet build Juice.Notifications.slnx --no-restore -c Release
       - name: Test
