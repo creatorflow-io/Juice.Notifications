@@ -652,7 +652,9 @@ Workers always pass `TenantId` explicitly. Ids are UUIDv7.
 | `interactions` | `DeliveryId`, `CorrelationId`, `Kind`, `ActionId`, `By`, `At` |
 | `inbox_items` | `SubscriberId`, `DeliveryId`, `DisplayGroupKey` (resolved at delivery; re-mapped if the tenant moves the type), `Actionable`, `CorrelationId`, `ReadAt`, `ArchivedAt` |
 
-Audit records go to `services/audit` through its messaging integration.
+Audit records go to `services/audit` through Juice.Audit's gRPC client (`UseAudit()` and the data changes of the configuration rows,
+saved once their transaction commits). Owner decision 13 Nov 2026: Juice.Audit has no messaging transport for records (its messaging package
+audits event consumers), so the gRPC client, not a new one.
 
 ---
 

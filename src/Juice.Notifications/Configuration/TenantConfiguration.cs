@@ -23,23 +23,39 @@ namespace Juice.Notifications.Configuration
 
     public sealed record AllowlistView(string Destination, IReadOnlyList<int> Ports, string ManagedBy, DateTimeOffset UpdatedAt);
 
+    // The Put commands come from the API, where a field left out keeps its stored value, or from configuration provisioning (Provisioned, set only
+    // inside this assembly), where the file states the whole definition, may change a row the file owns and takes over one the API made. A Put that
+    // changes nothing leaves the row as it was: no new UpdatedAt, no audit record.
+
     /// <summary>Creates or replaces an integration. Its channel is fixed once created.</summary>
     public sealed record PutIntegration(Guid NotificationTenantId, string Key, string? Channel, string? Kind, JsonElement? Settings, string? SecretRef,
-        int? Priority, bool? Enabled) : MessageBase, IRequest<Outcome<IntegrationView>>;
+        int? Priority, bool? Enabled) : MessageBase, IRequest<Outcome<IntegrationView>>
+    {
+        internal bool Provisioned { get; init; }
+    }
 
     public sealed record DeleteIntegration(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>;
 
     public sealed record PutTarget(Guid NotificationTenantId, string IntegrationKey, string Key, string? Address, string? AddressRef, bool? Enabled)
-        : MessageBase, IRequest<Outcome<TargetView>>;
+        : MessageBase, IRequest<Outcome<TargetView>>
+    {
+        internal bool Provisioned { get; init; }
+    }
 
     public sealed record DeleteTarget(Guid NotificationTenantId, string IntegrationKey, string Key) : MessageBase, IRequest<Outcome<bool>>;
 
     public sealed record PutRoute(Guid NotificationTenantId, string Key, JsonElement? Match, IReadOnlyList<string>? Targets, bool? Enabled)
-        : MessageBase, IRequest<Outcome<RouteView>>;
+        : MessageBase, IRequest<Outcome<RouteView>>
+    {
+        internal bool Provisioned { get; init; }
+    }
 
     public sealed record DeleteRoute(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>;
 
-    public sealed record PutAllowlistEntry(Guid NotificationTenantId, string Destination, IReadOnlyList<int>? Ports) : MessageBase, IRequest<Outcome<AllowlistView>>;
+    public sealed record PutAllowlistEntry(Guid NotificationTenantId, string Destination, IReadOnlyList<int>? Ports) : MessageBase, IRequest<Outcome<AllowlistView>>
+    {
+        internal bool Provisioned { get; init; }
+    }
 
     public sealed record DeleteAllowlistEntry(Guid NotificationTenantId, string Destination) : MessageBase, IRequest<Outcome<bool>>;
 
@@ -54,6 +70,25 @@ namespace Juice.Notifications.Configuration
         /// </summary>
         public static bool IsSecretRef(string? value, Providers.DeliveryOptions options)
             => value is null || value.Length <= 500 && !value.Contains('\0') && Providers.SecretReferences.IsAllowedFromApi(value, options);
+
+        /// <summary>A secret named in the deployment's own configuration: any environment variable or file, as the deployment chooses.</summary>
+        public static bool IsProvisionedSecretRef(string? value)
+            => value is null || value.Length <= 500 && !value.Contains('\0') && Providers.SecretReferences.IsValid(value);
+
+        internal static bool IsSecretRef(string? value, Providers.DeliveryOptions options, bool provisioned)
+            => provisioned ? IsProvisionedSecretRef(value) : IsSecretRef(value, options);
+
+        // Secrets the API may not name (the deployment's own, on rows its configuration made or handed back, or saved under wider limits) are used
+        // only for what the deployment configures: through the API an API-managed row is saved or enabled only when every secret it would use is
+        // one the API may name, the integration's signing secret included for a target. A Put that only disables such a row (everything else
+        // left out or sent back as stored) always passes: stopping sends can't wait. Rows the configuration manages change only through it.
+
+        /// <summary>The field to refuse when a Put through the API would use a secret the API may not name; null when every one is in reach.</summary>
+        internal static FieldError? SecretOutOfReach(Providers.DeliveryOptions options, string pointer, string? reference, string what, string remedy)
+            => IsSecretRef(reference, options) ? null : new FieldError(pointer, $"{what} is one only the deployment may name: {remedy}");
+
+        internal static string SecretRefRule(string what, Providers.DeliveryOptions options, bool provisioned)
+            => provisioned ? $"{what} is named: env:NAME or file:/path." : $"{what} is named, never sent: env:{options.ApiSecretEnvPrefix}NAME, or file: in the deployment's secret folder.";
 
         /// <summary>
         /// A host name, an IP address, or a network in CIDR form, in the form the send-time destination policy reads: a network is parsed the
@@ -104,8 +139,31 @@ namespace Juice.Notifications.Configuration
         /// <summary>A hash of a definition, over JSON in its canonical form: the same content always hashes alike, however it was stored.</summary>
         internal static string Hash(params string?[] parts) => CanonicalJson.Sha256(string.Join("|", parts));
 
-        /// <summary>Stored JSON (jsonb has its own spacing and key order) written canonically, for hashing.</summary>
-        internal static string Canonical(string json) => CanonicalJson.Write(JsonElement.Parse(json));
+        /// <summary>
+        /// Stored JSON (jsonb has its own spacing, key order and number forms) written canonically, numbers included, for hashing: a row hashes
+        /// alike before and after a round trip through the database (deferred #9).
+        /// </summary>
+        internal static string Canonical(string json) => CanonicalJson.WriteNormalized(JsonElement.Parse(json));
+
+        // A definition's hash covers every field a Put can set. A Put compares the hash of what it would store with the stored one before it
+        // assigns anything: equal (with the same owner) means nothing changes, so nothing is written or audited. The JSON may read differently from
+        // what was sent (jsonb's form), so the comparison is of what it means: the hash.
+        // A Put that changes nothing isn't fenced: if another admin changes or deletes the row after it was read, the no-op still answers 200 with
+        // what it read. That is a correct order of events (the no-op, then the other change), and fencing it would mean writing the row, which
+        // would record an empty change. A Put that does change the row is fenced by the hash, as before.
+
+        internal static string IntegrationHash(string channel, string kind, string settings, string? secretRef, int priority, bool enabled)
+            => Hash(channel, kind, Canonical(settings), secretRef, priority.ToString(System.Globalization.CultureInfo.InvariantCulture), enabled.ToString());
+
+        internal static string IntegrationHash(Integration i) => IntegrationHash(i.Channel, i.Kind, i.Settings, i.SecretRef, i.Priority, i.Enabled);
+
+        internal static string TargetHash(string? address, string? addressRef, bool enabled) => Hash(address, addressRef, enabled.ToString());
+
+        internal static string TargetHash(IntegrationTarget t) => TargetHash(t.Address, t.AddressRef, t.Enabled);
+
+        internal static string RouteHash(string match, IEnumerable<string> targets, bool enabled) => Hash(Canonical(match), string.Join(",", targets), enabled.ToString());
+
+        internal static string RouteHash(Route r) => RouteHash(r.Match, r.Targets, r.Enabled);
 
         /// <summary>A target's address, normalized for its channel, or null when it isn't one (or doesn't fit the column once normalized).</summary>
         public static string? Address(string channel, string address) => channel switch
@@ -116,9 +174,51 @@ namespace Juice.Notifications.Configuration
             _ => null,
         };
 
-        /// <summary>The routes of a tenant that name any of <paramref name="targets"/>.</summary>
-        internal static Task<List<string>> RoutesNamingAsync(NotificationsDbContext db, Guid tenantId, IReadOnlyCollection<string> targets, CancellationToken ct)
-            => db.Routes.Where(r => r.TenantId == tenantId && r.Targets.Any(t => targets.Contains(t))).OrderBy(r => r.Key).Select(r => r.Key).ToListAsync(ct);
+        /// <summary>
+        /// The routes of a tenant that name any of the targets <paramref name="targetKeys"/>.
+        /// </summary>
+        /// <remarks>
+        /// What a route names is its <c>routes.targets</c>: every replica keeps that, including one from before <c>route_targets</c> during a
+        /// rolling deploy, which saves routes without their rows (or leaves a row for a target it took out). <c>route_targets</c> is the database's
+        /// guard against the race between such a check and a route starting to name the target; <see cref="ReleaseStaleRowsAsync"/> clears rows
+        /// no route names any more before a delete.
+        /// </remarks>
+        internal static Task<List<string>> RoutesNamingAsync(NotificationsDbContext db, Guid tenantId, IReadOnlyCollection<string> targetKeys, CancellationToken ct)
+            => db.Routes.Where(r => r.TenantId == tenantId && r.Targets.Any(t => targetKeys.Contains(t))).OrderBy(r => r.Key).Select(r => r.Key).ToListAsync(ct);
+
+        /// <summary>
+        /// Before targets no route names are deleted: removes their <c>route_targets</c> rows whose route no longer names the target, left by a
+        /// replica that changed a route's targets without them. The routes it reads are locked (<c>FOR SHARE</c>): a Put naming the target again
+        /// at the same moment holds its route's row, so this waits for it and reads the targets it committed; that row is then kept, and stops
+        /// the delete through its foreign key, as it should. Rows already gone are no conflict.
+        /// </summary>
+        internal static Task<int> ReleaseStaleRowsAsync(NotificationsDbContext db, Guid tenantId, Guid[] targetIds, CancellationToken ct)
+            => targetIds.Length == 0 ? Task.FromResult(0) : db.Database.ExecuteSqlAsync($"""
+                WITH consulted AS (
+                    SELECT r.id, r.targets FROM notifications.routes r
+                    WHERE r.tenant_id = {tenantId}
+                      AND r.id IN (SELECT route_id FROM notifications.route_targets WHERE tenant_id = {tenantId} AND target_id = ANY({targetIds}))
+                    FOR SHARE)
+                DELETE FROM notifications.route_targets rt
+                USING consulted r, notifications.integration_targets t
+                WHERE rt.tenant_id = {tenantId} AND rt.target_id = ANY({targetIds}) AND r.id = rt.route_id
+                  AND t.tenant_id = rt.tenant_id AND t.id = rt.target_id
+                  AND NOT (t.key = ANY(r.targets))
+                """, ct);
+
+        /// <summary>
+        /// Links a new target to the routes that already name its key. A route can only be saved naming targets that exist, so these are routes
+        /// stored before <c>route_targets</c> named a key that had no target then (the migration had nothing to link); from now on the target is
+        /// held as any other.
+        /// </summary>
+        internal static async Task LinkRoutesNamingAsync(NotificationsDbContext db, IntegrationTarget target, CancellationToken ct)
+        {
+            var routes = await db.Routes.Where(r => r.TenantId == target.TenantId && r.Targets.Contains(target.Key)).Select(r => new { r.Id, r.Targets }).ToListAsync(ct);
+            db.RouteTargets.AddRange(routes.Select(r => new RouteTarget
+            {
+                TenantId = target.TenantId, RouteId = r.Id, TargetId = target.Id, Position = Array.IndexOf(r.Targets, target.Key),
+            }));
+        }
     }
 
     internal sealed class ConfigurationHandlers(NotificationsDbContext db, IChannelRegistry channels, IEnumerable<INotificationProvider> providers,
@@ -130,6 +230,12 @@ namespace Juice.Notifications.Configuration
     {
         private static Outcome<T> Invalid<T>(params FieldError[] errors) => Outcome<T>.Invalid(ErrorCodes.InvalidConfiguration, "The configuration has errors.", errors);
 
+        /// <summary>The deployment's delivery settings these handlers check against (which secrets the API may name).</summary>
+        internal Providers.DeliveryOptions Delivery => delivery.Value;
+
+        /// <summary>Whether the provider of this channel and kind sends the integration's secret with what goes to a target (it signs).</summary>
+        internal bool Signs(string? channel, string? kind) => providers.FirstOrDefault(p => p.Channel == channel && p.Kind == kind) is { RequiresSecret: true };
+
         private static Outcome<T> ConfigManaged<T>(string what)
             => Outcome<T>.Conflict(ErrorCodes.ManagedByConfiguration, $"The {what} comes from the deployment's configuration; change it there.");
 
@@ -140,10 +246,14 @@ namespace Juice.Notifications.Configuration
                 return Invalid<IntegrationView>(new FieldError("/key", "A key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
             }
             var existing = await db.Integrations.SingleOrDefaultAsync(i => i.TenantId == r.NotificationTenantId && i.Key == r.Key, ct);
-            if (existing?.ManagedBy == ManagedBy.Configuration)
+            if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
             {
                 return ConfigManaged<IntegrationView>("integration " + r.Key);
             }
+            // From configuration the file states the secret: one it leaves out is none, not the stored one. Through the API, one sent back as it
+            // is stored is no new secret (a client that PUTs back what it read).
+            var sentSecret = !r.Provisioned && existing is not null && r.SecretRef == existing.SecretRef ? null : r.SecretRef;
+            var secretRef = r.Provisioned ? r.SecretRef : sentSecret ?? existing?.SecretRef;
             var channel = r.Channel ?? existing?.Channel;
             var errors = new List<FieldError>();
             if (channel is null || channels.Find(channel) is null)
@@ -174,18 +284,31 @@ namespace Juice.Notifications.Configuration
                 // jsonb keeps the last of repeated names: what's stored would differ from what was checked.
                 errors.Add(new FieldError(duplicate, "This object repeats a property name; each name appears once."));
             }
-            if (!ConfigurationRules.IsSecretRef(r.SecretRef, delivery.Value))
+            var settingsJson = r.Settings is { } s ? CanonicalJson.Write(s) : existing?.Settings ?? "{}";
+            var sameSettings = existing is not null && (r.Settings is null
+                || r.Settings.Value.ValueKind == JsonValueKind.Object && ConfigurationRules.Canonical(settingsJson) == ConfigurationRules.Canonical(existing.Settings));
+            var (priority, enabled) = (r.Priority ?? existing?.Priority ?? 0, r.Enabled ?? existing?.Enabled ?? true);
+            // Everything as stored but enabled: false. Always allowed through the API, so sends can be stopped whatever the row holds.
+            var disablesOnly = !r.Provisioned && existing is not null && !enabled && channel == existing.Channel && kind == existing.Kind && sameSettings
+                && secretRef == existing.SecretRef && priority == existing.Priority;
+            if (!ConfigurationRules.IsSecretRef(sentSecret, delivery.Value, r.Provisioned))
             {
-                errors.Add(new FieldError("/secretRef", $"A secret is named, never sent: env:{delivery.Value.ApiSecretEnvPrefix}NAME, or file: in the deployment's secret folder."));
+                errors.Add(new FieldError("/secretRef", ConfigurationRules.SecretRefRule("A secret", delivery.Value, r.Provisioned)));
             }
-            else if (provider is { RequiresSecret: true } && (r.SecretRef ?? existing?.SecretRef) is null)
+            else if (provider is { RequiresSecret: true } && secretRef is null)
             {
                 // Webhooks are always signed (D14): an integration without its signing secret is refused, not sent unsigned.
-                errors.Add(new FieldError("/secretRef", $"A {kind} integration signs what it sends: name its secret, env:{delivery.Value.ApiSecretEnvPrefix}NAME or file: in the deployment's secret folder."));
+                errors.Add(new FieldError("/secretRef", $"A {kind} integration signs what it sends: name its secret. "
+                    + ConfigurationRules.SecretRefRule("It", delivery.Value, r.Provisioned)));
+            }
+            else if (!r.Provisioned && !disablesOnly
+                && ConfigurationRules.SecretOutOfReach(delivery.Value, "/secretRef", secretRef, "The stored secret", ConfigurationRules.SecretRefRule("name one: it", delivery.Value, false)) is { } outOfReach)
+            {
+                errors.Add(outOfReach);
             }
             // Checked when they are new or change, or the kind does: a stored integration saved under an older check can still be disabled or
-            // reprioritized without rewriting its settings.
-            var settingsChange = r.Settings is not null || existing is null || (r.Kind is not null && r.Kind != existing.Kind);
+            // reprioritized without rewriting its settings, sent back as stored or left out.
+            var settingsChange = existing is null || !sameSettings || kind != existing.Kind;
             if (provider is not null && errors.Count == 0 && settingsChange
                 && provider.CheckSettings(r.Settings is { } given ? given.GetRawText() : existing?.Settings ?? "{}") is { } settingsProblem)
             {
@@ -196,27 +319,28 @@ namespace Juice.Notifications.Configuration
                 return Invalid<IntegrationView>([.. errors]);
             }
             var now = clock.UtcNow();
-            var settingsJson = r.Settings is { } s ? CanonicalJson.Write(s) : existing?.Settings ?? "{}";
+            var managedBy = r.Provisioned ? ManagedBy.Configuration : existing?.ManagedBy ?? ManagedBy.Api;
+            var hash = ConfigurationRules.IntegrationHash(channel!, kind!, settingsJson, secretRef, priority, enabled);
             if (existing is null)
             {
                 existing = new Integration
                 {
-                    TenantId = r.NotificationTenantId, Key = r.Key, Channel = channel!, Kind = kind!, Settings = settingsJson, SecretRef = r.SecretRef,
-                    Priority = r.Priority ?? 0, Enabled = r.Enabled ?? true, DefinitionHash = "", UpdatedAt = now,
+                    TenantId = r.NotificationTenantId, Key = r.Key, Channel = channel!, Kind = kind!, Settings = settingsJson, SecretRef = secretRef,
+                    Priority = priority, Enabled = enabled, ManagedBy = managedBy, DefinitionHash = hash, UpdatedAt = now,
                 };
                 db.Integrations.Add(existing);
             }
-            else
+            else if ((existing.DefinitionHash, existing.ManagedBy) != (hash, managedBy))
             {
                 existing.Kind = kind!;
                 existing.Settings = settingsJson;
-                existing.SecretRef = r.SecretRef ?? existing.SecretRef;
-                existing.Priority = r.Priority ?? existing.Priority;
-                existing.Enabled = r.Enabled ?? existing.Enabled;
+                existing.SecretRef = secretRef;
+                existing.Priority = priority;
+                existing.Enabled = enabled;
+                existing.ManagedBy = managedBy;
                 existing.UpdatedAt = now;
+                existing.DefinitionHash = hash;
             }
-            existing.DefinitionHash = ConfigurationRules.Hash(existing.Channel, existing.Kind, ConfigurationRules.Canonical(existing.Settings), existing.SecretRef,
-                existing.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture), existing.Enabled.ToString());
             return Outcome<IntegrationView>.Ok(await ConfigurationQueries.IntegrationAsync(db, existing, ct));
         }
 
@@ -236,11 +360,13 @@ namespace Juice.Notifications.Configuration
                 return Outcome<bool>.Conflict(ErrorCodes.IntegrationInUse, "Deliveries went through this integration; disable it instead, so their history keeps it.");
             }
             // Its targets go with it: no route may still name one, or it would match and plan recipients nothing can reach.
-            var targets = await db.IntegrationTargets.Where(t => t.TenantId == r.NotificationTenantId && t.IntegrationId == existing.Id).Select(t => t.Key).ToListAsync(ct);
-            if (targets.Count > 0 && await ConfigurationRules.RoutesNamingAsync(db, r.NotificationTenantId, targets, ct) is { Count: > 0 } routes)
+            var targets = await db.IntegrationTargets.Where(t => t.TenantId == r.NotificationTenantId && t.IntegrationId == existing.Id)
+                .Select(t => new { t.Id, t.Key }).ToListAsync(ct);
+            if (targets.Count > 0 && await ConfigurationRules.RoutesNamingAsync(db, r.NotificationTenantId, [.. targets.Select(t => t.Key)], ct) is { Count: > 0 } routes)
             {
                 return Outcome<bool>.Conflict(ErrorCodes.TargetInUse, $"Routes name this integration's targets: {string.Join(", ", routes)}. Change or delete them first.");
             }
+            await ConfigurationRules.ReleaseStaleRowsAsync(db, r.NotificationTenantId, [.. targets.Select(t => t.Id)], ct);
             db.Integrations.Remove(existing);
             return Outcome<bool>.Ok(true);
         }
@@ -259,9 +385,19 @@ namespace Juice.Notifications.Configuration
             var existing = await db.IntegrationTargets.SingleOrDefaultAsync(t => t.TenantId == r.NotificationTenantId && t.Key == r.Key, ct);
             if (existing is not null && existing.IntegrationId != integration.Id)
             {
-                return Outcome<TargetView>.Conflict(ErrorCodes.TargetExists, $"The target key '{r.Key}' is taken by another integration; target keys are unique in a tenant.");
+                // Through the API a target stays with its integration. The file states where each target is, so it may move one to another
+                // integration of the same channel: the target is kept (its id, so its deliveries' destination key and history still name it).
+                var from = r.Provisioned
+                    ? await db.Integrations.AsNoTracking().Where(i => i.TenantId == r.NotificationTenantId && i.Id == existing.IntegrationId).Select(i => i.Channel).SingleAsync(ct)
+                    : null;
+                if (from != integration.Channel)
+                {
+                    return Outcome<TargetView>.Conflict(ErrorCodes.TargetExists, r.Provisioned
+                        ? $"The target key '{r.Key}' is a {from} target; a target moves only between integrations of one channel. Give the {integration.Channel} target another key."
+                        : $"The target key '{r.Key}' is taken by another integration; target keys are unique in a tenant.");
+                }
             }
-            if (existing?.ManagedBy == ManagedBy.Configuration)
+            if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
             {
                 return ConfigManaged<TargetView>("target " + r.Key);
             }
@@ -271,35 +407,64 @@ namespace Juice.Notifications.Configuration
                 return Invalid<TargetView>(new FieldError("/address", integration.Channel == Channels.Email
                     ? "The address is a bare email address." : "The address is an absolute http or https URL without credentials."));
             }
-            if (!ConfigurationRules.IsSecretRef(r.AddressRef, delivery.Value))
+            // Through the API, a secret address sent back as it is stored is no new one (a client that PUTs back what it read).
+            var sentAddressRef = !r.Provisioned && existing is not null && r.AddressRef == existing.AddressRef ? null : r.AddressRef;
+            if (!ConfigurationRules.IsSecretRef(sentAddressRef, delivery.Value, r.Provisioned))
             {
-                return Invalid<TargetView>(new FieldError("/addressRef", $"A secret address is named: env:{delivery.Value.ApiSecretEnvPrefix}NAME, or file: in the deployment's secret folder."));
+                return Invalid<TargetView>(new FieldError("/addressRef", ConfigurationRules.SecretRefRule("A secret address", delivery.Value, r.Provisioned)));
             }
-            if ((address ?? existing?.Address) is null && (r.AddressRef ?? existing?.AddressRef) is null)
+            // From the API, a Put that names neither keeps the stored address; from configuration the file states both.
+            var replaceAddress = r.Provisioned || address is not null || r.AddressRef is not null;
+            if ((replaceAddress ? address : existing?.Address) is null && (replaceAddress ? r.AddressRef : existing?.AddressRef) is null)
             {
                 return Invalid<TargetView>(new FieldError("/address", "A target has an address, or an addressRef naming where its secret address is."));
             }
+            var (newAddress, newAddressRef) = replaceAddress ? (address, r.AddressRef) : (existing!.Address, existing.AddressRef);
+            var enabled = r.Enabled ?? existing?.Enabled ?? true;
+            // Everything as stored but enabled: false. Always allowed through the API, so sends can be stopped whatever the row holds.
+            var disablesOnly = !r.Provisioned && existing is not null && !enabled && existing.IntegrationId == integration.Id
+                && newAddress == existing.Address && newAddressRef == existing.AddressRef;
+            if (!r.Provisioned && !disablesOnly)
+            {
+                // The target's own secret address, and the integration's signing secret, which would go to whatever address an admin sets here.
+                if (ConfigurationRules.SecretOutOfReach(delivery.Value, "/addressRef", newAddressRef, "The stored secret address",
+                        ConfigurationRules.SecretRefRule("name one: it", delivery.Value, false)) is { } addressOutOfReach)
+                {
+                    return Invalid<TargetView>(addressOutOfReach);
+                }
+                // Only a secret the provider sends with what goes to the target's address (a webhook's signing key). An SMTP password goes to the
+                // deployment's mail server, never to a target.
+                if (Signs(integration.Channel, integration.Kind) &&ConfigurationRules.SecretOutOfReach(delivery.Value, "/integration", integration.SecretRef, $"The signing secret of integration {integration.Key}",
+                        integration.ManagedBy == ManagedBy.Configuration
+                            ? $"its targets are set in the deployment's configuration, under {integration.Key}"
+                            : $"give {integration.Key} a secret of yours first (its secretRef), then its targets") is { } integrationOutOfReach)
+                {
+                    return Invalid<TargetView>(integrationOutOfReach);
+                }
+            }
             var now = clock.UtcNow();
+            var managedBy = r.Provisioned ? ManagedBy.Configuration : existing?.ManagedBy ?? ManagedBy.Api;
+            var hash = ConfigurationRules.TargetHash(newAddress, newAddressRef, enabled);
             if (existing is null)
             {
                 existing = new IntegrationTarget
                 {
-                    TenantId = r.NotificationTenantId, IntegrationId = integration.Id, Key = r.Key, Address = address, AddressRef = r.AddressRef,
-                    Enabled = r.Enabled ?? true, DefinitionHash = "", UpdatedAt = now,
+                    TenantId = r.NotificationTenantId, IntegrationId = integration.Id, Key = r.Key, Address = newAddress, AddressRef = newAddressRef,
+                    Enabled = enabled, ManagedBy = managedBy, DefinitionHash = hash, UpdatedAt = now,
                 };
                 db.IntegrationTargets.Add(existing);
+                await ConfigurationRules.LinkRoutesNamingAsync(db, existing, ct);
             }
-            else
+            else if ((existing.DefinitionHash, existing.ManagedBy, existing.IntegrationId) != (hash, managedBy, integration.Id))
             {
-                if (address is not null || r.AddressRef is not null)
-                {
-                    existing.Address = address;
-                    existing.AddressRef = r.AddressRef;
-                }
-                existing.Enabled = r.Enabled ?? existing.Enabled;
+                existing.IntegrationId = integration.Id;
+                existing.Address = newAddress;
+                existing.AddressRef = newAddressRef;
+                existing.Enabled = enabled;
+                existing.ManagedBy = managedBy;
                 existing.UpdatedAt = now;
+                existing.DefinitionHash = hash;
             }
-            existing.DefinitionHash = ConfigurationRules.Hash(existing.Address, existing.AddressRef, existing.Enabled.ToString());
             return Outcome<TargetView>.Ok(ConfigurationQueries.Target(existing));
         }
 
@@ -316,10 +481,11 @@ namespace Juice.Notifications.Configuration
             {
                 return ConfigManaged<bool>("target " + r.Key);
             }
-            if (await ConfigurationRules.RoutesNamingAsync(db, r.NotificationTenantId, [r.Key], ct) is { Count: > 0 } routes)
+            if (await ConfigurationRules.RoutesNamingAsync(db, r.NotificationTenantId, [existing.Key], ct) is { Count: > 0 } routes)
             {
                 return Outcome<bool>.Conflict(ErrorCodes.TargetInUse, $"Routes name this target: {string.Join(", ", routes)}. Change or delete them first.");
             }
+            await ConfigurationRules.ReleaseStaleRowsAsync(db, r.NotificationTenantId, [existing.Id], ct);
             db.IntegrationTargets.Remove(existing);
             return Outcome<bool>.Ok(true);
         }
@@ -331,7 +497,7 @@ namespace Juice.Notifications.Configuration
                 return Invalid<RouteView>(new FieldError("/key", "A key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
             }
             var existing = await db.Routes.SingleOrDefaultAsync(x => x.TenantId == r.NotificationTenantId && x.Key == r.Key, ct);
-            if (existing?.ManagedBy == ManagedBy.Configuration)
+            if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
             {
                 return ConfigManaged<RouteView>("route " + r.Key);
             }
@@ -357,16 +523,18 @@ namespace Juice.Notifications.Configuration
                 errors.Add(new FieldError("/match", "A route needs a match; {} matches every notification."));
             }
             var targets = r.Targets?.Distinct(StringComparer.Ordinal).ToArray();
+            Dictionary<string, Guid> known = [];
             if (targets is not null)
             {
                 if (targets.Length is 0 or > 50)
                 {
                     errors.Add(new FieldError("/targets", "A route has 1–50 targets."));
                 }
-                var known = await db.IntegrationTargets.Where(t => t.TenantId == r.NotificationTenantId && targets.Contains(t.Key)).Select(t => t.Key).ToListAsync(ct);
+                known = await db.IntegrationTargets.Where(t => t.TenantId == r.NotificationTenantId && targets.Contains(t.Key))
+                    .ToDictionaryAsync(t => t.Key, t => t.Id, ct);
                 for (var i = 0; i < r.Targets!.Count; i++)
                 {
-                    if (!known.Contains(r.Targets[i]))
+                    if (!known.ContainsKey(r.Targets[i]))
                     {
                         errors.Add(new FieldError($"/targets/{i}", $"There is no target '{r.Targets[i]}' in this tenant."));
                     }
@@ -381,19 +549,56 @@ namespace Juice.Notifications.Configuration
                 return Invalid<RouteView>([.. errors]);
             }
             var now = clock.UtcNow();
+            var managedBy = r.Provisioned ? ManagedBy.Configuration : existing?.ManagedBy ?? ManagedBy.Api;
+            var (newMatch, newTargets, enabled) = (match ?? existing!.Match, targets ?? existing!.Targets, r.Enabled ?? existing?.Enabled ?? true);
+            var hash = ConfigurationRules.RouteHash(newMatch, newTargets, enabled);
+            List<RouteTarget> rows = [];
+            var changed = existing is null || (existing.DefinitionHash, existing.ManagedBy) != (hash, managedBy);
             if (existing is null)
             {
-                existing = new Route { TenantId = r.NotificationTenantId, Key = r.Key, Match = match!, Targets = targets!, Enabled = r.Enabled ?? true, DefinitionHash = "", UpdatedAt = now };
+                existing = new Route
+                {
+                    TenantId = r.NotificationTenantId, Key = r.Key, Match = newMatch, Targets = newTargets, Enabled = enabled, ManagedBy = managedBy,
+                    DefinitionHash = hash, UpdatedAt = now,
+                };
                 db.Routes.Add(existing);
             }
             else
             {
-                existing.Match = match ?? existing.Match;
-                existing.Targets = targets ?? existing.Targets;
-                existing.Enabled = r.Enabled ?? existing.Enabled;
-                existing.UpdatedAt = now;
+                if (changed)
+                {
+                    existing.Match = newMatch;
+                    existing.Targets = newTargets;
+                    existing.Enabled = enabled;
+                    existing.ManagedBy = managedBy;
+                    existing.UpdatedAt = now;
+                    existing.DefinitionHash = hash;
+                }
+                if (targets is not null)
+                {
+                    rows = await db.RouteTargets.Where(x => x.TenantId == r.NotificationTenantId && x.RouteId == existing.Id).ToListAsync(ct);
+                }
             }
-            existing.DefinitionHash = ConfigurationRules.Hash(ConfigurationRules.Canonical(existing.Match), string.Join(",", existing.Targets), existing.Enabled.ToString());
+            if (targets is not null)
+            {
+                // The rows the database checks (deferred #8): a target deleted meanwhile fails this route's commit, not just its planning. Kept in
+                // step even when the route itself is unchanged, so a Put of the same route repairs rows that went missing. When the route changes,
+                // every row it keeps is written (its position), so one removed under this Put since it was read fails it, rather than the route
+                // newly naming a target no row holds (a stale-row release racing it, ReleaseStaleRowsAsync). A Put that changes nothing writes
+                // nothing, as for every Put. Removing a row a release took first is a conflict too (409, deferred #24).
+                var positions = targets.Select((key, i) => (Id: known[key], Position: i)).ToDictionary(t => t.Id, t => t.Position);
+                db.RouteTargets.RemoveRange(rows.Where(x => !positions.ContainsKey(x.TargetId)));
+                foreach (var kept in rows.Where(x => positions.ContainsKey(x.TargetId)))
+                {
+                    if (changed || kept.Position != positions[kept.TargetId])
+                    {
+                        kept.Position = positions[kept.TargetId];
+                        db.Entry(kept).Property(x => x.Position).IsModified = true;
+                    }
+                }
+                db.RouteTargets.AddRange(positions.Where(p => rows.All(x => x.TargetId != p.Key))
+                    .Select(p => new RouteTarget { TenantId = r.NotificationTenantId, RouteId = existing.Id, TargetId = p.Key, Position = p.Value }));
+            }
             return Outcome<RouteView>.Ok(ConfigurationQueries.Route(existing));
         }
 
@@ -430,16 +635,22 @@ namespace Juice.Notifications.Configuration
                 return Invalid<AllowlistView>(new FieldError("/destination", refused));
             }
             var existing = await db.Allowlist.SingleOrDefaultAsync(a => a.TenantId == r.NotificationTenantId && a.Destination == destination, ct);
-            if (existing?.ManagedBy == ManagedBy.Configuration)
+            if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
             {
                 return ConfigManaged<AllowlistView>("allowlist entry " + destination);
             }
+            var managedBy = r.Provisioned ? ManagedBy.Configuration : existing?.ManagedBy ?? ManagedBy.Api;
             if (existing is null)
             {
                 existing = new AllowlistEntry { TenantId = r.NotificationTenantId, Destination = destination };
                 db.Allowlist.Add(existing);
             }
+            else if (existing.Ports.SequenceEqual(ports) && existing.ManagedBy == managedBy)
+            {
+                return Outcome<AllowlistView>.Ok(ConfigurationQueries.Allowlist(existing));
+            }
             existing.Ports = ports;
+            existing.ManagedBy = managedBy;
             existing.UpdatedAt = clock.UtcNow();
             return Outcome<AllowlistView>.Ok(ConfigurationQueries.Allowlist(existing));
         }

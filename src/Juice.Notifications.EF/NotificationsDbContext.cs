@@ -16,10 +16,22 @@ namespace Juice.Notifications.Data
     /// <remarks>
     /// The mediator's unit of work (Juice <see cref="UnitOfWork"/>) and the outbox's store (<see cref="IOutboxContext"/>): a command's changes and the
     /// messages it publishes commit together, saved by the TransactionBehavior, never by the command.
+    /// <para>A Juice <see cref="DbContextBase"/>, so changes to the rows marked <see cref="Juice.Domain.IAuditable"/> (configuration: applications,
+    /// integrations, targets, routes, the allowlist) are reported as audit events, and held until their transaction commits (p1-09). Nothing else
+    /// is: the stages' rows are never audited.</para>
     /// </remarks>
-    public sealed class NotificationsDbContext(DbContextOptions<NotificationsDbContext> options) : UnitOfWork(options), IOutboxContext
+    public sealed class NotificationsDbContext : DbContextBase, IOutboxContext
     {
-        public const string Schema = "notifications";
+        public new const string Schema = "notifications";
+
+        /// <summary>Without services: no audit events and no commit announcements (tools, tests that only read and write rows).</summary>
+        public NotificationsDbContext(DbContextOptions<NotificationsDbContext> options) : base(options)
+        {
+        }
+
+        /// <summary>From the container: the mediator (audit events, the commit announcement) and the request's user.</summary>
+        public NotificationsDbContext(DbContextOptions<NotificationsDbContext> options, IServiceProvider services) : base(options)
+            => ConfigureServices(services);
 
         public DbSet<OutboxEvent> Outbox => Set<OutboxEvent>();
         public DbSet<OutboxDelivery> OutboxDeliveries => Set<OutboxDelivery>();
@@ -30,6 +42,7 @@ namespace Juice.Notifications.Data
         public DbSet<Integration> Integrations => Set<Integration>();
         public DbSet<IntegrationTarget> IntegrationTargets => Set<IntegrationTarget>();
         public DbSet<Route> Routes => Set<Route>();
+        public DbSet<RouteTarget> RouteTargets => Set<RouteTarget>();
         public DbSet<AllowlistEntry> Allowlist => Set<AllowlistEntry>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
         public DbSet<Notification> Notifications => Set<Notification>();
@@ -50,7 +63,7 @@ namespace Juice.Notifications.Data
                 })
                 .UseSnakeCaseNamingConvention();
 
-        protected override void OnModelCreating(ModelBuilder model)
+        protected override void ConfigureModel(ModelBuilder model)
         {
             model.HasDefaultSchema(Schema);
 
@@ -157,6 +170,19 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.ManagedBy).HasMaxLength(10);
                 e.Property(x => x.DefinitionHash).HasMaxLength(64).IsConcurrencyToken();
                 e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
+            });
+
+            // The targets a route names, as rows the database checks (deferred #8): a target can't be deleted while a route names it, and a route
+            // can't commit naming a target deleted at the same moment. routes.targets keeps the order and is what the planner reads.
+            model.Entity<RouteTarget>(e =>
+            {
+                e.ToTable("route_targets");
+                e.HasKey(x => new { x.TenantId, x.RouteId, x.TargetId });
+                e.HasIndex(x => new { x.TenantId, x.TargetId });
+                e.HasOne<Route>().WithMany().HasForeignKey(x => new { x.TenantId, x.RouteId }).OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName(Constraints.RouteTargetRoute);
+                e.HasOne<IntegrationTarget>().WithMany().HasForeignKey(x => new { x.TenantId, x.TargetId }).OnDelete(DeleteBehavior.Restrict)
+                    .HasConstraintName(Constraints.RouteTargetTarget);
             });
 
             model.Entity<AllowlistEntry>(e =>

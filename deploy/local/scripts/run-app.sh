@@ -18,5 +18,8 @@ export Intake__RabbitMQ__Host=127.0.0.1
 export Intake__RabbitMQ__Port=5673
 export Intake__RabbitMQ__UserName=notifications
 export Intake__RabbitMQ__Password="$RABBITMQ_PASSWORD"
+# Audit records to the stack's audit host (gRPC), and the tenant setup kept with the deployment.
+export Audit__Endpoint=http://127.0.0.1:5285
+export Provisioning__Path="$here/provisioning.json"
 
 exec dotnet run --project "$here/../../src/Juice.Notifications.App" --no-launch-profile

@@ -56,16 +56,22 @@ namespace Juice.Notifications.Api
                     { Kind: ConflictKind.Unique or ConflictKind.Aborted or ConflictKind.RowGone } => ApiResults.ConcurrentChange(),
                     // Only the race this endpoint can lose; any other foreign key failing is a bug, and stays a 500 that shows it.
                     { Kind: ConflictKind.ForeignKey, Constraint: Constraints.TargetIntegration } => ApiResults.ConcurrentChange(),
+                    // A route naming a target deleted at the same moment (deferred #8), or held by a route deleted at the same moment.
+                    { Kind: ConflictKind.ForeignKey, Constraint: Constraints.RouteTargetTarget or Constraints.RouteTargetRoute } => ApiResults.ConcurrentChange(),
                     _ => null,
                 }), ct);
 
-        /// <summary>A delete that raced: the row changed, or a delivery started going through the integration before the commit.</summary>
+        /// <summary>
+        /// A delete that raced: the row changed, a delivery started going through the integration before the commit, or a route started naming
+        /// the target (or one of the integration's targets).
+        /// </summary>
         private static Task<IResult> DeleteAsync(IMediator mediator, NotificationsDbContext db, IRequest<Outcome<bool>> command, CancellationToken ct)
             => ApiResults.SendAsync(mediator, db, command, _ => Results.NoContent(),
                 conflict => Task.FromResult<IResult?>(conflict switch
                 {
                     { Kind: ConflictKind.Aborted or ConflictKind.RowGone } => ApiResults.ConcurrentChange(),
-                    { Kind: ConflictKind.ForeignKey, Constraint: Constraints.DeliveryIntegration or Constraints.AttemptIntegration } => ApiResults.ConcurrentChange(),
+                    { Kind: ConflictKind.ForeignKey, Constraint: Constraints.DeliveryIntegration or Constraints.AttemptIntegration
+                        or Constraints.RouteTargetTarget } => ApiResults.ConcurrentChange(),
                     _ => null,
                 }), ct);
 

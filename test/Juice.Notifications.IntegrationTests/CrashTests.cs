@@ -168,6 +168,8 @@ namespace Juice.Notifications.IntegrationTests
                         ["Auth__RequireHttpsMetadata"] = "false",
                         ["Delivery__AllowHttpToAllowlisted"] = "true",
                         ["Stages__Run"] = runStages ? "true" : "false",
+                        // The child can't reach the tests' audit recorder; AuditTests cover recording.
+                        ["Audit__Enabled"] = "false",
                         ["Stages__Planner__Poll"] = "00:00:00.200",
                         ["Stages__DeliveryPlanner__Poll"] = "00:00:00.200",
                         ["Stages__Dispatcher__Poll"] = "00:00:00.200",

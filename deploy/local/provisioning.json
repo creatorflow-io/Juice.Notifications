@@ -1,0 +1,26 @@
+// Tenant setup the local stack's app container loads at start (Provisioning:Path; phase-1-plan I12). These rows are ManagedBy "config": the API
+// refuses to change them; change them here and restart the app. A row removed from this file is handed back to the API, disabled.
+// The tenant is a demo one of its own, so the samples and scripts/demo.sh, which set up their tenants through the API, are not affected.
+{
+  "tenants": {
+    "0b5e2f7a-4c1d-4e8a-9f3b-c0f1c0f1c0f1": {
+      "integrations": {
+        "mail": {
+          "channel": "email",
+          "kind": "smtp",
+          "settings": { "server": "local", "from": "notifications@juice.local", "fromName": "Juice (provisioned)" },
+          "targets": {
+            "ops": { "address": "ops@juice.local" }
+          }
+        }
+      },
+      "routes": {
+        "critical": {
+          "match": { "minPriority": "critical" },
+          "targets": [ "ops" ]
+        }
+      },
+      "allowlist": []
+    }
+  }
+}

@@ -12,6 +12,7 @@
     <PackageReference Include="Juice.Messaging.Outbox.Delivery" />
     <PackageReference Include="Juice.Messaging.Local" />
     <PackageReference Include="Juice.Messaging.Idempotency.Caching" />
+    <PackageReference Include="Juice.Audit.Api" />
   </ItemGroup>
 
   <ItemGroup>

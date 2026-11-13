@@ -18,6 +18,9 @@ namespace Juice.Notifications.Data
         public const string TargetIntegration = "fk_integration_targets_integrations_tenant_id_integration_id";
         public const string DeliveryIntegration = "fk_deliveries_integrations_tenant_id_integration_id";
         public const string AttemptIntegration = "fk_delivery_attempts_integrations_tenant_id_integration_id";
+        public const string RouteTargetRoute = "fk_route_targets_routes";
+        /// <summary>A route names the target: a delete that raced a route naming it, or a route naming a target deleted at the same moment.</summary>
+        public const string RouteTargetTarget = "fk_route_targets_integration_targets";
     }
 
     public enum ConflictKind

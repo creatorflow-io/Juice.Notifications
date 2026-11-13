@@ -25,7 +25,7 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>A registered producer, platform-wide. It owns the types under <c>{Key}.*</c> and sends for the tenants it's linked to.</summary>
-    public sealed class Application
+    public sealed class Application : Juice.Domain.IAuditable
     {
         public Guid Id { get; init; } = Guid.CreateVersion7();
         /// <summary>The type namespace, such as <c>observability</c>.</summary>
@@ -44,7 +44,7 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>A tenant an application may send for. A request references this row, so an unlinked tenant can't receive one.</summary>
-    public sealed class ApplicationTenant
+    public sealed class ApplicationTenant : Juice.Domain.IAuditable
     {
         public Guid ApplicationId { get; init; }
         public Guid TenantId { get; init; }
@@ -99,7 +99,7 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>A tenant's provider connection for one channel. <see cref="SecretRef"/> names where the secret is; the secret is never stored.</summary>
-    public sealed class Integration : ITenantOwned
+    public sealed class Integration : ITenantOwned, Juice.Domain.IAuditable
     {
         public Guid TenantId { get; init; }
         public Guid Id { get; init; } = Guid.CreateVersion7();
@@ -119,11 +119,11 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>A shared destination reached through an integration: a webhook URL, a mailbox, a Slack channel. It belongs to no person.</summary>
-    public sealed class IntegrationTarget : ITenantOwned
+    public sealed class IntegrationTarget : ITenantOwned, Juice.Domain.IAuditable
     {
         public Guid TenantId { get; init; }
         public Guid Id { get; init; } = Guid.CreateVersion7();
-        public Guid IntegrationId { get; init; }
+        public Guid IntegrationId { get; set; }
         public required string Key { get; init; }
         /// <summary>The address, when it isn't itself a secret.</summary>
         public string? Address { get; set; }
@@ -136,7 +136,7 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>Sends matching requests to shared targets. Adds recipients; never removes ones a request named.</summary>
-    public sealed class Route : ITenantOwned
+    public sealed class Route : ITenantOwned, Juice.Domain.IAuditable
     {
         public Guid TenantId { get; init; }
         public Guid Id { get; init; } = Guid.CreateVersion7();
@@ -152,8 +152,21 @@ namespace Juice.Notifications.Data
         public DateTimeOffset UpdatedAt { get; set; }
     }
 
+    /// <summary>One target a route names (deferred #8): the database keeps a named target from being deleted.</summary>
+    public sealed class RouteTarget
+    {
+        public Guid TenantId { get; init; }
+        public Guid RouteId { get; init; }
+        public Guid TargetId { get; init; }
+        /// <summary>
+        /// The target's place in the route's list. Rewritten on every Put of the route, so the Put writes each row it keeps: one deleted under it
+        /// meanwhile fails the Put (a concurrency conflict) instead of leaving the route naming a target nothing holds.
+        /// </summary>
+        public int Position { get; set; }
+    }
+
     /// <summary>A private host or CIDR, with ports, that outbound HTTP may reach (design §13.1).</summary>
-    public sealed class AllowlistEntry
+    public sealed class AllowlistEntry : Juice.Domain.IAuditable
     {
         public Guid TenantId { get; init; }
         /// <summary>A CIDR (<c>10.20.0.0/16</c>) or an exact host name.</summary>

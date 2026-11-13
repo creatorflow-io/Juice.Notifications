@@ -4,6 +4,8 @@
     <!-- The same Juice versions as Juice.Observability, the first producer (phase-1-plan I1). Ahead of it (10.12.0) at 10.13.1: the commit-failure fix and the RabbitMQ consumer fixes (docs/deferred.md #2, #17-#19, #21). -->
     <PackageVersion Include="JsonSchema.Net" Version="9.5.0" />
     <PackageVersion Include="MailKit" Version="4.18.2" />
+    <!-- Audit records to services/audit (p1-09): UseAudit() and the gRPC client. Built against Juice 10.10, which 10.13 satisfies. -->
+    <PackageVersion Include="Juice.Audit.Api" Version="10.6.1" />
     <PackageVersion Include="Juice.EF" Version="10.13.1" />
     <PackageVersion Include="Juice.EventBus.RabbitMQ" Version="10.13.1" />
     <PackageVersion Include="Juice.MediatR" Version="10.13.1" />

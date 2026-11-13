@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -10,14 +11,51 @@ namespace Juice.Notifications
     /// </summary>
     public static class CanonicalJson
     {
-        public static string Write(JsonElement element)
+        public static string Write(JsonElement element) => Write(element, normalizeNumbers: false);
+
+        /// <summary>
+        /// As <see cref="Write(JsonElement)"/>, with every number in one form as well: the same value however it is spelled (<c>1e2</c>, <c>100</c>,
+        /// <c>100.0</c> are all <c>100</c>). For hashing what was stored: jsonb rewrites numbers (<c>1e2</c> comes back as <c>100</c>), so a hash
+        /// of numbers as written would see a change that isn't one (deferred #9). Not for type declarations, whose hashes are already stored.
+        /// </summary>
+        public static string WriteNormalized(JsonElement element) => Write(element, normalizeNumbers: true);
+
+        private static string Write(JsonElement element, bool normalizeNumbers)
         {
             using var stream = new MemoryStream();
             using (var writer = new Utf8JsonWriter(stream))
             {
-                WriteElement(writer, element);
+                WriteElement(writer, element, normalizeNumbers);
             }
             return Encoding.UTF8.GetString(stream.ToArray());
+        }
+
+        /// <summary>
+        /// A JSON number in one exact form, its significant digits and a power of ten: <c>1e2</c>, <c>100</c> and <c>100.0</c> are all
+        /// <c>1E2</c>; <c>0.001</c> is <c>1E-3</c>; every zero is <c>0</c>. Worked on the text, so nothing is rounded: two numbers get the same
+        /// form only when they are the same value, however small, large or long (a decimal or a double would round some together).
+        /// </summary>
+        internal static string NormalizeNumber(string raw)
+        {
+            var negative = raw.StartsWith('-');
+            var body = negative ? raw[1..] : raw;
+            var e = body.IndexOfAny(['e', 'E']);
+            var exponent = e < 0 ? System.Numerics.BigInteger.Zero : System.Numerics.BigInteger.Parse(body[(e + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+            var mantissa = e < 0 ? body : body[..e];
+            var point = mantissa.IndexOf('.');
+            var digits = point < 0 ? mantissa : mantissa[..point] + mantissa[(point + 1)..];
+            if (point >= 0)
+            {
+                exponent -= mantissa.Length - point - 1;
+            }
+            digits = digits.TrimStart('0');
+            if (digits.Length == 0)
+            {
+                return "0";
+            }
+            var significant = digits.TrimEnd('0');
+            exponent += digits.Length - significant.Length;
+            return (negative ? "-" : "") + significant + "E" + exponent.ToString(CultureInfo.InvariantCulture);
         }
 
         /// <summary>
@@ -102,7 +140,7 @@ namespace Juice.Notifications
 
         public static string Sha256(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
-        private static void WriteElement(Utf8JsonWriter writer, JsonElement element)
+        private static void WriteElement(Utf8JsonWriter writer, JsonElement element, bool normalizeNumbers)
         {
             switch (element.ValueKind)
             {
@@ -111,7 +149,7 @@ namespace Juice.Notifications
                     foreach (var property in element.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
                     {
                         writer.WritePropertyName(property.Name);
-                        WriteElement(writer, property.Value);
+                        WriteElement(writer, property.Value, normalizeNumbers);
                     }
                     writer.WriteEndObject();
                     break;
@@ -119,9 +157,12 @@ namespace Juice.Notifications
                     writer.WriteStartArray();
                     foreach (var item in element.EnumerateArray())
                     {
-                        WriteElement(writer, item);
+                        WriteElement(writer, item, normalizeNumbers);
                     }
                     writer.WriteEndArray();
+                    break;
+                case JsonValueKind.Number when normalizeNumbers:
+                    writer.WriteRawValue(NormalizeNumber(element.GetRawText()), skipInputValidation: true);
                     break;
                 default:
                     element.WriteTo(writer);

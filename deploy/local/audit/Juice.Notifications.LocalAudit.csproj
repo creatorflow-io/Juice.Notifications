@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The local stack's audit service: services/audit's gRPC host (Juice.Audit.Api, ConfigureAuditGrpcHost) on the stack's PostgreSQL, so the
+       notification service has somewhere to send its audit records (p1-09). services/audit ships no host of its own; a deployment runs its
+       own. Not part of the solution, and not a product. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Juice.Audit.Api" Version="10.6.1" />
+    <PackageReference Include="Juice.Audit.EF.PostgreSQL" Version="10.6.1" />
+  </ItemGroup>
+
+</Project>

@@ -192,6 +192,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasName("pk_destination_allowlist");
 
                     b.ToTable("destination_allowlist", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.Application", b =>
@@ -252,6 +254,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_applications_key");
 
                     b.ToTable("applications", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.ApplicationTenant", b =>
@@ -275,6 +279,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_application_tenants_tenant_id");
 
                     b.ToTable("application_tenants", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.Delivery", b =>
@@ -618,6 +624,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_integrations_tenant_id_key");
 
                     b.ToTable("integrations", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.IntegrationTarget", b =>
@@ -682,6 +690,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_integration_targets_tenant_id_key");
 
                     b.ToTable("integration_targets", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.Notification", b =>
@@ -1132,6 +1142,35 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_routes_tenant_id_key");
 
                     b.ToTable("routes", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.RouteTarget", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("RouteId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("route_id");
+
+                    b.Property<Guid>("TargetId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("target_id");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer")
+                        .HasColumnName("position");
+
+                    b.HasKey("TenantId", "RouteId", "TargetId")
+                        .HasName("pk_route_targets");
+
+                    b.HasIndex("TenantId", "TargetId")
+                        .HasDatabaseName("ix_route_targets_tenant_id_target_id");
+
+                    b.ToTable("route_targets", "notifications");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.Template", b =>
@@ -1324,6 +1363,23 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_notification_types_applications_application_id");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.RouteTarget", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.Route", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "RouteId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_route_targets_routes");
+
+                    b.HasOne("Juice.Notifications.Data.IntegrationTarget", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "TargetId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_route_targets_integration_targets");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.Template", b =>

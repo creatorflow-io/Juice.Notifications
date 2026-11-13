@@ -9,6 +9,27 @@ can run at once.
 | Keycloak | `quay.io/keycloak/keycloak:26.7.5` | http://localhost:8081, realm `juice` | M1 |
 | RabbitMQ | `rabbitmq:4.1.4-management-alpine` | `localhost:5673`, UI http://localhost:15673 | M2 |
 | Mailpit | `axllent/mailpit:v1.27.10` | SMTP `localhost:1026`, UI http://localhost:8026 | M6 |
+| Audit host | built from `audit/` (Juice.Audit 10.6.1) | gRPC `localhost:5285` (h2c); records in schema `audit` of database `notifications` | p1-09 |
+
+## Audit records and provisioning
+
+The service sends its audit records (changes through the API, configuration provisioning) to `services/audit`'s gRPC host, which `audit/`
+builds: `Audit:Endpoint`, required unless `Audit:Enabled` is false. Read them with psql:
+
+```bash
+docker compose exec postgres psql -U notifications -d notifications \
+  -c 'SELECT "DateTime", "User", "TenantId", "Action", "Req_Method", "Req_Path", "Res_Status" FROM audit."AccessLog" ORDER BY "DateTime" DESC LIMIT 20' \
+  -c 'SELECT "DateTime", "User", "Tbl", "Action", "Kvps" FROM audit."DataAudit" ORDER BY "DateTime" DESC LIMIT 20'
+```
+
+`provisioning.json` is the tenant setup the app loads at start (`Provisioning:Path`, phase-1-plan I12): its rows are `ManagedBy: config`, the
+API refuses to change them, and a row removed from the file is handed back to the API, disabled. A secret only the deployment may name
+(any variable or file) is never used for what the API sets: through the API a row is saved or enabled only when every secret it would use,
+its integration's included, is one the API may name. Disabling an API-managed row always works (fields left out or sent back as they are);
+a row the file manages changes only through the file. A file that gives an integration such a secret is refused while the API still has
+enabled targets under it. Without `Provisioning:Path` nothing is provisioned and rows provisioned before are left alone; a file with no tenants hands
+them all back. It sets up a demo tenant of its own
+(`0b5e2f7a-4c1d-4e8a-9f3b-c0f1c0f1c0f1`), so the samples and `scripts/demo.sh` are not affected.
 
 ## Start
 

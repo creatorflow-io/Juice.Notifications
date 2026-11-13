@@ -1,0 +1,6 @@
+<Project>
+  <!-- Versions are on the PackageReference items: this local tool doesn't use the repository's central package versions. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

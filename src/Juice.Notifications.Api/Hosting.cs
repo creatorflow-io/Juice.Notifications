@@ -2,6 +2,7 @@ using Juice.MediatR;
 using Juice.Messaging.Outbox.Delivery.Internal;
 using Juice.Messaging.Policies;
 using Juice.Notifications.Applications;
+using Juice.Notifications.Configuration;
 using Juice.Notifications.Data;
 using Juice.Notifications.Delivering;
 using Juice.Notifications.Planning;
@@ -77,6 +78,8 @@ namespace Juice.Notifications.Api
             services.Configure<HostOptions>(host => host.ShutdownTimeout = host.ShutdownTimeout < TimeSpan.FromSeconds(45) ? TimeSpan.FromSeconds(45) : host.ShutdownTimeout);
             services.TryAddSingleton(TimeProvider.System);
             services.AddHostedService<DatabaseMigrator>();
+            // After the migrator, before the stages: hosted services start in order (phase-1-plan I12).
+            services.AddConfigurationProvisioning(configuration);
 
             services.AddMediatR(mediator => mediator.RegisterServicesFromAssemblyContaining<CreateApplication>(includeNonPublicTypes: true));
             services.AddScoped(typeof(IPipelineBehavior<,>), typeof(NotificationsTransactionBehavior<,>));
@@ -112,6 +115,7 @@ namespace Juice.Notifications.Api
                 options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
             services.AddNotificationsAuthentication(configuration);
+            services.AddNotificationsAudit(configuration);
             services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
                 context.ProblemDetails.Extensions["traceId"] = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? context.HttpContext.TraceIdentifier);
             services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
@@ -211,6 +215,8 @@ namespace Juice.Notifications.Api
             app.UseExceptionHandler();
             app.UseStatusCodePages();
             app.UseAuthentication();
+            // After authentication, so a record names its user; before authorization, so refused changes are recorded too.
+            app.UseNotificationsAudit();
             app.UseAuthorization();
             return app;
         }

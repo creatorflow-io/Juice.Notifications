@@ -3,6 +3,9 @@ deploy/local/.env
 
 # Build output (Directory.Build.props)
 build/
+# The local audit host builds outside that layout
+deploy/local/audit/bin/
+deploy/local/audit/obj/
 
 # Visual Studio, Rider
 .vs/

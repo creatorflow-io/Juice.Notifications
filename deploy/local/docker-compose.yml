@@ -4,6 +4,7 @@
 #   RabbitMQ     localhost:5673    management UI http://localhost:15673 (from M2: NotificationRequested intake)
 #   Keycloak     http://localhost:8081   realm "juice" (admin console: admin / KEYCLOAK_ADMIN_PASSWORD)
 #   Mailpit      SMTP localhost:1026, UI http://localhost:8026 (from M6: the SMTP provider's test sink)
+#   audit        gRPC localhost:5285 (h2c): services/audit's host, records in schema "audit" of the notifications database (p1-09)
 #   app          http://localhost:5280 with --profile app (the service from the Dockerfile; otherwise scripts/run-app.sh)
 #
 # Ports avoid the Juice.Observability stack's, so both can run at once. Images are pinned; change versions here and in README.md together.
@@ -12,6 +13,9 @@ name: juice-notifications
 services:
   postgres:
     image: postgres:17.10-alpine
+    # The integration tests run their classes in parallel, each with a host of its own (stage workers, outbox delivery, pools): past the default
+    # 100 connections a step fails to connect and backs off, and a test on a fixed clock waits for it forever.
+    command: ["postgres", "-c", "max_connections=300"]
     environment:
       POSTGRES_DB: notifications
       POSTGRES_USER: notifications
@@ -68,6 +72,17 @@ services:
       - "127.0.0.1:1026:1025"
       - "127.0.0.1:8026:8025"
 
+  # services/audit's gRPC host (deploy/local/audit): the service's audit records (p1-09), stored in schema "audit" of the notifications database.
+  audit:
+    build:
+      context: ./audit
+    environment:
+      ConnectionStrings__PostgreConnection: "Host=postgres;Port=5432;Database=notifications;Username=notifications;Password=${POSTGRES_PASSWORD}"
+    ports:
+      - "127.0.0.1:5285:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+
   # The service itself, from the repository's Dockerfile: `docker compose --profile app up -d --build --wait`. Off by default, so tests and
   # scripts/run-app.sh (the same port) keep working without it.
   app:
@@ -92,6 +107,11 @@ services:
       Intake__RabbitMQ__Host: rabbitmq
       Intake__RabbitMQ__UserName: notifications
       Intake__RabbitMQ__Password: ${RABBITMQ_PASSWORD}
+      Audit__Endpoint: http://audit:8080
+      # Tenant setup kept with the deployment (phase-1-plan I12): deploy/local/provisioning.json.
+      Provisioning__Path: /config/provisioning.json
+    volumes:
+      - ./provisioning.json:/config/provisioning.json:ro
     ports:
       - "127.0.0.1:5280:8080"
     depends_on:
@@ -99,6 +119,7 @@ services:
       keycloak: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       mailpit: { condition: service_started }
+      audit: { condition: service_healthy }
 
 volumes:
   postgres-data:

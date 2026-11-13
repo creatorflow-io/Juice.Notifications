@@ -4,6 +4,7 @@ using Juice.Notifications.Planning;
 using Juice.Notifications.Stages;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Juice.Notifications.IntegrationTests
 {
@@ -40,7 +41,7 @@ namespace Juice.Notifications.IntegrationTests
             await db.SaveChangesAsync();
             _seed = (app.Id, type.Id);
 
-            var services = new ServiceCollection().AddLogging();
+            var services = new ServiceCollection().AddLogging(l => l.AddProvider(new ErrorLogProvider()));
             services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
             services.AddSingleton<TimeProvider>(_clock);
             services.AddSingleton<IStageFaults>(_faults);

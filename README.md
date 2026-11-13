@@ -21,8 +21,13 @@ Phase 1 (core) is in progress. Working end to end today:
 - RabbitMQ intake: `NotificationRequested` (`Juice.Notifications.Messaging`) accepted like an HTTP request, for the application whose
   `brokerUser` published it (`Intake:RabbitMQ`, off by default; [`deploy/local/README.md`](deploy/local/README.md#rabbitmq-intake)).
 
-Not yet: configuration provisioning and audit records. Progress is tracked in [`docs/tracking.md`](docs/tracking.md); the phase 1 gate is
-recorded in [`docs/phase-1-acceptance.md`](docs/phase-1-acceptance.md).
+- configuration provisioning: a tenant's integrations, targets, routes and allowlist from a JSON file loaded at start (`Provisioning:Path`);
+  the API refuses changes to those rows;
+- audit records to `services/audit` (`Audit:Endpoint`, its gRPC host; required unless `Audit:Enabled` is false): every change through the API
+  with who made it, and the configuration rows it changed, once committed. Producers' notification requests are not audited.
+
+Progress is tracked in [`docs/tracking.md`](docs/tracking.md); the phase 1 gate is recorded in
+[`docs/phase-1-acceptance.md`](docs/phase-1-acceptance.md).
 
 ## Build and test
 
