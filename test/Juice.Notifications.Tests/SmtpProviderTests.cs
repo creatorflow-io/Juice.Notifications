@@ -148,7 +148,8 @@ namespace Juice.Notifications.Tests
                 {
                     await _run;
                 }
-                catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException)
+                // InvalidOperationException ("Not listening"): the test ended before the accept loop got to run, and the listener was stopped first.
+                catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException or InvalidOperationException)
                 {
                 }
                 _stop.Dispose();
