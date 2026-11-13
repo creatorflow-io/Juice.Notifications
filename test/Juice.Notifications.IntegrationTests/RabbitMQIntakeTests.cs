@@ -176,12 +176,13 @@ namespace Juice.Notifications.IntegrationTests
             """;
 
         /// <summary>Publishes to the intake exchange as <paramref name="user"/>, stamping <paramref name="userId"/> as the message's <c>user_id</c>.</summary>
-        private async Task PublishAsync(string user, string? userId, string body)
+        private async Task PublishAsync(string user, string? userId, string body, IDictionary<string, object?>? headers = null)
         {
             await using var connection = await intake.ConnectAsync(user);
             await using var channel = await connection.CreateChannelAsync(new CreateChannelOptions(true, true), Ct);
             await channel.BasicPublishAsync("notifications", RabbitMQIntake.RoutingKey, mandatory: true,
-                new BasicProperties { MessageId = Guid.NewGuid().ToString(), UserId = userId, ContentType = "application/json", DeliveryMode = DeliveryModes.Persistent },
+                new BasicProperties { MessageId = Guid.NewGuid().ToString(), UserId = userId, ContentType = "application/json", DeliveryMode = DeliveryModes.Persistent,
+                    Headers = headers },
                 Encoding.UTF8.GetBytes(body), Ct);
         }
 
@@ -231,6 +232,20 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         [Fact]
+        public async Task The_request_carries_the_trace_the_producer_published_in()
+        {
+            LocalStack.RequireAvailable();
+            // No exporter in this test: the intake keeps the producer's trace whether or not the host records traces.
+            var trace = System.Diagnostics.ActivityTraceId.CreateRandom();
+            var key = "q-" + Short();
+            await PublishAsync(intake.Producer, intake.Producer, Message(key),
+                new Dictionary<string, object?> { ["traceparent"] = $"00-{trace}-{System.Diagnostics.ActivitySpanId.CreateRandom()}-01" });
+            var request = await AcceptedAsync(key);
+            Assert.NotNull(request.TraceParent);
+            Assert.Equal(trace.ToString(), request.TraceParent.Split('-')[1]);
+        }
+
+        [Fact]
         public async Task Messages_without_a_verified_publisher_from_an_unknown_broker_user_or_against_the_types_rules_are_refused()
         {
             LocalStack.RequireAvailable();
@@ -248,6 +263,11 @@ namespace Juice.Notifications.IntegrationTests
             // One consumer takes the queue in order: once the marker is in, the messages before it were handled.
             await PublishAsync(intake.Producer, intake.Producer, Message(marker));
             await AcceptedAsync(marker);
+            // A refusal that wrongly failed would be back after RetryDelay (1 s): wait past it, then past one more message.
+            await Task.Delay(TimeSpan.FromSeconds(2.5), Ct);
+            var after = "q-" + Short();
+            await PublishAsync(intake.Producer, intake.Producer, Message(after));
+            await AcceptedAsync(after);
 
             foreach (var key in new[] { unstamped, stranger, unknownType, badData, otherTenant })
             {

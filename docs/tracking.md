@@ -14,7 +14,7 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | num | name | items | review | note (as of 13 Nov 2026) |
 |---|---|---|---|---|
 | M1 | Skeleton and persistence | p1-01, p1-02, p1-06 | clean | Reviewed in three rounds; Juice `UnitOfWork` fix: bumped to Juice 10.13.0 on 13 Nov 2026 (deferred #2 closed). |
-| M2 | Types and intake | p1-03, p1-04, p1-05 | r2 | Commit 007f690; RabbitMQ intake (p1-05) built 13 Nov 2026 (f3c7137), round 1 fixes in; round 2 next. |
+| M2 | Types and intake | p1-03, p1-04, p1-05 | confirm | Commit 007f690; RabbitMQ intake (p1-05) built 13 Nov 2026 (f3c7137), rounds 1 and 2 fixed; confirmation next. |
 | M3 | Claim store and worker host | p1-07 | clean | Commit 43f1cea. |
 | M4 | Planner and routes | p1-08, p1-09 | clean | Commit 0e7d238. Audit records and configuration provisioning (I12) still open. |
 | M5 | Rendering and delivery planning | p1-10, p1-11 | clean | Commit fbb4684. Round 2: 6 bugs fixed. Confirmation: 2 fixed (renders on a 128 MB stack of their own, depth limit 250; invariant culture). Re-confirmation: no crash or wrong-outcome bugs; 2 low ones fixed (a slow-unwinding template error taken for a timeout; thread start failure taken for a template failure). Deferred #10, #12. |
@@ -57,6 +57,7 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
+| 2026-11-13 | M2 → confirm: p1-05 round 2 fixes (trace kept from the producer, StartTimeout bounds start, broker health Degraded, update race order, refusal test waits past the retry); deferred #21 (shutdown drain, Juice). |
 | 2026-11-13 | M2 → r2: p1-05 round 1 fixes (topology mismatch fails at once, data numbers as doubles, race answer order); deferred #19 (prefetch, Juice), #20 (no inbox). |
 | 2026-11-13 | p1-05 → doing (RabbitMQ intake built: 565 tests green); M2 → r1 for it. Deferred #17, #18 recorded (Juice tasks). |
 | 2026-11-13 | Juice 10.13.0 bump (deferred #2 closed; migration `OutboxIndexFilterQuoting`; 546 tests green). p1-05 → todo (unblocked by `PublisherId`). |

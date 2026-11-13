@@ -73,7 +73,8 @@ namespace Juice.Notifications.Messaging
         /// <summary>
         /// Adds the intake when <c>Intake:RabbitMQ:Enabled</c> is true: the topology, declared at start (the host fails to start if the broker
         /// can't be reached within <see cref="RabbitMQIntakeOptions.StartTimeout"/>), the consumer, and a <c>ready</c> health check on the
-        /// connection. Call after <c>AddJuiceNotifications</c>, which adds the mediator, the database and Juice messaging the consumer uses.
+        /// connection that reports Degraded, never unhealthy. Call after <c>AddJuiceNotifications</c>, which adds the mediator, the database
+        /// and Juice messaging the consumer uses.
         /// </summary>
         public static IServiceCollection AddNotificationsRabbitMQIntake(this IServiceCollection services, IConfiguration configuration)
         {
@@ -83,6 +84,7 @@ namespace Juice.Notifications.Messaging
                 return services;
             }
             Validate(options);
+            TracePropagation.Ensure();
             services.AddSingleton(options);
             // Registered before the consumer, so the topology exists before it starts consuming (hosted services start in order).
             services.AddHostedService<TopologyStarter>();
@@ -101,8 +103,34 @@ namespace Juice.Notifications.Messaging
                     .ConfigureQos(options.Prefetch)
                     .Subscribe<NotificationRequested, NotificationRequestedHandler>(RoutingKey));
             }));
-            services.AddHealthChecks().AddRabbitMQHealthCheck(ConnectionName, "rabbitmq", tags: ["ready"]);
+            // Degraded, not unhealthy: HTTP is the main way in, and a broker outage mustn't take the service out of rotation. /health/ready
+            // still names it (200, status Degraded). The timeout keeps a probe from waiting on Juice's reconnect.
+            services.AddHealthChecks().AddRabbitMQHealthCheck(ConnectionName, "rabbitmq", Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded,
+                tags: ["ready"], timeout: TimeSpan.FromSeconds(5));
             return services;
+        }
+
+        /// <summary>
+        /// Juice starts the consumer span, which continues the producer's trace from the message's <c>traceparent</c>, only when its activity
+        /// source (<c>Juice</c>) has a listener. Without one the handler sees no trace and the request is stored without it. This listener keeps
+        /// the context (propagation only, nothing recorded) whether or not a host exports traces; an exporter that listens too records them.
+        /// </summary>
+        private static class TracePropagation
+        {
+            private static int _added;
+
+            public static void Ensure()
+            {
+                if (Interlocked.Exchange(ref _added, 1) == 0)
+                {
+                    System.Diagnostics.ActivitySource.AddActivityListener(new System.Diagnostics.ActivityListener
+                    {
+                        ShouldListenTo = source => source.Name == Juice.Messaging.Diagnostics.JuiceActivitySource.Name,
+                        Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) => System.Diagnostics.ActivitySamplingResult.PropagationData,
+                        SampleUsingParentId = (ref System.Diagnostics.ActivityCreationOptions<string> _) => System.Diagnostics.ActivitySamplingResult.PropagationData,
+                    });
+                }
+            }
         }
 
         private static void Validate(RabbitMQIntakeOptions options)
@@ -163,8 +191,15 @@ namespace Juice.Notifications.Messaging
                 {
                     try
                     {
-                        await services.InitRabbitMQInfrastructureAsync();
+                        // Juice's initializer takes no token and retries inside (about a minute with the broker down): bound it here.
+                        var remaining = deadline - DateTime.UtcNow;
+                        await services.InitRabbitMQInfrastructureAsync()
+                            .WaitAsync(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken);
                         return;
+                    }
+                    catch (TimeoutException ex) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        throw new InvalidOperationException($"The RabbitMQ intake's broker {options.Host}:{options.Port} wasn't reachable within {options.StartTimeout}.", ex);
                     }
                     catch (Exception ex) when (IsInequivalent(ex))
                     {

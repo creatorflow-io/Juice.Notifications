@@ -20,7 +20,9 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOIN
         .ConfigureResource(resource => resource.AddService(builder.Configuration["OTEL_SERVICE_NAME"] ?? "juice-notifications"))
         // Not the System.Net.Http spans: they record a webhook's full URL, which can be a secret (an addressRef target, D15). The dispatch span
         // names the integration instead, and HttpClient still carries the trace context on to the receiver.
-        .WithTracing(tracing => tracing.AddSource(Telemetry.Name).AddAspNetCoreInstrumentation())
+        .WithTracing(tracing => tracing.AddSource(Telemetry.Name).AddAspNetCoreInstrumentation()
+            // Juice's messaging spans: the RabbitMQ intake's consumer span, which continues the producer's trace.
+            .AddSource(Juice.Messaging.Diagnostics.JuiceActivitySource.Name))
         // Not the System.Net.Http meter either: it tags every series with the webhook's host (server.address), part of the same secret.
         .WithMetrics(metrics => metrics.AddMeter(Telemetry.Name).AddAspNetCoreInstrumentation())
         .UseOtlpExporter();

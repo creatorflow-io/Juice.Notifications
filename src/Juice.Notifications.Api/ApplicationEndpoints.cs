@@ -45,7 +45,7 @@ namespace Juice.Notifications.Api
                 catch (Exception ex) when (DbConflicts.Classify(ex) is { } conflict && Answer(command, conflict) is var answer && answer != Race.Unknown)
                 {
                     db.ChangeTracker.Clear();
-                    return await AnswerAsync(answer, key, (command as CreateApplication)?.ClientId, ct);
+                    return await AnswerAsync(answer, key, command switch { CreateApplication c => c.ClientId, UpdateApplication u => u.ClientId, _ => null }, ct);
                 }
                 return outcome.Kind switch
                 {
@@ -92,7 +92,8 @@ namespace Juice.Notifications.Api
                     case Race.CreateTaken or Race.CreateBrokerUserTaken when await reader.GetAsync(key, ct) is not null:
                         return Problem(StatusCodes.Status409Conflict, ErrorCodes.ApplicationExists, $"An application with key '{key}' already exists.");
                     // Which unique index PostgreSQL checked first is chance: answer in the handler's order, client id before broker user.
-                    case Race.CreateBrokerUserTaken when clientId is not null && await db.Applications.AsNoTracking().AnyAsync(a => a.ClientId == clientId, ct):
+                    case Race.CreateBrokerUserTaken or Race.BrokerUserTaken
+                        when clientId is not null && await db.Applications.AsNoTracking().AnyAsync(a => a.ClientId == clientId && a.Key != key, ct):
                     case Race.CreateTaken:
                     case Race.ClientIdTaken:
                         return Problem(StatusCodes.Status409Conflict, ErrorCodes.ClientIdInUse, "Another application already uses this client id.");
