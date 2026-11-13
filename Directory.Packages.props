@@ -6,7 +6,7 @@
     <PackageVersion Include="MailKit" Version="4.18.2" />
     <PackageVersion Include="Juice.EF" Version="10.13.0" />
     <!-- The alpha with the consumer fixes the intake relies on (docs/deferred.md #17-#19, #21): back to the others at the next stable Juice. -->
-    <PackageVersion Include="Juice.EventBus.RabbitMQ" Version="10.13.0-alpha.323" />
+    <PackageVersion Include="Juice.EventBus.RabbitMQ" Version="10.13.1-alpha.324" />
     <PackageVersion Include="Juice.MediatR" Version="10.13.0" />
     <PackageVersion Include="Juice.MediatR.Behaviors" Version="10.13.0" />
     <PackageVersion Include="Juice.Messaging" Version="10.13.0" />

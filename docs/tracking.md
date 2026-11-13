@@ -32,7 +32,7 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | p1-06 | task | DbContext, tables, migrations; applications admin | M1 | done | |
 | p1-03 | task | Type declarations (versioned schema, templates) | M2 | done | |
 | p1-04 | task | HTTP intake with idempotency; notification read | M2 | done | |
-| p1-05 | task | RabbitMQ `NotificationRequested` intake | M2 | done | `Juice.Notifications.Messaging`, applications' `brokerUser`, broker-side retry, parking after `ParkAfter`, consumer readiness; `RabbitMQIntakeTests`. On the Juice alpha 10.13.0-alpha.323 (deferred #17–#19, #21) until a stable release. |
+| p1-05 | task | RabbitMQ `NotificationRequested` intake | M2 | done | `Juice.Notifications.Messaging`, applications' `brokerUser`, broker-side retry, parking after `ParkAfter`, consumer readiness; `RabbitMQIntakeTests`. On the Juice alpha 10.13.1-alpha.324 (deferred #17–#19, #21) until a stable release. |
 | p1-07 | task | Claim store, stage worker, concurrency suite | M3 | done | |
 | p1-08 | task | Recipient resolvers and planner stage | M4 | done | |
 | p1-09 | task | Tenant configuration API; provisioning; audit | M4 | doing | API done; provisioning (I12) and audit not built. |
@@ -57,7 +57,7 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
-| 2026-11-13 | Juice `release/10` pushed (6135290; CI green; alpha 10.13.0-alpha.323). Intake adopts it: parks a message still failing after `ParkAfter` (1 day) or unreadable on `notifications.requests.parked`; readiness reads the consumer (`AddRabbitMQConsumerHealthCheck`, Degraded), `BrokerHealthCheck` removed. Found and fixed: a number beyond a double (`1e400`) was accepted as `"Infinity"`; now unreadable and parked. Deferred #17–#19, #21 wait only on a stable Juice release. |
+| 2026-11-13 | Juice `release/10` pushed (6135290; CI green; alpha 10.13.1-alpha.324). Intake adopts it: parks a message still failing after `ParkAfter` (1 day) or unreadable on `notifications.requests.parked`; readiness reads the consumer (`AddRabbitMQConsumerHealthCheck`, Degraded), `BrokerHealthCheck` removed. Found and fixed: a number beyond a double (`1e400`) was accepted as `"Infinity"`; now unreadable and parked. Deferred #17–#19, #21 wait only on a stable Juice release. |
 | 2026-11-13 | Juice fix for deferred #17, #18, #19, #21 committed in Juice `release/10` (6135290, unreleased, not pushed): prefetch before consume, start retry and restart after broker cancel or channel close, `RabbitMQConsumerStatus` + consumer health check, drain on shutdown, `ParkAfter` for broker-made retries, `throw-fake-exception` hook removed. One review round: 4 findings fixed with tests. Intake adoption waits for the package. |
 | 2026-11-13 | Owner decisions: #13 webhooks require a signing secret (refused on save without `secretRef`; never sent unsigned; tests `PlanningApiTests`, `WebhookProviderTests.Nothing_is_sent_unsigned`); #15 a webhook 400 is `Content` (code unchanged; plan corrected). Deferred #13, #15 closed; p1-g5 note updated. |
 | 2026-11-13 | p1-05 → done; M2 → clean (re-check: no bugs; added a test that readiness uses the intake's own broker check). |
