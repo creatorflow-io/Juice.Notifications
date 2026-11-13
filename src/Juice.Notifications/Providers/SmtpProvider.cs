@@ -28,6 +28,8 @@ namespace Juice.Notifications.Providers
 
         public bool Idempotent => false;
 
+        public bool RequiresSecret => false;
+
         private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
         public string? CheckSettings(string settings)

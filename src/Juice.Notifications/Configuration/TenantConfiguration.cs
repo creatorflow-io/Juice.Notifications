@@ -178,6 +178,11 @@ namespace Juice.Notifications.Configuration
             {
                 errors.Add(new FieldError("/secretRef", $"A secret is named, never sent: env:{delivery.Value.ApiSecretEnvPrefix}NAME, or file: in the deployment's secret folder."));
             }
+            else if (provider is { RequiresSecret: true } && (r.SecretRef ?? existing?.SecretRef) is null)
+            {
+                // Webhooks are always signed (D14): an integration without its signing secret is refused, not sent unsigned.
+                errors.Add(new FieldError("/secretRef", $"A {kind} integration signs what it sends: name its secret, env:{delivery.Value.ApiSecretEnvPrefix}NAME or file: in the deployment's secret folder."));
+            }
             // Checked when they are new or change, or the kind does: a stored integration saved under an older check can still be disabled or
             // reprioritized without rewriting its settings.
             var settingsChange = r.Settings is not null || existing is null || (r.Kind is not null && r.Kind != existing.Kind);

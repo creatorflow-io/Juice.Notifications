@@ -22,8 +22,6 @@ namespace Juice.Notifications.IntegrationTests
     {
         internal static CancellationToken Ct => TestContext.Current.CancellationToken;
         internal static readonly string Tenant = $"/api/v1/tenants/{ProducerApp.Tenant}";
-        private const string HookSecretVariable = "NOTIFICATIONS_SECRET_TEST_HOOK";
-        private const string HookSecret = "test-signing-secret";
 
         internal static JsonElement Json(string json) => JsonElement.Parse(json);
 
@@ -92,12 +90,11 @@ namespace Juice.Notifications.IntegrationTests
         {
             LocalStack.RequireAvailable();
             await using var receiver = await Receiver.StartAsync(503, 200);
-            Environment.SetEnvironmentVariable(HookSecretVariable, HookSecret);
             using var admin = producer.App.Client(await LocalStack.AdminTokenAsync());
             using var client = await producer.ProducerAsync();
             var target = "hook-" + Short();
             await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [receiver.Port]), Ct));
-            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/hooks", new PutIntegrationBody("webhook", "webhook", null, "env:" + HookSecretVariable, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/hooks/targets/{target}", new PutTargetBody(receiver.Url, null, null), Ct));
 
             var id = await SendThroughRouteAsync(admin, client, "hooks", target, """{ "webhook": "passthrough" }""");
@@ -108,7 +105,7 @@ namespace Juice.Notifications.IntegrationTests
             var requests = receiver.Requests.ToList();
             Assert.Equal(2, requests.Count);
             Assert.All(requests, r => Assert.Equal(delivery.Id.ToString(), r.Id));
-            Assert.All(requests, r => Assert.True(WebhookSigner.Verify(HookSecret, r.Id, r.Timestamp, r.Signature, r.Body, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5))));
+            Assert.All(requests, r => Assert.True(WebhookSigner.Verify(TestHooks.Secret, r.Id, r.Timestamp, r.Signature, r.Body, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5))));
             var envelope = JsonElement.Parse(requests[1].Body);
             Assert.Equal(id, envelope.GetProperty("id").GetGuid());
             Assert.Equal("db-1", envelope.GetProperty("data").GetProperty("host").GetString());
@@ -128,7 +125,7 @@ namespace Juice.Notifications.IntegrationTests
             using var client = await producer.ProducerAsync();
             var target = "gone-" + Short();
             await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [receiver.Port]), Ct));
-            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/plain-hooks", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/plain-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/plain-hooks/targets/{target}", new PutTargetBody(receiver.Url, null, null), Ct));
 
             var detail = await DeliveredAsync(client, await SendThroughRouteAsync(admin, client, "plain-hooks", target, """{ "webhook": "passthrough" }"""));
@@ -147,7 +144,7 @@ namespace Juice.Notifications.IntegrationTests
             var target = "local-" + Short();
             // Refused as an allowlist entry, and blocked at send time whatever the allowlist says.
             Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody("127.0.0.1", [5280]), Ct)).StatusCode);
-            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/plain-hooks", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/plain-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/plain-hooks/targets/{target}", new PutTargetBody("http://127.0.0.1:5280/hook", null, null), Ct));
 
             var detail = await DeliveredAsync(client, await SendThroughRouteAsync(admin, client, "plain-hooks", target, """{ "webhook": "passthrough" }"""));

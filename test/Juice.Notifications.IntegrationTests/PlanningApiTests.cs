@@ -127,7 +127,13 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(HttpStatusCode.BadRequest, hostSecret.StatusCode);
             var noServer = await admin.PutAsJsonAsync($"{Tenant}/integrations/x", new PutIntegrationBody("email", "smtp", Json("""{ "server": "elsewhere", "from": "a@b.c" }"""), null, null, null), Ct);
             Assert.Equal(HttpStatusCode.BadRequest, noServer.StatusCode);
+            // Webhooks are always signed (deferred #13): one without a secret is refused, and a change that leaves the secret out keeps it.
+            var unsigned = await admin.PutAsJsonAsync($"{Tenant}/integrations/x", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct);
+            Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidConfiguration), (unsigned.StatusCode, await CodeAsync(unsigned)));
+            Assert.Contains("/secretRef", await unsigned.Content.ReadAsStringAsync(Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/hooks", new PutIntegrationBody("webhook", "webhook", null, "env:NOTIFICATIONS_SECRET_HOOK", null, null), Ct));
+            var kept = await admin.PutAsJsonAsync($"{Tenant}/integrations/hooks", new PutIntegrationBody(null, null, null, null, 5, null), Ct);
+            Assert.Equal("env:NOTIFICATIONS_SECRET_HOOK", (await kept.Content.ReadFromJsonAsync<IntegrationResponse>(Ct))!.SecretRef);
             var channelChange = await admin.PutAsJsonAsync($"{Tenant}/integrations/hooks", new PutIntegrationBody("email", "smtp", null, null, null, null), Ct);
             Assert.Equal(HttpStatusCode.BadRequest, channelChange.StatusCode);
 
@@ -202,12 +208,12 @@ namespace Juice.Notifications.IntegrationTests
             LocalStack.RequireAvailable();
             using var tenantAdmin = producer.App.Client(await LocalStack.TenantAdminTokenAsync());
 
-            await Ok(tenantAdmin.PutAsJsonAsync($"{Tenant}/integrations/own-hooks", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct));
+            await Ok(tenantAdmin.PutAsJsonAsync($"{Tenant}/integrations/own-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
             Assert.Equal(HttpStatusCode.OK, (await tenantAdmin.GetAsync($"{Tenant}/integrations", Ct)).StatusCode);
 
             foreach (var other in new[] { ProducerApp.OtherTenant, Guid.CreateVersion7() })
             {
-                var refused = await tenantAdmin.PutAsJsonAsync($"/api/v1/tenants/{other}/integrations/x", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct);
+                var refused = await tenantAdmin.PutAsJsonAsync($"/api/v1/tenants/{other}/integrations/x", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct);
                 Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantAdmin), (refused.StatusCode, await CodeAsync(refused)));
                 Assert.Equal(HttpStatusCode.Forbidden, (await tenantAdmin.GetAsync($"/api/v1/tenants/{other}/routes", Ct)).StatusCode);
             }

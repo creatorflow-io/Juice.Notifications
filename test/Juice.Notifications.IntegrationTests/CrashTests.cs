@@ -38,7 +38,7 @@ namespace Juice.Notifications.IntegrationTests
                 await Ok(admin.PutAsync($"/api/v1/applications/crash/tenants/{tenant}", null, Ct));
                 var t = $"/api/v1/tenants/{tenant}";
                 await Ok(admin.PutAsJsonAsync($"{t}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [receiver.Port]), Ct));
-                await Ok(admin.PutAsJsonAsync($"{t}/integrations/hooks", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct));
+                await Ok(admin.PutAsJsonAsync($"{t}/integrations/hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
                 await Ok(admin.PutAsJsonAsync($"{t}/integrations/hooks/targets/receiver", new PutTargetBody(receiver.Url, null, null), Ct));
                 await Ok(admin.PutAsJsonAsync($"{t}/routes/all", new PutRouteBody(DeliveryTests.Json("""{ "type": "crash.*" }"""), ["receiver"], null), Ct));
                 await Ok(producer.PutAsJsonAsync("/api/v1/applications/crash/types", new DeclareTypeBody("crash.happened", "Crash", "alerts", null, null,

@@ -20,6 +20,12 @@ var api = settings.Get("NOTIFICATIONS_API", "http://localhost:5280");
 var tenant = settings.Get("TENANT", "0193f0aa-0000-7000-8000-0000000000a1");
 var mailbox = settings.Get("MAILBOX", "ops@example.com");
 var webhookSecret = settings.Get("SAMPLE_WEBHOOK_SECRET", "");
+if (webhookSecret.Length == 0)
+{
+    // Webhooks are always signed: the service refuses a webhook integration without its secret.
+    Console.Error.WriteLine("SAMPLE_WEBHOOK_SECRET is not set: run deploy/local/scripts/init.sh, then start the service with run-app.sh or the app service.");
+    return 1;
+}
 var tokenUrl = settings.Get("TOKEN_URL", "http://127.0.0.1:8081/realms/juice/protocol/openid-connect/token");
 
 using var http = new HttpClient();
@@ -39,7 +45,7 @@ await Step("Email integration (deployment SMTP server 'local' = Mailpit)", admin
 await Step($"Target: {mailbox}", admin.PutAsJsonAsync($"{t}/integrations/mail/targets/ops", new PutTargetBody(mailbox, null, null)));
 await Step("Webhook integration, signed with the secret the service reads from NOTIFICATIONS_SECRET_SAMPLE_HOOK",
     admin.PutAsJsonAsync($"{t}/integrations/sample-hooks", new PutIntegrationBody("webhook", "webhook", null,
-        webhookSecret.Length > 0 ? "env:NOTIFICATIONS_SECRET_SAMPLE_HOOK" : null, null, null)));
+        "env:NOTIFICATIONS_SECRET_SAMPLE_HOOK", null, null)));
 await Step("Target: this program's receiver", admin.PutAsJsonAsync($"{t}/integrations/sample-hooks/targets/sample-receiver", new PutTargetBody(receiver.Url, null, null)));
 await Step("Route: sample.disk.* in prod goes to both", admin.PutAsJsonAsync($"{t}/routes/sample-disk",
     new PutRouteBody(Json("""{ "type": "sample.disk.*", "labels": { "env": "prod" } }"""), ["ops", "sample-receiver"], null)));
@@ -72,14 +78,14 @@ foreach (var d in detail!.Deliveries)
 }
 foreach (var hook in receiver.Received)
 {
-    Console.WriteLine($"  webhook received: id {hook.Id}, signature {(webhookSecret.Length == 0 ? "not signed (no SAMPLE_WEBHOOK_SECRET)" : hook.Verified ? "verified" : "INVALID")}");
+    Console.WriteLine($"  webhook received: id {hook.Id}, signature {(hook.Verified ? "verified" : "INVALID")}");
 }
 var history = await admin.GetFromJsonAsync<DeliveryPageResponse>($"{t}/deliveries?request={accepted.Id}");
 Console.WriteLine($"\nHistory: {history!.Items.Count} deliveries for request {accepted.Id} (GET {t}/deliveries?request={accepted.Id}).");
 Console.WriteLine("Read the email in Mailpit: http://localhost:8026");
-// Both deliveries made and taken, and the webhook actually received (and verified when signed): an empty list is not a success.
+// Both deliveries made and taken, and the webhook actually received and its signature verified: an empty list is not a success.
 return detail.Deliveries.Count >= 2 && detail.Deliveries.All(d => d.Status is DeliveryStatus.Delivered or DeliveryStatus.Accepted)
-    && !receiver.Received.IsEmpty && receiver.Received.All(h => webhookSecret.Length == 0 || h.Verified) ? 0 : 1;
+    && !receiver.Received.IsEmpty && receiver.Received.All(h => h.Verified) ? 0 : 1;
 
 static JsonElement Json(string json) => JsonElement.Parse(json);
 

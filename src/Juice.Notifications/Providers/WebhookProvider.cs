@@ -58,6 +58,8 @@ namespace Juice.Notifications.Providers
 
         public bool Idempotent => false;
 
+        public bool RequiresSecret => true;
+
         public string? CheckSettings(string settings) => null;
 
         public async Task<SendResult> SendAsync(RenderedDelivery delivery, IntegrationContext integration, CancellationToken ct)
@@ -67,6 +69,12 @@ namespace Juice.Notifications.Providers
             {
                 return SendResult.Permanent(FailureCategory.Destination, "The target's address isn't an http or https URL.");
             }
+            if (integration.Secret is not { Length: > 0 } secret)
+            {
+                // Refused when saved (RequiresSecret); only a row stored before that check, or written around the API, has none. Nothing goes
+                // out unsigned. Provider: the integration is at fault, so another one may work (phase 4 failover).
+                return SendResult.Permanent(FailureCategory.Provider, "The integration names no signing secret; webhooks are always signed.");
+            }
             var id = delivery.DeliveryId.ToString();
             var timestamp = clock.GetUtcNow().ToUnixTimeSeconds();
             using var request = new HttpRequestMessage(HttpMethod.Post, url)
@@ -75,10 +83,7 @@ namespace Juice.Notifications.Providers
             };
             request.Headers.Add(WebhookSigner.IdHeader, id);
             request.Headers.Add(WebhookSigner.TimestampHeader, timestamp.ToString());
-            if (integration.Secret is { } secret)
-            {
-                request.Headers.Add(WebhookSigner.SignatureHeader, WebhookSigner.Sign(secret, id, timestamp, content.Body));
-            }
+            request.Headers.Add(WebhookSigner.SignatureHeader, WebhookSigner.Sign(secret, id, timestamp, content.Body));
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(options.Value.ConnectTimeout + options.Value.RequestTimeout);
             HttpResponseMessage response;

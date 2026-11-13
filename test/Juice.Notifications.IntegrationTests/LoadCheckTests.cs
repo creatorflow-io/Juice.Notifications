@@ -37,7 +37,7 @@ namespace Juice.Notifications.IntegrationTests
             var type = $"{ProducerApp.Key}.load{Short()}";
             await Ok(client.PutAsJsonAsync($"/api/v1/applications/{ProducerApp.Key}/types", new DeclareTypeBody(type, "Load", "alerts", null, null,
                 null, null, DeliveryTests.Json("""{ "type": "object" }"""), null, null, null, DeliveryTests.Json("""{ "webhook": "passthrough" }""")), Ct));
-            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/load-hooks", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/load-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
             foreach (var (receiver, name) in new[] { (first, "load-a"), (second, "load-b") })
             {
                 await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [first.Port, second.Port]), Ct));

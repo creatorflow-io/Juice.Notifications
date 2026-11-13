@@ -48,7 +48,7 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | p1-g2 | gate | Proof 2: duplicate request creates no new work | M9 | done | `ProducerApiTests.Concurrent_identical_requests…` |
 | p1-g3 | gate | Proof 3: planning safe under retries and concurrency | M9 | done | `PlannerConcurrencyTests` |
 | p1-g4 | gate | Proof 4: no lost claims; stale writes discarded | M9 | done | `DispatcherTests.Dispatcher_killed_after_send…`, `ClaimConcurrencyTests` |
-| p1-g5 | gate | Proof 5: unknown-outcome policy; no failover | M9 | done | `DispatcherTests`, `WebhookProviderTests`, `SmtpProviderTests`; 400 → Content pending owner decision (deferred #15). |
+| p1-g5 | gate | Proof 5: unknown-outcome policy; no failover | M9 | done | `DispatcherTests`, `WebhookProviderTests`, `SmtpProviderTests`; 400 → Content (owner decision 13 Nov 2026, deferred #15). |
 | p1-g6 | gate | Proof 6: history records every attempt; stable id | M9 | done | `HistoryTests.Delivery_id_is_stable…`, `TelemetryTests` |
 
 ## Log
@@ -57,6 +57,7 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
+| 2026-11-13 | Owner decisions: #13 webhooks require a signing secret (refused on save without `secretRef`; never sent unsigned; tests `PlanningApiTests`, `WebhookProviderTests.Nothing_is_sent_unsigned`); #15 a webhook 400 is `Content` (code unchanged; plan corrected). Deferred #13, #15 closed; p1-g5 note updated. |
 | 2026-11-13 | p1-05 → done; M2 → clean (re-check: no bugs; added a test that readiness uses the intake's own broker check). |
 | 2026-11-13 | p1-05 confirmation: one bug (broker health check still Unhealthy), fixed with its own check; checked live: broker stopped → /health/ready 200 Degraded, consumer back after restart. Re-check running. |
 | 2026-11-13 | M2 → confirm: p1-05 round 2 fixes (trace kept from the producer, StartTimeout bounds start, broker health Degraded, update race order, refusal test waits past the retry); deferred #21 (shutdown drain, Juice). |

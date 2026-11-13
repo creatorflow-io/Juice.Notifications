@@ -26,6 +26,7 @@ namespace Juice.Notifications.IntegrationTests
         public string Channel => channel;
         public string Kind => kind;
         public bool Idempotent => false;
+        public bool RequiresSecret => false;
 
         public string? CheckSettings(string settings) => null;
 

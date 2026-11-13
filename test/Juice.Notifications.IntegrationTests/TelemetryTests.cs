@@ -28,7 +28,7 @@ namespace Juice.Notifications.IntegrationTests
             using var client = await producer.ProducerAsync();
             var target = "trace-" + Short();
             await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [receiver.Port]), Ct));
-            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/trace-hooks", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/trace-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/trace-hooks/targets/{target}", new PutTargetBody(receiver.Url, null, null), Ct));
             var type = $"{ProducerApp.Key}.t{Short()}";
             await Ok(client.PutAsJsonAsync($"/api/v1/applications/{ProducerApp.Key}/types", new DeclareTypeBody(type, "Traced", "alerts", null, null,

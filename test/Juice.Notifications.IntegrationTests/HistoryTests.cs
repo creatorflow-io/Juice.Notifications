@@ -15,7 +15,7 @@ namespace Juice.Notifications.IntegrationTests
             var client = await producer.ProducerAsync();
             var target = "hist-" + Short();
             await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [receiver.Port]), Ct));
-            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/history-hooks", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/history-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/history-hooks/targets/{target}", new PutTargetBody(receiver.Url, null, null), Ct));
             var request = await SendThroughRouteAsync(admin, client, "history-hooks", target, """{ "webhook": "passthrough" }""");
             var delivery = Assert.Single((await DeliveredAsync(client, request)).Deliveries);
@@ -83,7 +83,7 @@ namespace Juice.Notifications.IntegrationTests
             using var client = await producer.ProducerAsync();
             var target = "huge-" + Short();
             await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [receiver.Port]), Ct));
-            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/history-hooks", new PutIntegrationBody("webhook", "webhook", null, null, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/history-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/history-hooks/targets/{target}", new PutTargetBody(receiver.Url, null, null), Ct));
             var request = await SendThroughRouteAsync(admin, client, "history-hooks", target, """{ "webhook": "{{ data.host | string.pad_left 300000 }}" }""");
 

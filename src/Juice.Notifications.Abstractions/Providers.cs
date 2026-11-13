@@ -34,6 +34,12 @@ namespace Juice.Notifications
         /// <summary>Whether the provider accepts the delivery id as an idempotency key, which makes retrying after an unknown outcome safe.</summary>
         bool Idempotent { get; }
 
+        /// <summary>
+        /// Whether an integration of this kind must name a secret (<c>secretRef</c>). Webhooks are always signed (design D14, §9): one without a
+        /// signing secret is refused when saved, and a stored one is never sent unsigned.
+        /// </summary>
+        bool RequiresSecret { get; }
+
         /// <summary>Checks an integration's settings when it is saved; null when they are fine.</summary>
         string? CheckSettings(string settings);
 

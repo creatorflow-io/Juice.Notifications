@@ -223,7 +223,7 @@ M4–M5.
   - backoff schedule;
   - a timeout on a webhook retries with the same id, and the receiver sees the id twice (**proof 5**);
   - an SMTP drop after `DATA` doesn't retry (normal type) and retries once (mandatory type);
-  - a 400 from a webhook fails as `Destination` after one attempt;
+  - a 400 from a webhook fails as `Content` after one attempt (owner decision, deferred #15);
   - a dispatcher killed after sending and before persisting: the delivery is re-sent after its lease with the same id (**proof 4**).
 
 ### M8: history, dead letters, operations, host (`p1-15`, `p1-16`, `p1-17`)
@@ -262,7 +262,7 @@ M4–M5.
 | 2 | A duplicate request creates no new work | `Concurrent_identical_requests_make_one_request_one_notification_and_one_delivery_per_destination` |
 | 3 | Planning is safe under retries and concurrent workers | `Planning_the_same_notification_concurrently_or_after_a_fault_yields_one_set_of_recipients` |
 | 4 | A worker crash never loses a claimed delivery; stale writes are discarded | `Dispatcher_killed_after_send_resends_after_lease_with_the_same_id`, `Worker_past_its_lease_cannot_overwrite_newer_state` |
-| 5 | Timeouts follow the unknown-outcome policy; no failover on destination or content failures | `Webhook_timeout_retries_with_the_same_webhook_id`, `Smtp_drop_after_data_is_not_retried_for_a_normal_type`, `Webhook_400_fails_as_destination_without_retry` |
+| 5 | Timeouts follow the unknown-outcome policy; no failover on destination or content failures | `Webhook_timeout_retries_with_the_same_webhook_id`, `Smtp_drop_after_data_is_not_retried_for_a_normal_type`, `Webhook_400_fails_as_content_without_retry` |
 | 6 | History shows every attempt; the delivery id never changes | `Delivery_id_is_stable_across_attempts_history_and_dead_letter_retry` |
 
 ---

@@ -226,7 +226,7 @@ namespace Juice.Notifications.IntegrationTests
             return receiver;
         }
 
-        private async Task<SendResult> SendAsync(string url, bool allowHttp = true, Guid? deliveryId = null)
+        private async Task<SendResult> SendAsync(string url, bool allowHttp = true, Guid? deliveryId = null, string? secret = Secret)
         {
             using var provider = new WebhookProvider(fixture.Services!.GetRequiredService<IServiceScopeFactory>(), Options.Create(new DeliveryOptions
             {
@@ -236,7 +236,7 @@ namespace Juice.Notifications.IntegrationTests
             }), TimeProvider.System);
             var content = JsonSerializer.Serialize(new WebhookContent("application/json", Body));
             var delivery = new RenderedDelivery(deliveryId ?? Guid.NewGuid(), _tenant, Channels.Webhook, content, url, 1, NotificationPriority.Normal, false);
-            return await provider.SendAsync(delivery, new IntegrationContext(Guid.NewGuid(), "hooks", "webhook", "{}", Secret), Ct);
+            return await provider.SendAsync(delivery, new IntegrationContext(Guid.NewGuid(), "hooks", "webhook", "{}", secret), Ct);
         }
 
         private static void Is(SendResult result, AttemptOutcome outcome, FailureCategory? category, int? status = null)
@@ -263,6 +263,20 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(id.ToString(), request.Headers[WebhookSigner.IdHeader]);
             Assert.True(WebhookSigner.Verify(Secret, request.Headers[WebhookSigner.IdHeader], request.Headers[WebhookSigner.TimestampHeader],
                 request.Headers[WebhookSigner.SignatureHeader], request.Body, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5)));
+        }
+
+        /// <summary>Webhooks are always signed (deferred #13): a stored integration without a secret fails at the provider and sends nothing.</summary>
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        public async Task Nothing_is_sent_unsigned(string? secret)
+        {
+            LocalStack.RequireAvailable();
+            await using var receiver = await ReceiverAsync(Status(200));
+
+            Is(await SendAsync(receiver.Url(), secret: secret), AttemptOutcome.PermanentFailure, FailureCategory.Provider);
+
+            Assert.Empty(receiver.Requests);
         }
 
         /// <summary>The status is the outcome: 2xx delivered; 429 rate-limited and 408 or 5xx retryable; 404 or 410 the destination's; other 4xx the content's.</summary>

@@ -435,7 +435,7 @@ correlation's state. The behavior comes from the **type**, never from the group'
 
 | Channel | Providers (phase) | Notes |
 |---|---|---|
-| Webhook | built-in (1) | Signed (D14), SSRF contract (§13.1) |
+| Webhook | built-in (1) | Always signed (D14): an integration names its signing secret; SSRF contract (§13.1) |
 | Email | SMTP (1); SES, SendGrid (4) | Bounce and complaint callbacks mark a contact point unhealthy |
 | In-app inbox | built-in (2) | API plus SignalR; `@juice-js/notifications` for Angular |
 | Slack | incoming webhook, Slack app (4) | The app adds per-user DMs and interactive buttons |
