@@ -232,6 +232,15 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         [Fact]
+        public async Task Readiness_includes_the_broker_and_is_healthy_when_connected()
+        {
+            LocalStack.RequireAvailable();
+            using var anonymous = intake.App.Client();
+            var ready = await anonymous.GetAsync("/health/ready", Ct);
+            Assert.Equal((HttpStatusCode.OK, "Healthy"), (ready.StatusCode, await ready.Content.ReadAsStringAsync(Ct)));
+        }
+
+        [Fact]
         public async Task The_request_carries_the_trace_the_producer_published_in()
         {
             LocalStack.RequireAvailable();

@@ -103,10 +103,11 @@ namespace Juice.Notifications.Messaging
                     .ConfigureQos(options.Prefetch)
                     .Subscribe<NotificationRequested, NotificationRequestedHandler>(RoutingKey));
             }));
-            // Degraded, not unhealthy: HTTP is the main way in, and a broker outage mustn't take the service out of rotation. /health/ready
-            // still names it (200, status Degraded). The timeout keeps a probe from waiting on Juice's reconnect.
-            services.AddHealthChecks().AddRabbitMQHealthCheck(ConnectionName, "rabbitmq", Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded,
-                tags: ["ready"], timeout: TimeSpan.FromSeconds(5));
+            // Not Juice's RabbitMQ check: it answers Unhealthy itself (so a registration's failure status never applies) and reconnects inside
+            // the probe. A broker outage mustn't take the HTTP API out of rotation.
+            services.AddHealthChecks().Add(new Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckRegistration("rabbitmq",
+                sp => new BrokerHealthCheck(sp.GetRequiredKeyedService<Juice.EventBus.RabbitMQ.IRabbitMQPersistentConnection>(ConnectionName)),
+                Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded, ["ready"], TimeSpan.FromSeconds(5)));
             return services;
         }
 
