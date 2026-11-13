@@ -30,8 +30,9 @@ namespace Juice.Notifications.Messaging
 
         /// <summary>
         /// The type's data: strings, dates among them, arrive as the text they were and integers exactly; a number with a fraction or an exponent
-        /// arrives as the nearest double (<c>1.10</c> as <c>1.1</c>, <c>1e2</c> as <c>100.0</c>), as most JSON parsers read it. Over HTTP the data
-        /// keeps its exact text; a producer that needs more than double precision sends it as a string.
+        /// arrives as the nearest double (<c>1.10</c> as <c>1.1</c>, <c>1e2</c> as <c>100.0</c>), as most JSON parsers read it, and one beyond a
+        /// double (<c>1e400</c>) makes the message unreadable, so it is parked. Over HTTP the data keeps its exact text; a producer that needs more
+        /// than double precision sends it as a string.
         /// </summary>
         [JsonConverter(typeof(RawJsonConverter))]
         public JsonElement? Data { get; init; }
@@ -69,7 +70,9 @@ namespace Juice.Notifications.Messaging
             try
             {
                 using var text = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
-                using (var writer = new JsonTextWriter(text) { DateFormatHandling = DateFormatHandling.IsoDateFormat })
+                // A number beyond a double (1e400) reads as infinity. Newtonsoft writes that as the string "Infinity" by default, which would be
+                // accepted as data the producer never sent. As a bare symbol it isn't JSON, so the parse below fails and the message is unreadable.
+                using (var writer = new JsonTextWriter(text) { DateFormatHandling = DateFormatHandling.IsoDateFormat, FloatFormatHandling = FloatFormatHandling.Symbol })
                 {
                     writer.WriteToken(reader, writeChildren: true);
                 }

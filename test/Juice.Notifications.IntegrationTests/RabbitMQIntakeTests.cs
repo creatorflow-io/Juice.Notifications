@@ -49,6 +49,7 @@ namespace Juice.Notifications.IntegrationTests
                 host.UseSetting("Intake:RabbitMQ:UserName", "notifications");
                 host.UseSetting("Intake:RabbitMQ:Password", LocalStack.Available ? LocalStack.Secret("RABBITMQ_PASSWORD") : "unused");
                 host.UseSetting("Intake:RabbitMQ:RetryDelay", "00:00:01");
+                host.UseSetting("Intake:RabbitMQ:ParkAfter", "00:00:02"); // 3 attempts
                 host.ConfigureServices(services => services.AddSingleton(Failures).AddScoped<IIntegrationEventPipelineBehavior>(sp => sp.GetRequiredService<FailOnce>()));
             });
         }
@@ -130,12 +131,14 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
 
-        /// <summary>Fails the first handling of the messages named, as a database outage would, and counts every handling.</summary>
+        /// <summary>Fails the first handling of the messages in <see cref="Keys"/>, and every handling of those in <see cref="Always"/>, as a database
+        /// outage would, and counts every handling.</summary>
         public sealed class FailOnce : IIntegrationEventPipelineBehavior
         {
             public ConcurrentDictionary<string, int> Handled { get; } = new();
             public ConcurrentDictionary<string, string?> Publishers { get; } = new();
             public HashSet<string> Keys { get; } = [];
+            public HashSet<string> Always { get; } = [];
 
             public int Order => 0;
 
@@ -148,7 +151,7 @@ namespace Juice.Notifications.IntegrationTests
                     Publishers[key + "#" + times] = MessageContext.Current.PublisherId;
                     lock (Keys)
                     {
-                        if (times == 1 && Keys.Contains(key))
+                        if ((times == 1 && Keys.Contains(key)) || Always.Contains(key))
                         {
                             return ValueTask.FromResult(EventDispatchResult.Failure);
                         }
@@ -201,6 +204,10 @@ namespace Juice.Notifications.IntegrationTests
             throw new TimeoutException($"No request was accepted under {key}.");
         }
 
+        /// <summary>A header as the broker returns it (bytes), as text.</summary>
+        private static string? Text(IDictionary<string, object?>? headers, string name)
+            => headers?.TryGetValue(name, out var value) == true ? value is byte[] bytes ? Encoding.UTF8.GetString(bytes) : value?.ToString() : null;
+
         private async Task<bool> StoredAsync(string key)
         {
             await using var db = intake.App.Database.Context();
@@ -239,13 +246,12 @@ namespace Juice.Notifications.IntegrationTests
             var ready = await anonymous.GetAsync("/health/ready", Ct);
             Assert.Equal((HttpStatusCode.OK, "Healthy"), (ready.StatusCode, await ready.Content.ReadAsStringAsync(Ct)));
 
-            // And the broker's check is the intake's own, which reports an outage as Degraded (BrokerHealthCheckTests): Juice's answers Unhealthy,
-            // and /health/ready would then be 503 while HTTP intake is fine.
+            // And it is the consumer's check, registered Degraded: a broker outage leaves /health/ready at 200 while HTTP intake is fine.
             var checks = intake.App.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckServiceOptions>>().Value;
             var broker = Assert.Single(checks.Registrations, r => r.Name == "rabbitmq");
             Assert.Equal(Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded, broker.FailureStatus);
             Assert.Contains("ready", broker.Tags);
-            Assert.IsType<BrokerHealthCheck>(broker.Factory(intake.App.Services));
+            Assert.IsType<Juice.EventBus.RabbitMQ.HealthChecks.RabbitMQConsumerHealthCheck>(broker.Factory(intake.App.Services));
         }
 
         [Fact]
@@ -376,6 +382,55 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(2, intake.Failures.Handled[key]);
             // The broker dead-lettered it and brought it back: user_id kept, so the second handling still knew the application.
             Assert.Equal(intake.Producer, intake.Failures.Publishers[key + "#2"]);
+        }
+
+        [Fact]
+        public async Task A_message_that_keeps_failing_is_parked_after_ParkAfter_and_one_that_cant_be_read_at_once()
+        {
+            LocalStack.RequireAvailable();
+            var failing = "q-" + Short();
+            var unreadable = "q-" + Short();
+            var infinite = "q-" + Short();
+            lock (intake.Failures.Keys)
+            {
+                intake.Failures.Always.Add(failing);
+            }
+            await PublishAsync(intake.Producer, intake.Producer, Message(failing));
+            await PublishAsync(intake.Producer, intake.Producer, Message(unreadable, data: """{ "at": """)); // not JSON
+            await PublishAsync(intake.Producer, intake.Producer, Message(infinite, data: """{ "at": 1e400 }""")); // beyond a double: not as "Infinity"
+
+            // No other test parks, so this one may take whatever is on the parked queue.
+            var parked = new Dictionary<string, IReadOnlyBasicProperties>();
+            await using (var connection = await intake.ConnectAsServiceAsync())
+            await using (var channel = await connection.CreateChannelAsync(cancellationToken: Ct))
+            {
+                for (var i = 0; i < 150 && parked.Count < 3; i++)
+                {
+                    if (await channel.BasicGetAsync("notifications.requests.parked", autoAck: true, Ct) is { } got)
+                    {
+                        var body = Encoding.UTF8.GetString(got.Body.Span);
+                        parked[body.Contains(failing) ? failing : body.Contains(unreadable) ? unreadable : body.Contains(infinite) ? infinite : body] = got.BasicProperties;
+                        continue;
+                    }
+                    await Task.Delay(100, Ct);
+                }
+            }
+
+            Assert.Equal("MaxAttemptsReached_3", Text(parked[failing].Headers, "x-death-reason"));
+            Assert.Equal(3, intake.Failures.Handled[failing]); // the first attempt and two retries within ParkAfter, then no more
+            Assert.Equal("DeserializationFailed", Text(parked[unreadable].Headers, "x-death-reason"));
+            Assert.False(intake.Failures.Handled.ContainsKey(unreadable)); // never reached the handler
+            Assert.Equal("DeserializationFailed", Text(parked[infinite].Headers, "x-death-reason"));
+            Assert.False(intake.Failures.Handled.ContainsKey(infinite));
+            Assert.False(await StoredAsync(failing));
+            Assert.False(await StoredAsync(unreadable));
+            Assert.False(await StoredAsync(infinite));
+            // Parked by the service, so no publisher on the copy: replayed, it would be refused.
+            Assert.Null(parked[failing].UserId);
+
+            // And it stays parked: wait past RetryDelay, it isn't handled again.
+            await Task.Delay(TimeSpan.FromSeconds(2.5), Ct);
+            Assert.Equal(3, intake.Failures.Handled[failing]);
         }
     }
 }

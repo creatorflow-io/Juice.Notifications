@@ -77,6 +77,10 @@ default user, and declares its topology at start:
 | `notifications` | direct exchange | producers publish `NotificationRequested` here, routing key `NotificationRequested` |
 | `notifications.requests` | queue | the intake; a failed message dead-letters to the delay queue |
 | `notifications.requests.retry` | fanout exchange and queue | holds a failed message for `RetryDelay` (30 s), then returns it to `notifications` |
+| `notifications.requests.parked` | fanout exchange and queue | a message still failing after `ParkAfter` (1 day), or one that can't be read; kept until removed by hand |
+
+A parked message is a copy the service published, so it has no `user_id`: inspect it (its `x-death-reason` header says why), and have the
+producer send it again once fixed. Published back to `notifications` as it is, it would be refused.
 
 A producer publishes as a broker user of its own, which the broker checks against the message's `user_id` (Juice:
 `AddProducer(..., p => p.StampUserId())`), and the application names that user as its `brokerUser`. A broker user for an application that
@@ -87,6 +91,9 @@ docker compose exec rabbitmq rabbitmqctl add_user sample-producer "<password>"
 docker compose exec rabbitmq rabbitmqctl set_permissions -p / sample-producer '^$' '^notifications$' '^$'
 # then, as a platform admin: PUT /api/v1/applications/sample { "brokerUser": "sample-producer" }
 ```
+
+`/health/ready` includes the intake's consumer (`rabbitmq`): Degraded, never unhealthy, while it isn't consuming (broker away, or the
+consumer cancelled and restarting), so HTTP stays in rotation.
 
 To change `RetryDelay` or the queues' arguments (a quorum queue, say), delete the queues that differ first: the service refuses to start when
 the broker already has them with other arguments. The delay queue can go at any time; move or drain `notifications.requests` before
