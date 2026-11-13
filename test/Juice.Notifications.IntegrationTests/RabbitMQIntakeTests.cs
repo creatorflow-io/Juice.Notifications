@@ -108,6 +108,12 @@ namespace Juice.Notifications.IntegrationTests
             HostName = "127.0.0.1", Port = 5673, VirtualHost = VirtualHost, UserName = user, Password = Password,
         }.CreateConnectionAsync(Ct);
 
+        /// <summary>A connection to the test's virtual host as the service's own broker user, which may declare anything there.</summary>
+        public Task<IConnection> ConnectAsServiceAsync() => new ConnectionFactory
+        {
+            HostName = "127.0.0.1", Port = 5673, VirtualHost = VirtualHost, UserName = "notifications", Password = LocalStack.Secret("RABBITMQ_PASSWORD"),
+        }.CreateConnectionAsync(Ct);
+
         public async ValueTask DisposeAsync()
         {
             await App.DisposeAsync();
@@ -205,8 +211,8 @@ namespace Juice.Notifications.IntegrationTests
         {
             LocalStack.RequireAvailable();
             var key = "q-" + Short();
-            // Juice's serializer reads date-like strings as dates and numbers as doubles; the data must reach the type as written.
-            await PublishAsync(intake.Producer, intake.Producer, Message(key, """{ "at": "2026-11-13T08:00:00Z", "ratio": 1.10, "big": 12345678901234567890 }"""));
+            // Juice's serializer reads date-like strings as dates; the data must reach the type with its strings as written and integers exact.
+            await PublishAsync(intake.Producer, intake.Producer, Message(key, """{ "at": "2026-11-13T08:00:00Z", "ratio": 1.5, "big": 12345678901234567890 }"""));
 
             var request = await AcceptedAsync(key);
             await using (var db = intake.App.Database.Context())
@@ -215,7 +221,7 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.Equal((app.Id, Type, RabbitMQIntakeApp.Tenant), (request.ApplicationId, request.TypeKey, request.TenantId));
             }
             Assert.Contains("\"2026-11-13T08:00:00Z\"", request.Data);
-            Assert.Contains("1.10", request.Data);
+            Assert.Contains("1.5", request.Data);
             Assert.Contains("12345678901234567890", request.Data);
 
             using var producer = intake.App.Client(await LocalStack.ProducerTokenAsync());
@@ -280,6 +286,42 @@ namespace Juice.Notifications.IntegrationTests
             await using var db = intake.App.Database.Context();
             Assert.Equal(1, await db.Requests.CountAsync(r => r.IdempotencyKey == key, Ct));
             Assert.Equal(1, await db.Notifications.CountAsync(n => n.RequestId == request.Id, Ct));
+        }
+
+        [Fact]
+        public async Task The_host_refuses_to_start_at_once_when_the_broker_has_the_queues_with_other_arguments()
+        {
+            LocalStack.RequireAvailable();
+            var queue = "other-" + Short();
+            await using (var connection = await intake.ConnectAsServiceAsync())
+            await using (var channel = await connection.CreateChannelAsync(cancellationToken: Ct))
+            {
+                // As a first deployment with another RetryDelay left it.
+                await channel.QueueDeclareAsync(queue + ".retry", durable: true, exclusive: false, autoDelete: false,
+                    arguments: new Dictionary<string, object?> { ["x-message-ttl"] = 5000 }, cancellationToken: Ct);
+            }
+            var app = new NotificationsApp(host =>
+            {
+                host.UseSetting("Intake:RabbitMQ:Enabled", "true");
+                host.UseSetting("Intake:RabbitMQ:Host", "127.0.0.1");
+                host.UseSetting("Intake:RabbitMQ:Port", "5673");
+                host.UseSetting("Intake:RabbitMQ:VirtualHost", intake.VirtualHost);
+                host.UseSetting("Intake:RabbitMQ:UserName", "notifications");
+                host.UseSetting("Intake:RabbitMQ:Password", LocalStack.Secret("RABBITMQ_PASSWORD"));
+                host.UseSetting("Intake:RabbitMQ:Queue", queue);
+                host.UseSetting("Intake:RabbitMQ:RetryDelay", "00:00:01");
+            });
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                var refused = await Assert.ThrowsAnyAsync<Exception>(async () => await app.InitializeAsync());
+                Assert.Contains("other arguments", refused.ToString());
+                Assert.True(started.Elapsed < TimeSpan.FromSeconds(30), $"refused after {started.Elapsed}, not at once"); // not after StartTimeout (60 s)
+            }
+            finally
+            {
+                await app.DisposeAsync();
+            }
         }
 
         [Fact]

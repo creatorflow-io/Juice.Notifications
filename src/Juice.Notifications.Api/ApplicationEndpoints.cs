@@ -2,6 +2,7 @@ using Juice.MediatR;
 using Juice.Notifications.Api.Contracts;
 using Juice.Notifications.Applications;
 using Juice.Notifications.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Juice.Notifications.Api
 {
@@ -44,7 +45,7 @@ namespace Juice.Notifications.Api
                 catch (Exception ex) when (DbConflicts.Classify(ex) is { } conflict && Answer(command, conflict) is var answer && answer != Race.Unknown)
                 {
                     db.ChangeTracker.Clear();
-                    return await AnswerAsync(answer, key, ct);
+                    return await AnswerAsync(answer, key, (command as CreateApplication)?.ClientId, ct);
                 }
                 return outcome.Kind switch
                 {
@@ -84,12 +85,14 @@ namespace Juice.Notifications.Api
             /// What the command would have answered had it run after the transaction it raced. A link or unlink that lost answers 200 with the
             /// application as it is when read, like any read during concurrent changes: a third request that landed meanwhile shows in it.
             /// </summary>
-            private async Task<IResult> AnswerAsync(Race race, string key, CancellationToken ct)
+            private async Task<IResult> AnswerAsync(Race race, string key, string? clientId, CancellationToken ct)
             {
                 switch (race)
                 {
                     case Race.CreateTaken or Race.CreateBrokerUserTaken when await reader.GetAsync(key, ct) is not null:
                         return Problem(StatusCodes.Status409Conflict, ErrorCodes.ApplicationExists, $"An application with key '{key}' already exists.");
+                    // Which unique index PostgreSQL checked first is chance: answer in the handler's order, client id before broker user.
+                    case Race.CreateBrokerUserTaken when clientId is not null && await db.Applications.AsNoTracking().AnyAsync(a => a.ClientId == clientId, ct):
                     case Race.CreateTaken:
                     case Race.ClientIdTaken:
                         return Problem(StatusCodes.Status409Conflict, ErrorCodes.ClientIdInUse, "Another application already uses this client id.");

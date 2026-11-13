@@ -28,10 +28,16 @@ namespace Juice.Notifications.Messaging
         public string Exchange { get; set; } = "notifications";
         public string Queue { get; set; } = "notifications.requests";
 
-        /// <summary>How long a message whose handling failed waits before it comes back.</summary>
+        /// <summary>
+        /// How long a message whose handling failed waits before it comes back. It is the delay queue's message TTL: to change it, delete the
+        /// delay queue first, or the service refuses to start.
+        /// </summary>
         public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(30);
 
-        /// <summary>Unacknowledged messages the broker sends ahead; they are handled one at a time.</summary>
+        /// <summary>
+        /// Unacknowledged messages the broker sends ahead; they are handled one at a time. Passed to Juice, which in 10.13.0 sets it only after
+        /// consuming has started, so the broker ignores it and sends the whole queue ahead (docs/deferred.md #19).
+        /// </summary>
         public ushort Prefetch { get; set; } = 10;
 
         /// <summary>How long start-up waits for the broker before the host fails to start.</summary>
@@ -160,6 +166,14 @@ namespace Juice.Notifications.Messaging
                         await services.InitRabbitMQInfrastructureAsync();
                         return;
                     }
+                    catch (Exception ex) when (IsInequivalent(ex))
+                    {
+                        // Waiting won't change the broker's answer: the queues exist with other arguments.
+                        throw new InvalidOperationException(
+                            $"The broker already has the intake's exchanges or queues ({options.Exchange}, {options.Queue}, {options.RetryName}) with other " +
+                            "arguments, such as another RetryDelay or queue type. Delete the ones that differ (an empty delay queue can go at any time) " +
+                            "and start again.", ex);
+                    }
                     catch (Exception ex) when (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
                     {
                         logger.LogWarning(ex, "The RabbitMQ intake's broker {Host}:{Port} isn't reachable yet (attempt {Attempt}); trying again.",
@@ -170,6 +184,19 @@ namespace Juice.Notifications.Messaging
             }
 
             public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+            /// <summary>The broker refused a declaration that differs from what it has (406 PRECONDITION_FAILED, "inequivalent arg").</summary>
+            internal static bool IsInequivalent(Exception ex)
+            {
+                for (var e = ex; e is not null; e = e.InnerException)
+                {
+                    if (e is RabbitMQ.Client.Exceptions.OperationInterruptedException { ShutdownReason.ReplyCode: 406 })
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
         }
     }
 }

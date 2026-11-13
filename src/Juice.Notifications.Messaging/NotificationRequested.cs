@@ -29,8 +29,9 @@ namespace Juice.Notifications.Messaging
         public Dictionary<string, string>? Labels { get; init; }
 
         /// <summary>
-        /// The type's data, kept as sent: dates stay the text they were, and numbers keep their digits, except that an exponent is written out
-        /// (<c>1e2</c> arrives as <c>100</c>) and a negative zero loses its sign.
+        /// The type's data: strings, dates among them, arrive as the text they were and integers exactly; a number with a fraction or an exponent
+        /// arrives as the nearest double (<c>1.10</c> as <c>1.1</c>, <c>1e2</c> as <c>100.0</c>), as most JSON parsers read it. Over HTTP the data
+        /// keeps its exact text; a producer that needs more than double precision sends it as a string.
         /// </summary>
         [JsonConverter(typeof(RawJsonConverter))]
         public JsonElement? Data { get; init; }
@@ -47,8 +48,7 @@ namespace Juice.Notifications.Messaging
 
     /// <summary>
     /// Carries a JSON value through Juice's (Newtonsoft) message serializer unchanged. Read with Juice's settings, a date-like string would come back
-    /// as a date and be written in another format, and a number as a double; here the value's tokens are copied with dates left as strings and
-    /// numbers as decimals, and the result is parsed as a <see cref="JsonElement"/>. A repeated property name is kept, so intake reports it.
+    /// as a date and be written in another format, and a number as a double; here the value's tokens are copied with dates left as strings, and the result is parsed as a <see cref="JsonElement"/>. A repeated property name is kept, so intake reports it.
     /// </summary>
     public sealed class RawJsonConverter : JsonConverter
     {
@@ -64,7 +64,8 @@ namespace Juice.Notifications.Messaging
             var floats = reader.FloatParseHandling;
             // Takes effect from the next token on: the value's own first token is read already, and is a date only if the value is a lone string.
             reader.DateParseHandling = DateParseHandling.None;
-            reader.FloatParseHandling = FloatParseHandling.Decimal;
+            // Double, not decimal: a decimal turns 1e-30 into 0, and a value past 7.9e28 can't be read at all, which leaves the message unreadable.
+            reader.FloatParseHandling = FloatParseHandling.Double;
             try
             {
                 using var text = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);

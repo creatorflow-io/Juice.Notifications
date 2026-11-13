@@ -20,7 +20,6 @@ namespace Juice.Notifications.Tests
         [Theory]
         [InlineData("""{"at":"2026-11-13T08:00:00Z"}""")]
         [InlineData("""{"at":"2026-11-13T08:00:00.1234567+07:00","day":"2026-11-13"}""")]
-        [InlineData("""{"ratio":1.10,"tiny":0.000001,"big":12345678901234567890,"negative":-1.5}""")]
         [InlineData("""{"nested":{"list":[1,"2",true,null,{"at":"2026-01-01T00:00:00Z"}]},"text":"café \"quoted\""}""")]
         [InlineData("""{}""")]
         public void Data_reaches_intake_as_written(string data)
@@ -28,6 +27,23 @@ namespace Juice.Notifications.Tests
             var read = Read(data).Data!.Value;
             Assert.Equal(JsonSerializer.Serialize(JsonDocument.Parse(data).RootElement), JsonSerializer.Serialize(read));
         }
+
+        [Theory]
+        [InlineData("1.10", 1.1)]
+        [InlineData("1e-30", 1e-30)]
+        [InlineData("1E+2", 100.0)]
+        [InlineData("-1.5", -1.5)]
+        [InlineData("0.12345678901234567890123456789012", 0.12345678901234567890123456789012)]
+        [InlineData("123456789012345678901234567890.5", 123456789012345678901234567890.5)]
+        public void A_number_with_a_fraction_or_exponent_arrives_as_the_nearest_double(string written, double expected)
+            => Assert.Equal(expected, Read($"{{\"n\":{written}}}").Data!.Value.GetProperty("n").GetDouble());
+
+        [Theory]
+        [InlineData("12345678901234567890123")]
+        [InlineData("-42")]
+        [InlineData("0")]
+        public void An_integer_arrives_exactly(string written)
+            => Assert.Equal(written, Read($"{{\"n\":{written}}}").Data!.Value.GetProperty("n").GetRawText());
 
         [Fact]
         public void A_repeated_property_name_is_kept_for_intake_to_report()
@@ -60,10 +76,10 @@ namespace Juice.Notifications.Tests
         [Fact]
         public void A_producer_using_the_record_writes_the_data_as_it_holds_it()
         {
-            var sent = new NotificationRequested { Type = "a.b", Data = JsonDocument.Parse("""{"at":"2026-11-13T08:00:00Z","ratio":1.10}""").RootElement };
+            var sent = new NotificationRequested { Type = "a.b", Data = JsonDocument.Parse("""{"at":"2026-11-13T08:00:00Z","ratio":1.5}""").RootElement };
             var written = JsonConvert.SerializeObject(sent);
-            Assert.Contains("""{"at":"2026-11-13T08:00:00Z","ratio":1.10}""", written);
-            Assert.Equal("""{"at":"2026-11-13T08:00:00Z","ratio":1.10}""", JsonSerializer.Serialize(JsonConvert.DeserializeObject<NotificationRequested>(written, JuiceReadSettings)!.Data));
+            Assert.Contains("""{"at":"2026-11-13T08:00:00Z","ratio":1.5}""", written);
+            Assert.Equal("""{"at":"2026-11-13T08:00:00Z","ratio":1.5}""", JsonSerializer.Serialize(JsonConvert.DeserializeObject<NotificationRequested>(written, JuiceReadSettings)!.Data));
             Assert.Contains("\"Data\":null", JsonConvert.SerializeObject(new NotificationRequested()));
         }
     }

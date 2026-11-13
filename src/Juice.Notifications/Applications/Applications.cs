@@ -39,7 +39,7 @@ namespace Juice.Notifications.Applications
 
     /// <summary>
     /// Registers an application. Losing a race on the key, client id or broker user answers <c>application_exists</c>, <c>client_id_in_use</c> or
-    /// <c>broker_user_in_use</c>.
+    /// <c>broker_user_in_use</c>. <see cref="BrokerUser"/> null or <c>""</c>: none, the application sends over HTTP only.
     /// </summary>
     public sealed record CreateApplication(string Key, string Name, string ClientId, string? BrokerUser = null) : MessageBase, IRequest<Outcome<ApplicationView>>;
 
@@ -75,6 +75,8 @@ namespace Juice.Notifications.Applications
     {
         public async ValueTask<Outcome<ApplicationView>> Handle(CreateApplication request, CancellationToken cancellationToken)
         {
+            // "" is none, as on an update.
+            request = request.BrokerUser == "" ? request with { BrokerUser = null } : request;
             if ((ApplicationRules.CheckKey(request.Key) ?? ApplicationRules.CheckName(request.Name) ?? ApplicationRules.CheckClientId(request.ClientId)
                 ?? (request.BrokerUser is null ? null : ApplicationRules.CheckBrokerUser(request.BrokerUser))) is { } invalid)
             {

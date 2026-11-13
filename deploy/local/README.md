@@ -88,6 +88,10 @@ docker compose exec rabbitmq rabbitmqctl set_permissions -p / sample-producer '^
 # then, as a platform admin: PUT /api/v1/applications/sample { "brokerUser": "sample-producer" }
 ```
 
+To change `RetryDelay` or the queues' arguments (a quorum queue, say), delete the queues that differ first: the service refuses to start when
+the broker already has them with other arguments. The delay queue can go at any time; move or drain `notifications.requests` before
+deleting it.
+
 A message without `user_id`, or from a broker user no application has, is refused: logged and counted, not retried. A broker user with the
 `impersonator` tag can stamp any `user_id`, so producers never get it.
 

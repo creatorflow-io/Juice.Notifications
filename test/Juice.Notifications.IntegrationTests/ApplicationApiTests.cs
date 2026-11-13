@@ -114,6 +114,10 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(key + "-broker", (await created.Content.ReadFromJsonAsync<ApplicationResponse>(Ct))!.BrokerUser);
             var plain = await admin.PostAsJsonAsync("/api/v1/applications", new CreateApplicationBody(other, "B", other + "-c"), Ct);
             Assert.Null((await plain.Content.ReadFromJsonAsync<ApplicationResponse>(Ct))!.BrokerUser); // HTTP only
+            var emptyKey = NewKey();
+            var empty = await admin.PostAsJsonAsync("/api/v1/applications", new CreateApplicationBody(emptyKey, "E", emptyKey + "-c", ""), Ct);
+            Assert.Equal(HttpStatusCode.Created, empty.StatusCode);
+            Assert.Null((await empty.Content.ReadFromJsonAsync<ApplicationResponse>(Ct))!.BrokerUser); // "" is none, as on an update
 
             var taken = await admin.PostAsJsonAsync("/api/v1/applications", new CreateApplicationBody(NewKey(), "C", "c-" + Guid.NewGuid(), key + "-broker"), Ct);
             Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.BrokerUserInUse), (taken.StatusCode, await CodeAsync(taken)));
