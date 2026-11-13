@@ -32,8 +32,15 @@ Run from `src/Juice.Notifications`: `dotnet tool run dotnet-stryker --config-fil
 | SMTP outcome classification | `Providers/SmtpProvider.cs` | unit | 62.8 % (58 killed, 25 survived, 10 not covered) | 73.8 % |
 | Unknown-outcome policy, backoff, outcome precedence | `Delivering/Dispatcher.cs` | integration | 74.2 % (144 killed, 23 timed out, 52 survived, 6 not covered) | 82.3 % (also without telemetry and log calls) |
 | Webhook outcome classification | `Providers/WebhookProvider.cs` | integration | 47.4 % (35 killed, 2 timed out, 30 survived, 11 not covered) | 55.2 % (see below) |
-| Destination keys | `Delivering/DeliveryPlanner.cs` | integration | not run | |
-| Idempotency handling | `Intake/Intake.cs` | integration | not run | |
+| Destination keys, delivery planning | `Delivering/DeliveryPlanner.cs` | unit + integration | 74.4 % (99 killed, 32 survived, 2 not covered) | 79.2 % |
+| Idempotency handling, request checks | `Intake/Intake.cs` | unit + integration | 82.5 % (234 killed, 1 timed out, 49 survived, 1 not covered) | 94.8 % |
+
+The last two were measured on 13 Nov 2026 (p1-09), with both test projects (`test/stryker/planning.json`, about 25 minutes). Their first
+pass scored 41.4 % and 76.8 %: the tests added because of it are `DeliveryPlannerTests` (the planner stage run directly: integration choice,
+disabled and missing integrations, routes reaching nothing, expiry, template choice, render failures, webhook content, a repeated step),
+`IntakeScopeTests` (an idempotency key belongs to one application in one tenant; each destination has a key of its own), `IntakeValidationTests`
+(priority, expiry, data shape and size, links, correlation through the API) and `RequestRulesTests` (each request limit at its value and one
+past it).
 
 **Survivors, explained.** Mutation testing first found untested boundaries, now covered: route limits (20 type patterns, 50 label
 matchers, 10 regex matchers of 200 characters, 500-character values), `in(…)` without its closing parenthesis, single-address allowlist
@@ -55,9 +62,17 @@ entries (/32, /128), NAT64 and 6to4 prefix edges, and the 400/499/500 SMTP edges
 - **Dispatcher survivors**: tenant filters next to a unique delivery id (equivalent), telemetry and log calls, and message strings. Tests for
   the give-up path, expiry, a disabled integration or missing provider, and running out of attempts were added because of the first pass
   (51.1 % → 74.2 %).
-- **Not mutation-tested yet**: destination keys and idempotency handling (`DeliveryPlanner`, `Intake`). Both are covered by integration tests
-  (proof 2, `PlanningApiTests`, `DeliveryTests`), but a pass over those files didn't run: Stryker's line-range filter matched nothing, and a
-  whole-file pass is long. An open item for the next run.
+- **Delivery planner survivors**: telemetry, log and trace calls (counted recipients and failed deliveries, span tags, the warnings for a
+  destination with no integration and a route naming missing targets); waking the dispatcher (`context.Wakes`, latency only: the dispatcher
+  polls); the order destinations are visited in (each gets its own delivery either way); the render-timeout limits (`TimeoutsAllowed`, a timing
+  that tests can't force without a slow machine; `TemplateRendererTests` cover the timeout itself); and equivalents in phase 1: the default
+  locale when there is no template (every template is `en`), the failure category when there is no problem (null either way), and the
+  message for a missing integration (that destination is skipped, never recorded).
+- **Intake survivors**: 37 of 49 are refusal messages (tests assert pointer and code). The rest: the application–tenant check with `||`
+  (the request's composite foreign key to `application_tenants` refuses it with the same 403); the duplicate-address check across channels
+  (email is the only channel that takes addresses in phase 1); expiry at exactly now (a request can't arrive with the clock's own instant);
+  which unknown-type message is chosen; the templated-channel lookup's tenant scoping when an address recipient is checked; the error code when
+  both a recipient and another rule refuse; and the order of a producer's deliveries in the notification read.
 
 ## 3. Load check
 
@@ -99,5 +114,9 @@ were made. The email is in Mailpit at http://localhost:8026. `deploy/local/scrip
 Not part of the gate; recorded in `docs/deferred.md` and `docs/tracking.md`:
 
 - RabbitMQ intake (p1-05): done 13 Nov 2026 (`RabbitMQIntakeTests`); its Juice follow-ups are deferred #17–#19 and #21.
-- Configuration provisioning (I12) and audit records (p1-09), including the audit of dead-letter retries (#11).
+- Configuration provisioning (I12) and audit records (p1-09): done 13 Nov 2026 (`ProvisioningTests`, `AuditTests`, `AuditServiceTests`,
+  `RouteTargetTests`), with the audit of dead-letter retries (#11). Follow-ups: deferred #22 (audit saving is best effort in Juice.Audit),
+  #23 (provisioning is atomic per tenant, not per file), #24 (a retryable 409 in a three-way race during rolling deploys). The load check after
+  moving the context to Juice's `DbContextBase`: p95 0.12 s, every stage under 0.1 s.
+- The mutation pass over destination keys and idempotency handling: done 13 Nov 2026 (§2).
 - Owner decisions taken 13 Nov 2026: webhooks require a signing secret (#13); a webhook 400 is `Content` (#15).

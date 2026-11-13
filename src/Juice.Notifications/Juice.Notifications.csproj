@@ -12,4 +12,9 @@
     <ProjectReference Include="..\Juice.Notifications.EF\Juice.Notifications.EF.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The request rules are tested directly (RequestRulesTests): the HTTP tests can't reach every limit and branch at a useful cost. -->
+    <InternalsVisibleTo Include="Juice.Notifications.Tests" />
+  </ItemGroup>
+
 </Project>
