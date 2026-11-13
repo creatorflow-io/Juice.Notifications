@@ -4,6 +4,7 @@
     <Project Path="src/Juice.Notifications/Juice.Notifications.csproj" />
     <Project Path="src/Juice.Notifications.EF/Juice.Notifications.EF.csproj" />
     <Project Path="src/Juice.Notifications.EF.PostgreSQL/Juice.Notifications.EF.PostgreSQL.csproj" />
+    <Project Path="src/Juice.Notifications.Messaging/Juice.Notifications.Messaging.csproj" />
     <Project Path="src/Juice.Notifications.Api.Contracts/Juice.Notifications.Api.Contracts.csproj" />
     <Project Path="src/Juice.Notifications.Api/Juice.Notifications.Api.csproj" />
     <Project Path="src/Juice.Notifications.App/Juice.Notifications.App.csproj" />

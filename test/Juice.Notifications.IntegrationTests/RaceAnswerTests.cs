@@ -19,6 +19,8 @@ namespace Juice.Notifications.IntegrationTests
             { "create", ConflictKind.Unique, Constraints.ApplicationKey, nameof(Race.CreateTaken) },
             { "create", ConflictKind.Unique, Constraints.ApplicationClientId, nameof(Race.CreateTaken) },
             { "update", ConflictKind.Unique, Constraints.ApplicationClientId, nameof(Race.ClientIdTaken) },
+            { "create", ConflictKind.Unique, Constraints.ApplicationBrokerUser, nameof(Race.CreateBrokerUserTaken) },
+            { "update", ConflictKind.Unique, Constraints.ApplicationBrokerUser, nameof(Race.BrokerUserTaken) },
             { "link", ConflictKind.Unique, Constraints.ApplicationTenantLink, nameof(Race.SameEndState) },
             { "unlink", ConflictKind.RowGone, null, nameof(Race.SameEndState) },
             { "unlink", ConflictKind.ForeignKey, Constraints.RequestApplicationTenant, nameof(Race.TenantInUse) },

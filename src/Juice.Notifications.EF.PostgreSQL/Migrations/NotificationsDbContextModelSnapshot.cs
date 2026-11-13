@@ -201,6 +201,11 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("BrokerUser")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("broker_user");
+
                     b.Property<string>("ClientId")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -233,6 +238,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_applications");
+
+                    b.HasIndex("BrokerUser")
+                        .IsUnique()
+                        .HasDatabaseName("ix_applications_broker_user");
 
                     b.HasIndex("ClientId")
                         .IsUnique()

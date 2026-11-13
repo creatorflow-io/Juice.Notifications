@@ -78,6 +78,8 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.ClientId).HasMaxLength(200);
                 e.HasIndex(x => x.Key).IsUnique().HasDatabaseName(Constraints.ApplicationKey);
                 e.HasIndex(x => x.ClientId).IsUnique().HasDatabaseName(Constraints.ApplicationClientId);
+                e.Property(x => x.BrokerUser).HasMaxLength(200);
+                e.HasIndex(x => x.BrokerUser).IsUnique().HasDatabaseName(Constraints.ApplicationBrokerUser);
             });
 
             model.Entity<ApplicationTenant>(e =>

@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Juice.Notifications.Applications
 {
     /// <summary>An application as the API shows it.</summary>
-    public sealed record ApplicationView(Guid Id, string Key, string Name, string ClientId, bool Enabled, IReadOnlyList<Guid> Tenants,
+    public sealed record ApplicationView(Guid Id, string Key, string Name, string ClientId, string? BrokerUser, bool Enabled, IReadOnlyList<Guid> Tenants,
         DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
 
     /// <summary>What a key, name or client id may be.</summary>
@@ -28,16 +28,23 @@ namespace Juice.Notifications.Applications
 
         public static string? CheckClientId(string? clientId)
             => clientId is not null && ClientIdPattern().IsMatch(clientId) ? null : "The client id is 1–200 printable characters without spaces.";
+
+        public static string? CheckBrokerUser(string? brokerUser)
+            => brokerUser is not null && ClientIdPattern().IsMatch(brokerUser) ? null : "The broker user is 1–200 printable characters without spaces.";
     }
 
     // Commands are Juice messages (MessageBase), whose own TenantId is the messaging tenant; the tenant a command acts on is named NotificationTenantId.
 
     // Races between these commands are answered by the API from the constraint that stopped them (ApplicationEndpoints); nothing re-runs.
 
-    /// <summary>Registers an application. Losing a race on the key or client id answers <c>application_exists</c> or <c>client_id_in_use</c>.</summary>
-    public sealed record CreateApplication(string Key, string Name, string ClientId) : MessageBase, IRequest<Outcome<ApplicationView>>;
+    /// <summary>
+    /// Registers an application. Losing a race on the key, client id or broker user answers <c>application_exists</c>, <c>client_id_in_use</c> or
+    /// <c>broker_user_in_use</c>.
+    /// </summary>
+    public sealed record CreateApplication(string Key, string Name, string ClientId, string? BrokerUser = null) : MessageBase, IRequest<Outcome<ApplicationView>>;
 
-    public sealed record UpdateApplication(string Key, string? Name, string? ClientId, bool? Enabled)
+    /// <summary>Changes the fields given. <see cref="BrokerUser"/> <c>""</c> removes it: the application then sends over HTTP only.</summary>
+    public sealed record UpdateApplication(string Key, string? Name, string? ClientId, bool? Enabled, string? BrokerUser = null)
         : MessageBase, IRequest<Outcome<ApplicationView>>;
 
     /// <summary>Lets the application send for the tenant. Linking twice, or twice at once, is fine.</summary>
@@ -58,7 +65,7 @@ namespace Juice.Notifications.Applications
             var added = db.ChangeTracker.Entries<ApplicationTenant>().Where(e => e.Entity.ApplicationId == app.Id && e.State == EntityState.Added).Select(e => e.Entity.TenantId);
             var removed = db.ChangeTracker.Entries<ApplicationTenant>().Where(e => e.Entity.ApplicationId == app.Id && e.State == EntityState.Deleted).Select(e => e.Entity.TenantId).ToHashSet();
             var tenants = saved.Concat(added).Where(t => !removed.Contains(t)).Distinct().Order().ToList();
-            return new ApplicationView(app.Id, app.Key, app.Name, app.ClientId, app.Enabled, tenants, app.CreatedAt, app.UpdatedAt);
+            return new ApplicationView(app.Id, app.Key, app.Name, app.ClientId, app.BrokerUser, app.Enabled, tenants, app.CreatedAt, app.UpdatedAt);
         }
     }
 
@@ -68,27 +75,34 @@ namespace Juice.Notifications.Applications
     {
         public async ValueTask<Outcome<ApplicationView>> Handle(CreateApplication request, CancellationToken cancellationToken)
         {
-            if ((ApplicationRules.CheckKey(request.Key) ?? ApplicationRules.CheckName(request.Name) ?? ApplicationRules.CheckClientId(request.ClientId)) is { } invalid)
+            if ((ApplicationRules.CheckKey(request.Key) ?? ApplicationRules.CheckName(request.Name) ?? ApplicationRules.CheckClientId(request.ClientId)
+                ?? (request.BrokerUser is null ? null : ApplicationRules.CheckBrokerUser(request.BrokerUser))) is { } invalid)
             {
                 return Outcome<ApplicationView>.Invalid(ErrorCodes.InvalidApplication, invalid);
             }
-            // One query for both, so an identical create committing between two checks can't make this answer client_id_in_use for what is
-            // really the same application: the key is reported first, as when the two are checked one after the other at rest.
-            var taken = await db.Applications.Where(a => a.Key == request.Key || a.ClientId == request.ClientId)
+            // One query for all three, so an identical create committing between two checks can't make this answer client_id_in_use for what is
+            // really the same application: the key is reported first, as when they are checked one after the other at rest.
+            var taken = await db.Applications
+                .Where(a => a.Key == request.Key || a.ClientId == request.ClientId || (request.BrokerUser != null && a.BrokerUser == request.BrokerUser))
                 .Select(a => new { a.Key, a.ClientId }).ToListAsync(cancellationToken);
             if (taken.Any(a => a.Key == request.Key))
             {
                 return Outcome<ApplicationView>.Conflict(ErrorCodes.ApplicationExists, $"An application with key '{request.Key}' already exists.");
             }
-            if (taken.Count > 0)
+            if (taken.Any(a => a.ClientId == request.ClientId))
             {
                 return Outcome<ApplicationView>.Conflict(ErrorCodes.ClientIdInUse, "Another application already uses this client id.");
             }
+            if (taken.Count > 0)
+            {
+                return Outcome<ApplicationView>.Conflict(ErrorCodes.BrokerUserInUse, "Another application already publishes as this broker user.");
+            }
             var now = clock.UtcNow();
-            var app = new Application { Key = request.Key, Name = request.Name.Trim(), ClientId = request.ClientId, CreatedAt = now, UpdatedAt = now };
+            var app = new Application { Key = request.Key, Name = request.Name.Trim(), ClientId = request.ClientId, BrokerUser = request.BrokerUser, CreatedAt = now,
+                UpdatedAt = now };
             db.Applications.Add(app);
             // A new application has no tenants yet.
-            return Outcome<ApplicationView>.Created(new ApplicationView(app.Id, app.Key, app.Name, app.ClientId, app.Enabled, [], app.CreatedAt, app.UpdatedAt));
+            return Outcome<ApplicationView>.Created(new ApplicationView(app.Id, app.Key, app.Name, app.ClientId, app.BrokerUser, app.Enabled, [], app.CreatedAt, app.UpdatedAt));
         }
 
         public async ValueTask<Outcome<ApplicationView>> Handle(UpdateApplication request, CancellationToken cancellationToken)
@@ -113,7 +127,25 @@ namespace Juice.Notifications.Applications
                     return Outcome<ApplicationView>.Conflict(ErrorCodes.ClientIdInUse, "Another application already uses this client id.");
                 }
             }
+            // "" removes it; anything else is a broker user no other application has.
+            var brokerUser = request.BrokerUser == "" ? null : request.BrokerUser;
+            if (brokerUser is not null)
+            {
+                if (ApplicationRules.CheckBrokerUser(brokerUser) is { } badBroker)
+                {
+                    return Outcome<ApplicationView>.Invalid(ErrorCodes.InvalidApplication, badBroker);
+                }
+                if (brokerUser != app.BrokerUser && await db.Applications.AnyAsync(a => a.BrokerUser == brokerUser, cancellationToken))
+                {
+                    return Outcome<ApplicationView>.Conflict(ErrorCodes.BrokerUserInUse, "Another application already publishes as this broker user.");
+                }
+            }
             var changed = false;
+            if (request.BrokerUser is not null && brokerUser != app.BrokerUser)
+            {
+                app.BrokerUser = brokerUser;
+                changed = true;
+            }
             if (request.ClientId is not null && request.ClientId != app.ClientId)
             {
                 app.ClientId = request.ClientId;
@@ -193,7 +225,7 @@ namespace Juice.Notifications.Applications
             var rows = await db.Applications.AsNoTracking().OrderBy(a => a.Key)
                 .Select(a => new { App = a, Tenants = db.ApplicationTenants.Where(t => t.ApplicationId == a.Id).OrderBy(t => t.TenantId).Select(t => t.TenantId).ToList() })
                 .ToListAsync(cancellationToken);
-            return rows.Select(r => new ApplicationView(r.App.Id, r.App.Key, r.App.Name, r.App.ClientId, r.App.Enabled, r.Tenants, r.App.CreatedAt, r.App.UpdatedAt)).ToList();
+            return rows.Select(r => new ApplicationView(r.App.Id, r.App.Key, r.App.Name, r.App.ClientId, r.App.BrokerUser, r.App.Enabled, r.Tenants, r.App.CreatedAt, r.App.UpdatedAt)).ToList();
         }
 
         public async Task<ApplicationView?> GetAsync(string key, CancellationToken cancellationToken)

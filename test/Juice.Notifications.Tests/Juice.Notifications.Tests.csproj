@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Juice.Notifications\Juice.Notifications.csproj" />
+    <ProjectReference Include="..\..\src\Juice.Notifications.Messaging\Juice.Notifications.Messaging.csproj" />
   </ItemGroup>
 
 </Project>

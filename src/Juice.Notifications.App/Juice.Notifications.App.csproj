@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Juice.Notifications.Api\Juice.Notifications.Api.csproj" />
     <ProjectReference Include="..\Juice.Notifications.EF.PostgreSQL\Juice.Notifications.EF.PostgreSQL.csproj" />
+    <ProjectReference Include="..\Juice.Notifications.Messaging\Juice.Notifications.Messaging.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -11,6 +11,7 @@ namespace Juice.Notifications
         public const string InvalidTenant = "invalid_tenant";
         public const string ApplicationExists = "application_exists";
         public const string ClientIdInUse = "client_id_in_use";
+        public const string BrokerUserInUse = "broker_user_in_use";
         public const string TenantInUse = "tenant_in_use";
         /// <summary>Another request changed the same thing at the same time; asking again gives the current answer.</summary>
         public const string ConcurrentChange = "concurrent_change";
@@ -19,6 +20,8 @@ namespace Juice.Notifications
 
         /// <summary>The token's client is not a registered application.</summary>
         public const string NotAProducer = "not_a_producer";
+        /// <summary>A RabbitMQ message without a broker-verified <c>user_id</c>: nothing says which application sent it.</summary>
+        public const string UnverifiedPublisher = "unverified_publisher";
         /// <summary>The application is disabled, so it can't declare types or send.</summary>
         public const string ApplicationDisabled = "application_disabled";
         /// <summary>The caller is a different application than the one in the path.</summary>

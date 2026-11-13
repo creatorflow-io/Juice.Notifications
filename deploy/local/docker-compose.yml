@@ -87,11 +87,17 @@ services:
       Delivery__SmtpServers__local__Port: "1025"
       Delivery__SmtpServers__local__Security: None
       NOTIFICATIONS_SECRET_SAMPLE_HOOK: ${SAMPLE_WEBHOOK_SECRET:-}
+      # NotificationRequested over RabbitMQ (phase-1-plan I5); producers publish as their own broker user (README: RabbitMQ intake).
+      Intake__RabbitMQ__Enabled: "true"
+      Intake__RabbitMQ__Host: rabbitmq
+      Intake__RabbitMQ__UserName: notifications
+      Intake__RabbitMQ__Password: ${RABBITMQ_PASSWORD}
     ports:
       - "127.0.0.1:5280:8080"
     depends_on:
       postgres: { condition: service_healthy }
       keycloak: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
       mailpit: { condition: service_started }
 
 volumes:

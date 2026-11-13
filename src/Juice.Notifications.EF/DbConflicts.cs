@@ -8,6 +8,7 @@ namespace Juice.Notifications.Data
     {
         public const string ApplicationKey = "ix_applications_key";
         public const string ApplicationClientId = "ix_applications_client_id";
+        public const string ApplicationBrokerUser = "ix_applications_broker_user";
         public const string ApplicationTenantLink = "pk_application_tenants";
         public const string RequestApplicationTenant = "fk_requests_application_tenants_application_id_tenant_id";
         public const string TypeVersion = "ix_notification_types_application_id_key_version";

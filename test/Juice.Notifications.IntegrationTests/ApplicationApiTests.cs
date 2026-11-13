@@ -104,6 +104,37 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         [Fact]
+        public async Task A_broker_user_is_set_checked_unique_and_removed_with_an_empty_string()
+        {
+            LocalStack.RequireAvailable();
+            using var admin = app.Client(await LocalStack.AdminTokenAsync());
+            var key = NewKey();
+            var other = NewKey();
+            var created = await admin.PostAsJsonAsync("/api/v1/applications", new CreateApplicationBody(key, "A", key + "-c", key + "-broker"), Ct);
+            Assert.Equal(key + "-broker", (await created.Content.ReadFromJsonAsync<ApplicationResponse>(Ct))!.BrokerUser);
+            var plain = await admin.PostAsJsonAsync("/api/v1/applications", new CreateApplicationBody(other, "B", other + "-c"), Ct);
+            Assert.Null((await plain.Content.ReadFromJsonAsync<ApplicationResponse>(Ct))!.BrokerUser); // HTTP only
+
+            var taken = await admin.PostAsJsonAsync("/api/v1/applications", new CreateApplicationBody(NewKey(), "C", "c-" + Guid.NewGuid(), key + "-broker"), Ct);
+            Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.BrokerUserInUse), (taken.StatusCode, await CodeAsync(taken)));
+            var takenByUpdate = await admin.PutAsJsonAsync($"/api/v1/applications/{other}", new UpdateApplicationBody(null, null, null, key + "-broker"), Ct);
+            Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.BrokerUserInUse), (takenByUpdate.StatusCode, await CodeAsync(takenByUpdate)));
+            foreach (var bad in new[] { "has space", "tab\there", new string('u', 201) })
+            {
+                var invalid = await admin.PutAsJsonAsync($"/api/v1/applications/{other}", new UpdateApplicationBody(null, null, null, bad), Ct);
+                Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidApplication), (invalid.StatusCode, await CodeAsync(invalid)));
+            }
+
+            // Left out, it stays; "" removes it, and then another application can take it.
+            var renamed = await admin.PutAsJsonAsync($"/api/v1/applications/{key}", new UpdateApplicationBody("Renamed", null, null), Ct);
+            Assert.Equal(key + "-broker", (await renamed.Content.ReadFromJsonAsync<ApplicationResponse>(Ct))!.BrokerUser);
+            var removed = await admin.PutAsJsonAsync($"/api/v1/applications/{key}", new UpdateApplicationBody(null, null, null, ""), Ct);
+            Assert.Null((await removed.Content.ReadFromJsonAsync<ApplicationResponse>(Ct))!.BrokerUser);
+            var moved = await admin.PutAsJsonAsync($"/api/v1/applications/{other}", new UpdateApplicationBody(null, null, null, key + "-broker"), Ct);
+            Assert.Equal(key + "-broker", (await moved.Content.ReadFromJsonAsync<ApplicationResponse>(Ct))!.BrokerUser);
+        }
+
+        [Fact]
         public async Task A_tenant_the_application_has_sent_for_stays_linked()
         {
             LocalStack.RequireAvailable();

@@ -8,6 +8,15 @@ namespace Juice.Notifications.IntegrationTests
     /// <summary>The real host (Juice.Notifications.App) on a scratch database, accepting tokens from the local Keycloak.</summary>
     public sealed class NotificationsApp : IAsyncLifetime
     {
+        private readonly Action<IWebHostBuilder>? _configure;
+
+        public NotificationsApp()
+        {
+        }
+
+        /// <summary>With a test class's own settings and services, applied over the defaults.</summary>
+        internal NotificationsApp(Action<IWebHostBuilder> configure) => _configure = configure;
+
         public ScratchDatabase Database { get; } = new();
         private WebApplicationFactory<Program>? _factory;
 
@@ -30,6 +39,7 @@ namespace Juice.Notifications.IntegrationTests
                 host.UseSetting("Stages:Dispatcher:Poll", "00:00:00.200");
                 host.UseSetting("Stages:Dispatcher:Lease", "00:01:00");
                 host.ConfigureLogging(logging => logging.AddProvider(new ErrorLogProvider()));
+                _configure?.Invoke(host);
             });
             // Starts the host, which migrates the database.
             _factory.CreateClient().Dispose();

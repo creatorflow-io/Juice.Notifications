@@ -210,7 +210,7 @@ requests accepted under them can still be validated, rendered and replayed (D10)
 
 ### 5.2 Sending
 
-`POST /api/v1/tenants/{tenant}/notifications`, or the integration event `NotificationRequested` with the same body.
+`POST /api/v1/tenants/{tenant}/notifications`, or the integration event `NotificationRequested` with the same body plus `notificationTenantId`. Over RabbitMQ the application is the message's publisher as the broker vouches for it (`user_id`), matched to the application's `brokerUser`; there is no answer, so a refused request is only logged and counted (phase 3 adds events to producers).
 
 ```json
 {

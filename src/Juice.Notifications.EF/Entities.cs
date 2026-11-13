@@ -33,6 +33,11 @@ namespace Juice.Notifications.Data
         public required string Name { get; set; }
         /// <summary>The OIDC client id its tokens carry (<c>azp</c> or <c>client_id</c>).</summary>
         public required string ClientId { get; set; }
+        /// <summary>
+        /// The RabbitMQ user it publishes <c>NotificationRequested</c> as, which the broker vouches for (<c>user_id</c>); null when it sends
+        /// over HTTP only.
+        /// </summary>
+        public string? BrokerUser { get; set; }
         public bool Enabled { get; set; } = true;
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset UpdatedAt { get; set; }

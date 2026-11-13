@@ -142,7 +142,7 @@ namespace Juice.Notifications.Api
         {
             var response = new AcceptedResponse(view.Id, "accepted", view.Type, view.TypeVersion, view.AcceptedAt);
             Telemetry.Requests.Add(1, new KeyValuePair<string, object?>("type", view.Type),
-                new KeyValuePair<string, object?>("outcome", view.Duplicate ? "duplicate" : "accepted"));
+                new KeyValuePair<string, object?>("outcome", view.Duplicate ? "duplicate" : "accepted"), new KeyValuePair<string, object?>("intake", "http"));
             return view.Duplicate
                 ? Results.Ok(response)
                 : Results.Accepted($"/api/v1/tenants/{tenantId}/notifications/{view.Id}", response);

@@ -67,7 +67,31 @@ curl -s -d grant_type=client_credentials -d client_id=notifications-admin -d "cl
   http://localhost:8081/realms/juice/protocol/openid-connect/token | jq -r .access_token
 ```
 
+## RabbitMQ intake
+
+`run-app.sh` and the `app` service turn on the RabbitMQ intake (`Intake__RabbitMQ__*`). The service connects as `notifications`, the broker's
+default user, and declares its topology at start:
+
+| Name | Kind | Purpose |
+|---|---|---|
+| `notifications` | direct exchange | producers publish `NotificationRequested` here, routing key `NotificationRequested` |
+| `notifications.requests` | queue | the intake; a failed message dead-letters to the delay queue |
+| `notifications.requests.retry` | fanout exchange and queue | holds a failed message for `RetryDelay` (30 s), then returns it to `notifications` |
+
+A producer publishes as a broker user of its own, which the broker checks against the message's `user_id` (Juice:
+`AddProducer(..., p => p.StampUserId())`), and the application names that user as its `brokerUser`. A broker user for an application that
+may only publish to the intake:
+
+```bash
+docker compose exec rabbitmq rabbitmqctl add_user sample-producer "<password>"
+docker compose exec rabbitmq rabbitmqctl set_permissions -p / sample-producer '^$' '^notifications$' '^$'
+# then, as a platform admin: PUT /api/v1/applications/sample { "brokerUser": "sample-producer" }
+```
+
+A message without `user_id`, or from a broker user no application has, is refused: logged and counted, not retried. A broker user with the
+`impersonator` tag can stamp any `user_id`, so producers never get it.
+
 ## Tests
 
-The integration tests read `.env`, create a scratch database per test class on this PostgreSQL, and drop it afterwards. Without the stack they are
-skipped.
+The integration tests read `.env`, create a scratch database per test class on this PostgreSQL, and drop it afterwards. The RabbitMQ intake
+tests do the same with a virtual host and two producer users on the broker, through its management API. Without the stack they are skipped.

@@ -12,5 +12,11 @@ export ASPNETCORE_URLS=http://localhost:5280
 export ASPNETCORE_ENVIRONMENT=Development
 # The signing secret the sample producer's webhook integration names (env:NOTIFICATIONS_SECRET_SAMPLE_HOOK).
 export NOTIFICATIONS_SECRET_SAMPLE_HOOK="${SAMPLE_WEBHOOK_SECRET:-}"
+# NotificationRequested over RabbitMQ, from the stack's broker.
+export Intake__RabbitMQ__Enabled=true
+export Intake__RabbitMQ__Host=127.0.0.1
+export Intake__RabbitMQ__Port=5673
+export Intake__RabbitMQ__UserName=notifications
+export Intake__RabbitMQ__Password="$RABBITMQ_PASSWORD"
 
 exec dotnet run --project "$here/../../src/Juice.Notifications.App" --no-launch-profile

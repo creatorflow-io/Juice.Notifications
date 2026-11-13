@@ -15,16 +15,16 @@ namespace Juice.Notifications.Api
             group.MapGet("/{key}", async (string key, ApplicationReader reader, CancellationToken ct)
                 => await reader.GetAsync(key, ct) is { } view ? Results.Ok(ToResponse(view)) : NotFound($"There is no application '{key}'."));
             group.MapPost("", async (CreateApplicationBody body, Sender sender, CancellationToken ct)
-                => await sender.SendAsync(new CreateApplication(body.Key, body.Name, body.ClientId), body.Key, ct, view => $"/api/v1/applications/{view.Key}"));
+                => await sender.SendAsync(new CreateApplication(body.Key, body.Name, body.ClientId, body.BrokerUser), body.Key, ct, view => $"/api/v1/applications/{view.Key}"));
             group.MapPut("/{key}", async (string key, UpdateApplicationBody body, Sender sender, CancellationToken ct)
-                => await sender.SendAsync(new UpdateApplication(key, body.Name, body.ClientId, body.Enabled), key, ct));
+                => await sender.SendAsync(new UpdateApplication(key, body.Name, body.ClientId, body.Enabled, body.BrokerUser), key, ct));
             group.MapPut("/{key}/tenants/{tenantId:guid}", async (string key, Guid tenantId, Sender sender, CancellationToken ct)
                 => await sender.SendAsync(new LinkTenant(key, tenantId), key, ct));
             group.MapDelete("/{key}/tenants/{tenantId:guid}", async (string key, Guid tenantId, Sender sender, CancellationToken ct)
                 => await sender.SendAsync(new UnlinkTenant(key, tenantId), key, ct));
         }
 
-        private static ApplicationResponse ToResponse(ApplicationView v) => new(v.Id, v.Key, v.Name, v.ClientId, v.Enabled, v.Tenants, v.CreatedAt, v.UpdatedAt);
+        private static ApplicationResponse ToResponse(ApplicationView v) => new(v.Id, v.Key, v.Name, v.ClientId, v.BrokerUser, v.Enabled, v.Tenants, v.CreatedAt, v.UpdatedAt);
 
         /// <summary>
         /// Sends one command for one HTTP request, and answers a race with another transaction from the constraint that stopped it. Nothing runs
@@ -65,6 +65,8 @@ namespace Juice.Notifications.Api
             {
                 // Two creates both passed the handler's checks. Which value is taken decides the answer (key first, as the handler checks).
                 (CreateApplication, ConflictKind.Unique, Constraints.ApplicationKey or Constraints.ApplicationClientId) => Race.CreateTaken,
+                (CreateApplication, ConflictKind.Unique, Constraints.ApplicationBrokerUser) => Race.CreateBrokerUserTaken,
+                (UpdateApplication, ConflictKind.Unique, Constraints.ApplicationBrokerUser) => Race.BrokerUserTaken,
                 (UpdateApplication, ConflictKind.Unique, Constraints.ApplicationClientId) => Race.ClientIdTaken,
                 // The link another request just made, or the unlink another request just did: the same end state, so the same answer.
                 (LinkTenant, ConflictKind.Unique, Constraints.ApplicationTenantLink) => Race.SameEndState,
@@ -76,7 +78,7 @@ namespace Juice.Notifications.Api
                 _ => Race.Unknown,
             };
 
-            internal enum Race { Unknown, CreateTaken, ClientIdTaken, SameEndState, TenantInUse, TryAgain }
+            internal enum Race { Unknown, CreateTaken, ClientIdTaken, CreateBrokerUserTaken, BrokerUserTaken, SameEndState, TenantInUse, TryAgain }
 
             /// <summary>
             /// What the command would have answered had it run after the transaction it raced. A link or unlink that lost answers 200 with the
@@ -86,11 +88,14 @@ namespace Juice.Notifications.Api
             {
                 switch (race)
                 {
-                    case Race.CreateTaken when await reader.GetAsync(key, ct) is not null:
+                    case Race.CreateTaken or Race.CreateBrokerUserTaken when await reader.GetAsync(key, ct) is not null:
                         return Problem(StatusCodes.Status409Conflict, ErrorCodes.ApplicationExists, $"An application with key '{key}' already exists.");
                     case Race.CreateTaken:
                     case Race.ClientIdTaken:
                         return Problem(StatusCodes.Status409Conflict, ErrorCodes.ClientIdInUse, "Another application already uses this client id.");
+                    case Race.CreateBrokerUserTaken:
+                    case Race.BrokerUserTaken:
+                        return Problem(StatusCodes.Status409Conflict, ErrorCodes.BrokerUserInUse, "Another application already publishes as this broker user.");
                     case Race.SameEndState:
                         return await reader.GetAsync(key, ct) is { } view ? Results.Ok(ToResponse(view)) : ConcurrentChange();
                     case Race.TenantInUse:

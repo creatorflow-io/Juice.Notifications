@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The RabbitMQ intake (phase-1-plan I5): the NotificationRequested contract and its consumer, which sends the same AcceptNotification
+       command as the HTTP API. A host adds it with AddNotificationsRabbitMQIntake. -->
+  <PropertyGroup>
+    <Description>Juice Notifications RabbitMQ intake: the NotificationRequested integration event and its consumer.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Juice.EventBus.RabbitMQ" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Juice.Notifications.Tests" />
+    <InternalsVisibleTo Include="Juice.Notifications.IntegrationTests" />
+  </ItemGroup>
+
+</Project>
