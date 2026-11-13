@@ -20,6 +20,8 @@ namespace Juice.Notifications.Tests
             Assert.Equal(kind, DbConflicts.Classify(new DbUpdateException("save failed", Pg(sqlState)))?.Kind);
             Assert.Equal(kind, DbConflicts.Classify(Pg(sqlState))?.Kind);
             Assert.Equal(kind, DbConflicts.Classify(new InvalidOperationException("commit failed", Pg(sqlState)))?.Kind);
+            // As Juice.EF 10.13.0 reports a failed commit: its own exception around the provider's.
+            Assert.Equal(kind, DbConflicts.Classify(new Juice.EF.TransactionCommitFailedException(Guid.NewGuid(), Pg(sqlState)))?.Kind);
         }
 
         [Fact]

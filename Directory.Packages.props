@@ -4,18 +4,18 @@
     <!-- The same Juice versions as Juice.Observability, the first producer (phase-1-plan I1). -->
     <PackageVersion Include="JsonSchema.Net" Version="9.5.0" />
     <PackageVersion Include="MailKit" Version="4.18.2" />
-    <PackageVersion Include="Juice.EF" Version="10.12.0" />
-    <PackageVersion Include="Juice.MediatR" Version="10.12.0" />
-    <PackageVersion Include="Juice.MediatR.Behaviors" Version="10.12.0" />
-    <PackageVersion Include="Juice.Messaging" Version="10.12.0" />
-    <PackageVersion Include="Juice.Messaging.Idempotency.Caching" Version="10.12.0" />
-    <PackageVersion Include="Juice.Messaging.Local" Version="10.12.0" />
-    <PackageVersion Include="Juice.Messaging.Outbox.Delivery" Version="10.12.0" />
-    <PackageVersion Include="Juice.Messaging.Outbox.EF" Version="10.12.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.14" />
+    <PackageVersion Include="Juice.EF" Version="10.13.0" />
+    <PackageVersion Include="Juice.MediatR" Version="10.13.0" />
+    <PackageVersion Include="Juice.MediatR.Behaviors" Version="10.13.0" />
+    <PackageVersion Include="Juice.Messaging" Version="10.13.0" />
+    <PackageVersion Include="Juice.Messaging.Idempotency.Caching" Version="10.13.0" />
+    <PackageVersion Include="Juice.Messaging.Local" Version="10.13.0" />
+    <PackageVersion Include="Juice.Messaging.Outbox.Delivery" Version="10.13.0" />
+    <PackageVersion Include="Juice.Messaging.Outbox.EF" Version="10.13.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.15" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1" />

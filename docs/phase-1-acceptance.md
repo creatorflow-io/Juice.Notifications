@@ -98,7 +98,6 @@ were made. The email is in Mailpit at http://localhost:8026. `deploy/local/scrip
 
 Not part of the gate; recorded in `docs/deferred.md` and `docs/tracking.md`:
 
-- RabbitMQ intake (p1-05): waits on a Juice release.
+- RabbitMQ intake (p1-05): unblocked by Juice 10.13.0 (bumped 13 Nov 2026), not built yet.
 - Configuration provisioning (I12) and audit records (p1-09), including the audit of dead-letter retries (#11).
 - Owner decisions: unsigned webhooks without a secret (#13), the category of a webhook 400 (#15).
-- The Juice 10.13.0 bump (#2) before any deferred constraint or stricter isolation is used.

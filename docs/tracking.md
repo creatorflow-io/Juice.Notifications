@@ -11,10 +11,10 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 
 ## Milestones (collection `milestones`)
 
-| num | name | items | review | note (as of 12 Nov 2026) |
+| num | name | items | review | note (as of 13 Nov 2026) |
 |---|---|---|---|---|
-| M1 | Skeleton and persistence | p1-01, p1-02, p1-06 | clean | Reviewed in three rounds; Juice `UnitOfWork` fix released in 10.13.0, bump pending (deferred #2). |
-| M2 | Types and intake | p1-03, p1-04, p1-05 | clean | Commit 007f690. RabbitMQ intake (p1-05) not built: waits on a Juice release. |
+| M1 | Skeleton and persistence | p1-01, p1-02, p1-06 | clean | Reviewed in three rounds; Juice `UnitOfWork` fix: bumped to Juice 10.13.0 on 13 Nov 2026 (deferred #2 closed). |
+| M2 | Types and intake | p1-03, p1-04, p1-05 | clean | Commit 007f690. RabbitMQ intake (p1-05) not built yet; unblocked by Juice 10.13.0. |
 | M3 | Claim store and worker host | p1-07 | clean | Commit 43f1cea. |
 | M4 | Planner and routes | p1-08, p1-09 | clean | Commit 0e7d238. Audit records and configuration provisioning (I12) still open. |
 | M5 | Rendering and delivery planning | p1-10, p1-11 | clean | Commit fbb4684. Round 2: 6 bugs fixed. Confirmation: 2 fixed (renders on a 128 MB stack of their own, depth limit 250; invariant culture). Re-confirmation: no crash or wrong-outcome bugs; 2 low ones fixed (a slow-unwinding template error taken for a timeout; thread start failure taken for a template failure). Deferred #10, #12. |
@@ -32,7 +32,7 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | p1-06 | task | DbContext, tables, migrations; applications admin | M1 | done | |
 | p1-03 | task | Type declarations (versioned schema, templates) | M2 | done | |
 | p1-04 | task | HTTP intake with idempotency; notification read | M2 | done | |
-| p1-05 | task | RabbitMQ `NotificationRequested` intake | M2 | blocked | Waits on a Juice release. |
+| p1-05 | task | RabbitMQ `NotificationRequested` intake | M2 | todo | Unblocked: Juice 10.13.0 gives the consumer the broker-checked publisher (`MessageContext.Current.PublisherId`). |
 | p1-07 | task | Claim store, stage worker, concurrency suite | M3 | done | |
 | p1-08 | task | Recipient resolvers and planner stage | M4 | done | |
 | p1-09 | task | Tenant configuration API; provisioning; audit | M4 | doing | API done; provisioning (I12) and audit not built. |
@@ -57,6 +57,7 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
+| 2026-11-13 | Juice 10.13.0 bump (deferred #2 closed; migration `OutboxIndexFilterQuoting`; 546 tests green). p1-05 → todo (unblocked by `PublisherId`). |
 | 2026-11-12 | M9 → clean (review: harness fixes only). Phase 1 gate passed; open: p1-05 (RabbitMQ), p1-09 (provisioning, audit), owner decisions #13, #15. |
 | 2026-11-12 | p1-g1 … p1-g6 → done; M9 acceptance record written (mutation scores, load p95 0.71 s); M9 code review next. |
 | 2026-11-12 | M6, M7, M8 → clean (re-check fixes committed); p1-12 … p1-17 review clean. Next: M9. |

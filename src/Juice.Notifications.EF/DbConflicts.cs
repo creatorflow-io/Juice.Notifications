@@ -37,9 +37,9 @@ namespace Juice.Notifications.Data
     /// <summary>
     /// Recognizes a race with another transaction in any failure: from a save, a query or the commit, however it is wrapped. Provider-specific, so it
     /// lives with the provider. The caller translates the conflict into its answer; nothing is run again.
-    /// <para>Commit failures arrive intact only from Juice.EF after 10.12.0: 10.12.0's <c>UnitOfWork.CommitTransactionAsync</c> rolls back a
-    /// transaction Npgsql has already completed, and that error replaces the real one (docs/deferred.md #2). Nothing in phase 1 fails at commit:
-    /// there are no deferred constraints, and transactions run at read committed.</para>
+    /// <para>A failed commit arrives from Juice.EF (10.13.0 and later) as <c>TransactionCommitFailedException</c> with the provider's error
+    /// as its <c>InnerException</c>, which the walk below reaches. Nothing in phase 1 fails at commit yet: there are no deferred constraints, and
+    /// transactions run at read committed.</para>
     /// </summary>
     public static class DbConflicts
     {
