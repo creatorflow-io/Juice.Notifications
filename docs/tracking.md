@@ -57,6 +57,7 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
+| 2026-11-13 | Juice fix for deferred #17, #18, #19, #21 committed in Juice `release/10` (6135290, unreleased, not pushed): prefetch before consume, start retry and restart after broker cancel or channel close, `RabbitMQConsumerStatus` + consumer health check, drain on shutdown, `ParkAfter` for broker-made retries, `throw-fake-exception` hook removed. One review round: 4 findings fixed with tests. Intake adoption waits for the package. |
 | 2026-11-13 | Owner decisions: #13 webhooks require a signing secret (refused on save without `secretRef`; never sent unsigned; tests `PlanningApiTests`, `WebhookProviderTests.Nothing_is_sent_unsigned`); #15 a webhook 400 is `Content` (code unchanged; plan corrected). Deferred #13, #15 closed; p1-g5 note updated. |
 | 2026-11-13 | p1-05 → done; M2 → clean (re-check: no bugs; added a test that readiness uses the intake's own broker check). |
 | 2026-11-13 | p1-05 confirmation: one bug (broker health check still Unhealthy), fixed with its own check; checked live: broker stopped → /health/ready 200 Degraded, consumer back after restart. Re-check running. |
