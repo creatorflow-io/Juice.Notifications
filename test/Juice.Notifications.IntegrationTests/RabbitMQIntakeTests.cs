@@ -238,6 +238,14 @@ namespace Juice.Notifications.IntegrationTests
             using var anonymous = intake.App.Client();
             var ready = await anonymous.GetAsync("/health/ready", Ct);
             Assert.Equal((HttpStatusCode.OK, "Healthy"), (ready.StatusCode, await ready.Content.ReadAsStringAsync(Ct)));
+
+            // And the broker's check is the intake's own, which reports an outage as Degraded (BrokerHealthCheckTests): Juice's answers Unhealthy,
+            // and /health/ready would then be 503 while HTTP intake is fine.
+            var checks = intake.App.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckServiceOptions>>().Value;
+            var broker = Assert.Single(checks.Registrations, r => r.Name == "rabbitmq");
+            Assert.Equal(Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded, broker.FailureStatus);
+            Assert.Contains("ready", broker.Tags);
+            Assert.IsType<BrokerHealthCheck>(broker.Factory(intake.App.Services));
         }
 
         [Fact]

@@ -14,7 +14,7 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | num | name | items | review | note (as of 13 Nov 2026) |
 |---|---|---|---|---|
 | M1 | Skeleton and persistence | p1-01, p1-02, p1-06 | clean | Reviewed in three rounds; Juice `UnitOfWork` fix: bumped to Juice 10.13.0 on 13 Nov 2026 (deferred #2 closed). |
-| M2 | Types and intake | p1-03, p1-04, p1-05 | confirm | Commit 007f690; RabbitMQ intake (p1-05) built 13 Nov 2026 (f3c7137), rounds 1 and 2 fixed; confirmation fix (health check) in re-check. |
+| M2 | Types and intake | p1-03, p1-04, p1-05 | clean | Commit 007f690; RabbitMQ intake (p1-05) f3c7137, reviewed in two rounds, a confirmation and a re-check (72f0692, b878981, 567bd35, then the re-check's test). |
 | M3 | Claim store and worker host | p1-07 | clean | Commit 43f1cea. |
 | M4 | Planner and routes | p1-08, p1-09 | clean | Commit 0e7d238. Audit records and configuration provisioning (I12) still open. |
 | M5 | Rendering and delivery planning | p1-10, p1-11 | clean | Commit fbb4684. Round 2: 6 bugs fixed. Confirmation: 2 fixed (renders on a 128 MB stack of their own, depth limit 250; invariant culture). Re-confirmation: no crash or wrong-outcome bugs; 2 low ones fixed (a slow-unwinding template error taken for a timeout; thread start failure taken for a template failure). Deferred #10, #12. |
@@ -32,7 +32,7 @@ board's fields (status, review, note). Item titles are taken from `phase-1-plan.
 | p1-06 | task | DbContext, tables, migrations; applications admin | M1 | done | |
 | p1-03 | task | Type declarations (versioned schema, templates) | M2 | done | |
 | p1-04 | task | HTTP intake with idempotency; notification read | M2 | done | |
-| p1-05 | task | RabbitMQ `NotificationRequested` intake | M2 | doing | Built: `Juice.Notifications.Messaging`, applications' `brokerUser`, broker-side retry; `RabbitMQIntakeTests`. In review. |
+| p1-05 | task | RabbitMQ `NotificationRequested` intake | M2 | done | `Juice.Notifications.Messaging`, applications' `brokerUser`, broker-side retry; `RabbitMQIntakeTests`. Juice tasks: deferred #17–#19, #21. |
 | p1-07 | task | Claim store, stage worker, concurrency suite | M3 | done | |
 | p1-08 | task | Recipient resolvers and planner stage | M4 | done | |
 | p1-09 | task | Tenant configuration API; provisioning; audit | M4 | doing | API done; provisioning (I12) and audit not built. |
@@ -57,6 +57,7 @@ Newest first. One line per change to copy to the board.
 
 | date | change |
 |---|---|
+| 2026-11-13 | p1-05 → done; M2 → clean (re-check: no bugs; added a test that readiness uses the intake's own broker check). |
 | 2026-11-13 | p1-05 confirmation: one bug (broker health check still Unhealthy), fixed with its own check; checked live: broker stopped → /health/ready 200 Degraded, consumer back after restart. Re-check running. |
 | 2026-11-13 | M2 → confirm: p1-05 round 2 fixes (trace kept from the producer, StartTimeout bounds start, broker health Degraded, update race order, refusal test waits past the retry); deferred #21 (shutdown drain, Juice). |
 | 2026-11-13 | M2 → r2: p1-05 round 1 fixes (topology mismatch fails at once, data numbers as doubles, race answer order); deferred #19 (prefetch, Juice), #20 (no inbox). |

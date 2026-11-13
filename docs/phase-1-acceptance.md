@@ -98,6 +98,6 @@ were made. The email is in Mailpit at http://localhost:8026. `deploy/local/scrip
 
 Not part of the gate; recorded in `docs/deferred.md` and `docs/tracking.md`:
 
-- RabbitMQ intake (p1-05): built 13 Nov 2026 (`RabbitMQIntakeTests`), in review.
+- RabbitMQ intake (p1-05): done 13 Nov 2026 (`RabbitMQIntakeTests`); its Juice follow-ups are deferred #17–#19 and #21.
 - Configuration provisioning (I12) and audit records (p1-09), including the audit of dead-letter retries (#11).
 - Owner decisions: unsigned webhooks without a secret (#13), the category of a webhook 400 (#15).
