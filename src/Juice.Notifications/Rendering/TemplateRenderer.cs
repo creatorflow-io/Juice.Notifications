@@ -318,7 +318,13 @@ namespace Juice.Notifications.Rendering
         private static ScriptObject Builtins()
         {
             var builtins = new ScriptObject();
-            builtins.SetValue("string", new StringFunctions(), true);
+            var strings = new StringFunctions();
+            foreach (var (name, function) in OrdinalStrings.Functions)
+            {
+                strings.Remove(name);
+                strings.SetValue(name, function, true);
+            }
+            builtins.SetValue("string", strings, true);
             builtins.SetValue("array", new ArrayFunctions(), true);
             var math = new MathFunctions();
             foreach (var name in WithheldMembers["math"])
@@ -329,6 +335,51 @@ namespace Juice.Notifications.Rendering
             builtins.SetValue("html", new HtmlFunctions(), true);
             builtins.SetValue("json", Json(), true);
             return builtins;
+        }
+
+        /// <summary>
+        /// Scriban's <c>string.starts_with</c>, <c>ends_with</c>, <c>index_of</c> and <c>equals_ignore_case</c> compare by culture, which under
+        /// ICU ignores characters such as a soft hyphen: a host with invariant globalization would render the same template differently
+        /// (deferred #12). These compare ordinally, so rendering doesn't depend on ICU; <c>index_of</c>'s culture comparisons are taken as their
+        /// ordinal counterparts. Built once: each render gets these same function objects (they hold no state).
+        /// </summary>
+        private static class OrdinalStrings
+        {
+            public static bool StartsWith(string? text, string? value) => text is not null && value is not null && text.StartsWith(value, StringComparison.Ordinal);
+
+            public static bool EndsWith(string? text, string? value) => text is not null && value is not null && text.EndsWith(value, StringComparison.Ordinal);
+
+            public static bool EqualsIgnoreCase(string? text, string? other) => string.Equals(text, other, StringComparison.OrdinalIgnoreCase);
+
+            public static int IndexOf(string text, string search, int? startIndex = null, int? count = null, string? stringComparison = null)
+                => StringFunctions.IndexOf(text, search, startIndex, count, Ordinal(stringComparison));
+
+            /// <summary>
+            /// Any name (padded, in any case) or number of a <see cref="StringComparison"/>, made ordinal; anything else is refused here, so no
+            /// value reaches Scriban's culture comparison.
+            /// </summary>
+            private static string Ordinal(string? comparison)
+            {
+                if (comparison is null)
+                {
+                    return nameof(StringComparison.Ordinal);
+                }
+                if (!Enum.TryParse<StringComparison>(comparison, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
+                {
+                    throw new ArgumentException($"'{comparison}' is not a valid stringComparison", "stringComparison");
+                }
+                return parsed is StringComparison.CurrentCultureIgnoreCase or StringComparison.InvariantCultureIgnoreCase or StringComparison.OrdinalIgnoreCase
+                    ? nameof(StringComparison.OrdinalIgnoreCase) : nameof(StringComparison.Ordinal);
+            }
+
+            internal static readonly ScriptObject Functions = Build();
+
+            private static ScriptObject Build()
+            {
+                var functions = new ScriptObject();
+                functions.Import(typeof(OrdinalStrings));
+                return functions;
+            }
         }
 
         /// <summary>

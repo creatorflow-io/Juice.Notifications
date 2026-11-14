@@ -118,6 +118,7 @@ namespace Juice.Notifications.IntegrationTests
             });
             services.AddSingleton<INotificationProvider>(_email);
             services.AddSingleton<INotificationProvider>(_webhook);
+            services.AddBuiltInChannels();
             services.AddStage<Delivery, DispatcherStage>(Options, runWorkers: false);
             // The real handler, without the API's transaction behavior: the test saves what it changed, as that behavior would.
             services.AddMediatR(mediator => mediator.RegisterServicesFromAssemblyContaining<RetryDelivery>(includeNonPublicTypes: true));

@@ -27,7 +27,7 @@ namespace Juice.Notifications.Delivering
     /// <summary>The stage's step-failure limit, which the planner's timeout retries have to stay under.</summary>
     public sealed record DeliveryPlannerLimits(int MaxStepFailures);
 
-    public sealed class DeliveryPlannerStage(ILogger<DeliveryPlannerStage> logger, DeliveryPlannerLimits? limits = null) : IStage<NotificationRecipient>
+    public sealed class DeliveryPlannerStage(ILogger<DeliveryPlannerStage> logger, IChannelRegistry channels, DeliveryPlannerLimits? limits = null) : IStage<NotificationRecipient>
     {
         public string Name => DeliveryStageNames.DeliveryPlanner;
 
@@ -99,7 +99,7 @@ namespace Juice.Notifications.Delivering
                 // Rendered even for a destination with a problem (its integration disabled), so a dead-letter retry once it is fixed has content to send.
                 if (!rendered.ContainsKey(destination.Channel))
                 {
-                    rendered[destination.Channel] = await RenderAsync(db, row.TenantId, type, request, destination.Channel, model,
+                    rendered[destination.Channel] = await RenderAsync(db, row.TenantId, type, request, destination.Channel, channels.Find(destination.Channel), model,
                         timeoutIsFinal: row.StepFailures >= TimeoutsAllowed, ct);
                 }
                 var (content, template, problem, category) = rendered[destination.Channel];
@@ -187,18 +187,23 @@ namespace Juice.Notifications.Delivering
         private const string NoContent = "";
 
         /// <summary>
-        /// The content for one channel: the tenant's template, else the application's, in <c>en</c>; webhook without one is passthrough. A
-        /// template that fails is a <c>Content</c> failure, recorded on the delivery. One that ran out of time throws, so the step runs again (the
-        /// machine's load can be why), until <paramref name="timeoutIsFinal"/>: then it is recorded like any other failure, so the recipient's
-        /// other channels still go out and history says why this one didn't.
+        /// The content for one channel, shaped as its definition says: the tenant's template, else the application's, in <c>en</c>; a passthrough
+        /// channel without one sends the request's envelope. A template that fails is a <c>Content</c> failure, recorded on the delivery. One that
+        /// ran out of time throws, so the step runs again (the machine's load can be why), until <paramref name="timeoutIsFinal"/>: then it is
+        /// recorded like any other failure, so the recipient's other channels still go out and history says why this one didn't. An integration on a
+        /// channel no longer registered (its package removed) fails as <c>Content</c> too: nothing says what its content would be.
         /// </summary>
         private static async Task<Rendered> RenderAsync(NotificationsDbContext db, Guid tenantId, NotificationType type,
-            NotificationRequest request, string channel, RenderModel model, bool timeoutIsFinal, CancellationToken ct)
+            NotificationRequest request, string channel, ChannelDefinition? definition, RenderModel model, bool timeoutIsFinal, CancellationToken ct)
         {
+            if (definition is null)
+            {
+                return new Rendered(NoContent, null, $"The channel {channel} isn't registered.", FailureCategory.Content);
+            }
             var template = await db.Templates.AsNoTracking()
                 .Where(t => t.TypeId == type.Id && t.Channel == channel && t.Locale == Types.TypeRules.DefaultLocale && (t.TenantId == tenantId || t.TenantId == null))
                 .OrderBy(t => t.TenantId == null).ThenByDescending(t => t.Version).FirstOrDefaultAsync(ct);
-            if (channel == Channels.Webhook && (template is null || template.Engine == TemplateEngines.Passthrough))
+            if (definition.Passthrough && (template is null || template.Engine == TemplateEngines.Passthrough))
             {
                 var envelope = JsonSerializer.Serialize(new
                 {
@@ -214,8 +219,8 @@ namespace Juice.Notifications.Delivering
             try
             {
                 var rendered = await TemplateRenderer.RenderAsync(template.Body, model, ct);
-                return new Rendered(channel == Channels.Email ? ChannelContent.Email(rendered, type.Name) : ChannelContent.Webhook(rendered, ChannelContent.IsJson(rendered)),
-                    template, null, null);
+                return new Rendered(definition.Content == ContentShape.Message
+                    ? ChannelContent.Email(rendered, type.Name) : ChannelContent.Webhook(rendered, ChannelContent.IsJson(rendered)), template, null, null);
             }
             catch (RenderException ex) when (!ex.Retryable || timeoutIsFinal)
             {
@@ -229,6 +234,7 @@ namespace Juice.Notifications.Delivering
     public static class DeliveryPlanningRegistration
     {
         public static IServiceCollection AddDeliveryPlanning(this IServiceCollection services, StageOptions options, bool runWorkers = true)
-            => services.AddSingleton(new DeliveryPlannerLimits(options.MaxStepFailures)).AddStage<NotificationRecipient, DeliveryPlannerStage>(options, runWorkers);
+            => services.AddBuiltInChannels().AddSingleton(new DeliveryPlannerLimits(options.MaxStepFailures))
+                .AddStage<NotificationRecipient, DeliveryPlannerStage>(options, runWorkers);
     }
 }

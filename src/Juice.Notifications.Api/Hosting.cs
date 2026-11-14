@@ -89,11 +89,10 @@ namespace Juice.Notifications.Api
             services.AddScoped<ApplicationEndpoints.Sender>();
 
             // Channels (design D24): phase 1 registers webhook and email; their provider packages take this over (phase-1-plan M6).
-            services.AddSingleton(BuiltInChannels.Webhook);
-            services.AddSingleton(BuiltInChannels.Email);
-            services.TryAddSingleton<IChannelRegistry, ChannelRegistry>();
+            services.AddBuiltInChannels();
             services.AddSingleton<Types.DataSchemas>();
             services.AddScoped<Types.TypeReader>();
+            services.AddScoped<Types.DeclarationHash>();
             services.AddScoped<Intake.NotificationReader>();
             services.AddScoped<Producers>();
             services.TryAddSingleton<ITenantAccess, ClaimTenantAccess>(); // replace to answer from juice-tenants or local grants

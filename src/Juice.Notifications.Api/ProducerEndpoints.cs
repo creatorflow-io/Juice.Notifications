@@ -25,7 +25,7 @@ namespace Juice.Notifications.Api
         }
 
         private static async Task<IResult> DeclareAsync(string appKey, DeclareTypeBody body, ClaimsPrincipal user, Producers producers, IMediator mediator,
-            NotificationsDbContext db, TypeReader reader, IChannelRegistry channels, CancellationToken ct)
+            NotificationsDbContext db, TypeReader reader, DeclarationHash declared, CancellationToken ct)
         {
             var (caller, refusal) = await producers.ResolveAsync(user, ct);
             if (caller is null)
@@ -38,7 +38,8 @@ namespace Juice.Notifications.Api
             }
             var declaration = new TypeDeclaration(body.Key, body.Name, body.Category, body.DisplayGroup, body.Priority, body.Mandatory, body.ExternalRecipients,
                 body.Schema, body.Correlation, body.Redact, body.Workflow, body.Templates);
-            return await ApiResults.SendAsync(mediator, db, new DeclareType(caller.Id, caller.Key, declaration),
+            var command = new DeclareType(caller.Id, caller.Key, declaration);
+            return await ApiResults.SendAsync(mediator, db, command,
                 outcome => outcome.Value!.IsNew
                     ? Results.Created($"/api/v1/applications/{appKey}/types/{outcome.Value.Key}/versions/{outcome.Value.Version}", ToResponse(outcome.Value))
                     : Results.Ok(ToResponse(outcome.Value)),
@@ -48,7 +49,7 @@ namespace Juice.Notifications.Api
                     if (conflict is { Kind: ConflictKind.Unique, Constraint: Constraints.TypeVersion })
                     {
                         var latest = await reader.LatestAsync(caller.Id, body.Key!, ct);
-                        return latest is not null && latest.DeclarationHash == TypeReader.HashOf(caller.Key, declaration, channels)
+                        return latest is not null && declared.Value is { } hash && latest.DeclarationHash == hash
                             ? Results.Ok(new TypeVersionResponse(latest.Key, latest.Version, latest.Name, latest.SchemaHash, latest.CreatedAt))
                             : ApiResults.ConcurrentChange();
                     }

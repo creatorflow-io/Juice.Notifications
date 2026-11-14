@@ -18,13 +18,13 @@ namespace Juice.Notifications.Delivering
     /// <item><c>Delivered</c>/<c>Accepted</c>: done;</item>
     /// <item>retryable: again after exponential backoff with jitter, until the attempts run out (then <c>Failed</c>);</item>
     /// <item>permanent: <c>Failed</c> with its category, no retry (no failover in phase 1);</item>
-    /// <item>unknown (§10.3): retried when that is safe (webhook receivers deduplicate on <c>webhook-id</c>; an idempotent provider; a mandatory
-    /// type once), otherwise <c>Failed {Provider}</c> with <c>unknown_outcome</c>, visible and replayable.</item>
+    /// <item>unknown (§10.3): retried when that is safe (a channel whose receivers deduplicate, as webhook's do on <c>webhook-id</c>; an
+    /// idempotent provider; a mandatory type once), otherwise <c>Failed {Provider}</c> with <c>unknown_outcome</c>, visible and replayable.</item>
     /// </list>
     /// The attempt is written in its own transaction right after the send: the outside world saw it, so it stays recorded even when this worker
     /// turns out to have lost its lease (§11).
     /// </summary>
-    public sealed class DispatcherStage(IEnumerable<INotificationProvider> providers, IOptions<DeliveryOptions> options, IServiceScopeFactory scopes,
+    public sealed class DispatcherStage(IEnumerable<INotificationProvider> providers, IChannelRegistry channels, IOptions<DeliveryOptions> options, IServiceScopeFactory scopes,
         ILogger<DispatcherStage> logger, TimeProvider? clock = null) : IStage<Delivery>
     {
         public string Name => DeliveryStageNames.Dispatcher;
@@ -265,7 +265,7 @@ namespace Juice.Notifications.Delivering
                 case AttemptOutcome.RetryableFailure:
                     Finish(context, row, DeliveryStatus.Failed, chosen.Category, $"{error} (gave up after {attempts} attempts{(row.Replays > 0 ? " since the last retry" : "")})", at);
                     break;
-                case AttemptOutcome.Unknown when attempts < max && SafeToRepeat(row, provider, unknowns):
+                case AttemptOutcome.Unknown when attempts < max && SafeToRepeat(channels.Find(row.Channel), row, provider, unknowns):
                     Retry(context, row, FailureCategory.Provider, error, attempts, at);
                     break;
                 case AttemptOutcome.Unknown:
@@ -278,8 +278,8 @@ namespace Juice.Notifications.Delivering
         }
 
         /// <summary>Repeating a send whose outcome is unknown (§10.3).</summary>
-        private static bool SafeToRepeat(Delivery row, INotificationProvider? provider, int unknowns)
-            => row.Channel == Channels.Webhook          // receivers deduplicate on webhook-id, the same on every attempt
+        private static bool SafeToRepeat(ChannelDefinition? channel, Delivery row, INotificationProvider? provider, int unknowns)
+            => channel?.RepeatsSafely == true          // receivers deduplicate (webhook-id), the same on every attempt
             || provider?.Idempotent == true             // the delivery id is the provider's idempotency key
             || (row.Mandatory && unknowns <= 1);       // a duplicate is better than silence, once
 
@@ -351,6 +351,7 @@ namespace Juice.Notifications.Delivering
         /// <summary>The dispatcher, the phase 1 providers (webhook, SMTP) and the <c>Delivery</c> options.</summary>
         public static IServiceCollection AddDispatching(this IServiceCollection services, StageOptions options, bool runWorkers = true)
         {
+            services.AddBuiltInChannels();
             services.AddSingleton<WebhookProvider>();
             services.AddSingleton<INotificationProvider>(sp => sp.GetRequiredService<WebhookProvider>());
             services.AddSingleton<INotificationProvider, SmtpProvider>();

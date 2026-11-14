@@ -19,6 +19,16 @@ namespace Juice.Notifications.Types
     /// <summary>Declares a version of a type for <paramref name="ApplicationKey"/>: the same declaration as the latest returns it; anything else adds one.</summary>
     public sealed record DeclareType(Guid ApplicationId, string ApplicationKey, TypeDeclaration Declaration) : MessageBase, IRequest<Outcome<TypeVersionView>>;
 
+    /// <summary>
+    /// The hash of the declaration checked in this scope (a request sends one): a declaration that loses the race for the next version (its save
+    /// fails on the version's unique key) is compared with the winner by it, without checking the declaration again.
+    /// </summary>
+    public sealed class DeclarationHash
+    {
+        /// <summary>Set by the handler once the declaration passes the rules; null before, or when it doesn't.</summary>
+        public string? Value { get; internal set; }
+    }
+
     /// <summary>A type version: <see cref="IsNew"/> when this declaration created it.</summary>
     public sealed record TypeVersionView(string Key, int Version, string Name, string SchemaHash, string DeclarationHash, DateTimeOffset CreatedAt, bool IsNew);
 
@@ -46,7 +56,7 @@ namespace Juice.Notifications.Types
                 // A template can have later versions (edited after the declaration); the latest of each is the current one.
                 templates.GroupBy(t => t.Channel).ToDictionary(g => g.Key,
                     g => (IReadOnlyDictionary<string, string>)g.GroupBy(t => t.Locale).Select(l => l.MaxBy(t => t.Version)!)
-                        .ToDictionary(t => t.Locale, t => t.Engine == TemplateEngines.Passthrough ? TypeRules.Passthrough : t.Body)));
+                        .ToDictionary(t => t.Locale, t => t.Engine == TemplateEngines.Passthrough ? TemplateEngines.Passthrough : t.Body)));
         }
 
         /// <summary>The whole declaration, canonical: equal declarations, however written, hash alike.</summary>
@@ -78,7 +88,6 @@ namespace Juice.Notifications.Types
     {
         public const string SendOnlyWorkflow = """[{"step":"send"}]""";
         public const string DefaultLocale = "en";
-        public const string Passthrough = "passthrough";
         public const int MaxTemplateBytes = 64 * 1024;
 
         [GeneratedRegex(@"^[a-z][a-z0-9-]{0,62}\z")]
@@ -249,7 +258,7 @@ namespace Juice.Notifications.Types
                         fail(at, Intake.RequestRules.NulMessage);
                         continue;
                     }
-                    if (body == Passthrough)
+                    if (body == TemplateEngines.Passthrough)
                     {
                         if (!channel.Passthrough)
                         {
@@ -278,7 +287,7 @@ namespace Juice.Notifications.Types
         internal static string Pointer(string name) => name.Replace("~", "~0").Replace("/", "~1");
     }
 
-    internal sealed class TypeHandlers(NotificationsDbContext db, IChannelRegistry channels, TimeProvider clock)
+    internal sealed class TypeHandlers(NotificationsDbContext db, IChannelRegistry channels, TimeProvider clock, DeclarationHash? declared = null)
         : IRequestHandler<DeclareType, Outcome<TypeVersionView>>
     {
         public async ValueTask<Outcome<TypeVersionView>> Handle(DeclareType request, CancellationToken cancellationToken)
@@ -289,6 +298,7 @@ namespace Juice.Notifications.Types
                 return Outcome<TypeVersionView>.Invalid(ErrorCodes.InvalidType, "The type declaration has errors.", errors);
             }
             var hash = type.Hash();
+            declared?.Value = hash;
             var latest = await TypeQueries.LatestAsync(db, request.ApplicationId, type.Key, cancellationToken);
             if (latest is not null && latest.DeclarationHash == hash)
             {
@@ -323,8 +333,8 @@ namespace Juice.Notifications.Types
                     db.Templates.Add(new Template
                     {
                         TypeId = created.Id, Channel = channel, Locale = locale, Version = 1, CreatedAt = now,
-                        Engine = body == TypeRules.Passthrough ? TemplateEngines.Passthrough : TemplateEngines.Scriban,
-                        Body = body == TypeRules.Passthrough ? "" : body,
+                        Engine = body == TemplateEngines.Passthrough ? TemplateEngines.Passthrough : TemplateEngines.Scriban,
+                        Body = body == TemplateEngines.Passthrough ? "" : body,
                     });
                 }
             }
@@ -349,9 +359,6 @@ namespace Juice.Notifications.Types
 
         public Task<NotificationType?> LatestAsync(Guid applicationId, string key, CancellationToken ct) => TypeQueries.LatestAsync(db, applicationId, key, ct);
 
-        /// <summary>The hash a declaration would get, to tell whether a racing declaration was the same one (null when it doesn't pass the rules).</summary>
-        public static string? HashOf(string applicationKey, TypeDeclaration declaration, IChannelRegistry channels)
-            => TypeRules.Check(applicationKey, declaration, channels).Type?.Hash();
 
         public async Task<TypeVersionDetail?> VersionAsync(Guid applicationId, string key, int version, CancellationToken ct)
         {
@@ -366,7 +373,7 @@ namespace Juice.Notifications.Types
             return new TypeVersionDetail(type.Key, type.Version, type.Name, type.Category, type.DisplayGroup, type.Priority, type.Mandatory,
                 type.ExternalRecipients, type.Correlation, type.Redact, schema.RootElement.Clone(), workflow.RootElement.Clone(),
                 templates.GroupBy(t => t.Channel).ToDictionary(g => g.Key,
-                    g => (IReadOnlyDictionary<string, string>)g.ToDictionary(t => t.Locale, t => t.Engine == TemplateEngines.Passthrough ? TypeRules.Passthrough : t.Body)),
+                    g => (IReadOnlyDictionary<string, string>)g.ToDictionary(t => t.Locale, t => t.Engine == TemplateEngines.Passthrough ? TemplateEngines.Passthrough : t.Body)),
                 type.SchemaHash, type.CreatedAt);
         }
     }

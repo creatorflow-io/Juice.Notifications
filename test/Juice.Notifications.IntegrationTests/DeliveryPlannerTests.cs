@@ -327,6 +327,14 @@ namespace Juice.Notifications.IntegrationTests
             var brokenByTenant = await RecipientAsync(scene, address: "qa@example.com");
             await RunAsync();
             Assert.StartsWith("render_failed (tenant template): ", Assert.Single((await AfterAsync(brokenByTenant)).Deliveries).LastError);
+
+            // An integration on a channel no longer registered (its package removed): nothing says what its content is.
+            await IntegrationAsync(scene, "texts", channel: "sms");
+            var unregistered = await RecipientAsync(scene, address: "+15550100", channel: "sms");
+            await RunAsync();
+            var gone = Assert.Single((await AfterAsync(unregistered)).Deliveries);
+            Assert.Equal((DeliveryStatus.Failed, (FailureCategory?)FailureCategory.Content, ""), (gone.Status, gone.FailureCategory, gone.Content));
+            Assert.Equal("The channel sms isn't registered.", gone.LastError);
         }
 
         [Fact]

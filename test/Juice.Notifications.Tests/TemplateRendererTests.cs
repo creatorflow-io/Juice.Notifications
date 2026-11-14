@@ -24,6 +24,40 @@ namespace Juice.Notifications.Tests
         public async Task Templates_see_the_model_and_the_allowed_builtins(string template, string expected)
             => Assert.Equal(expected, await TemplateRenderer.RenderAsync(template, Model(), Ct));
 
+        /// <summary>
+        /// Text comparisons are ordinal (deferred #12): under ICU a culture comparison ignores the soft hyphens (U+00AD) in the subject, so the same
+        /// template would render differently on a host with invariant globalization.
+        /// </summary>
+        [Theory]
+        [InlineData("{{ data.subject | string.starts_with 'Disk' }}", "false")]
+        [InlineData("{{ data.subject | string.starts_with 'Dis' }}", "true")]
+        [InlineData("{{ data.subject | string.ends_with 'full' }}", "false")]
+        [InlineData("{{ data.subject | string.ends_with 'l' }}", "true")]
+        [InlineData("{{ data.subject | string.index_of 'k' }}", "4")]
+        [InlineData("{{ data.subject | string.index_of 'sk' }}", "-1")]
+        [InlineData("{{ data.subject | string.index_of 'SK' 0 null 'InvariantCultureIgnoreCase' }}", "-1")]
+        [InlineData("{{ data.subject | string.index_of 'FUL' 2 null 'CurrentCultureIgnoreCase' }}", "6")]
+        [InlineData("{{ data.subject | string.index_of 'sk' null null '0' }}", "-1")]
+        [InlineData("{{ data.subject | string.index_of 'sk' null null ' CurrentCulture' }}", "-1")]
+        [InlineData("{{ data.subject | string.index_of 'SK' null null '3' }}", "-1")]
+        [InlineData("{{ data.subject | string.index_of 'SK' null null 'currentcultureignorecase' }}", "-1")]
+        [InlineData("{{ data.subject | string.equals_ignore_case 'DISK FULL' }}", "false")]
+        [InlineData("{{ 'Disk' | string.equals_ignore_case 'DISK' }}", "true")]
+        [InlineData("{{ data.missing | string.starts_with 'a' }}", "false")]
+        public async Task Text_comparisons_are_ordinal(string template, string expected)
+        {
+            const char softHyphen = (char)0xAD;
+            var data = JsonSerializer.Serialize(new { subject = $"Dis{softHyphen}k ful{softHyphen}l" });
+            Assert.Equal(expected, await TemplateRenderer.RenderAsync(template, Model(data), Ct));
+        }
+
+        [Theory]
+        [InlineData("")]
+        [InlineData("nope")]
+        [InlineData("9")]
+        public async Task A_comparison_that_isnt_one_fails_the_render(string comparison)
+            => await Assert.ThrowsAsync<RenderException>(() => TemplateRenderer.RenderAsync($"{{{{ 'abc' | string.index_of 'b' null null '{comparison}' }}}}", Model(), Ct));
+
         /// <summary>The declaration check refuses what the sandbox withholds wherever it appears, including branches data may never reach.</summary>
         [Theory]
         [InlineData("{{ include 'other' }}")]
