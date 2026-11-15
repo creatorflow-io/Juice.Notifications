@@ -204,6 +204,67 @@ namespace Juice.Notifications.Data
         public string? TraceParent { get; init; }
     }
 
+    /// <summary>
+    /// A resolver a tenant uses for the people kinds (design §6.1, D20): which implementation (<see cref="Kind"/>), which recipient kinds it
+    /// handles here, and its settings. A request names it by <see cref="Key"/>, or gets the only enabled one that handles the kind.
+    /// </summary>
+    public sealed class RecipientResolverConfig : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public required string Key { get; init; }
+        /// <summary>The implementation: <c>local</c>, <c>topic</c>, <c>identity</c>.</summary>
+        public required string Kind { get; set; }
+        /// <summary>The recipient kinds it handles for this tenant, a subset of what the implementation can.</summary>
+        public string[] Handles { get; set; } = [];
+        public required string Settings { get; set; }
+        public string? SecretRef { get; set; }
+        public bool Enabled { get; set; } = true;
+        public string ManagedBy { get; set; } = Notifications.ManagedBy.Api;
+        public required string DefinitionHash { get; set; }
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    /// <summary>
+    /// A person known to the service, by the source that first produced them and its id for them (design D23). Created the first time a resolver
+    /// returns them, never by matching addresses.
+    /// </summary>
+    public sealed class Subscriber : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        /// <summary>The resolver's source: <c>local</c>, <c>oidc</c>.</summary>
+        public required string Source { get; init; }
+        public required string ExternalId { get; init; }
+        public string? Name { get; set; }
+        public string? Locale { get; set; }
+        /// <summary>An IANA time zone id.</summary>
+        public string? TimeZone { get; set; }
+        /// <summary>
+        /// Set while this person's identity is linked as an alias of another subscriber: resolving them reaches that one. Their own rows stay as
+        /// history; unlinking clears it.
+        /// </summary>
+        public Guid? MergedInto { get; set; }
+        /// <summary>
+        /// Moves on every link or unlink that relies on this subscriber (as the one linked into, or the one merged): two links that would chain
+        /// subscribers can't both commit. The planner's upsert doesn't move it.
+        /// </summary>
+        public int Version { get; set; }
+        public DateTimeOffset CreatedAt { get; init; }
+    }
+
+    /// <summary>Another source's id for a subscriber, linked by a tenant admin (design D23, phase-2-plan p2-d2).</summary>
+    public sealed class SubscriberAlias : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid SubscriberId { get; init; }
+        public required string Source { get; init; }
+        public required string ExternalId { get; init; }
+        public string? LinkedBy { get; init; }
+        public DateTimeOffset LinkedAt { get; init; }
+    }
+
     /// <summary>A request's processing state. One per request.</summary>
     public sealed class Notification : Claimable, ITenantOwned
     {
@@ -218,8 +279,8 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>
-    /// Someone a notification addresses: a route match or an external address in phase 1. <see cref="RouteId"/> has no foreign key, so a route can
-    /// be deleted while its history stays; <see cref="RouteKey"/> keeps its name.
+    /// Someone a notification addresses: a person (a subscriber), a route match or an external address. <see cref="RouteId"/> has no foreign key, so
+    /// a route can be deleted while its history stays; <see cref="RouteKey"/> keeps its name.
     /// </summary>
     public sealed class NotificationRecipient : Claimable, ITenantOwned
     {
@@ -227,6 +288,10 @@ namespace Juice.Notifications.Data
         public Guid Id { get; init; } = Guid.CreateVersion7();
         public Guid NotificationId { get; init; }
         public RecipientKind Kind { get; init; }
+        /// <summary>A person: one recipient per subscriber, however many names reached them (phase-2-plan I14).</summary>
+        public Guid? SubscriberId { get; init; }
+        /// <summary>What reached a person, such as <c>group:sre</c> and <c>user:adam</c>, in ordinal order; empty for other kinds.</summary>
+        public string[] Via { get; init; } = [];
         public Guid? RouteId { get; init; }
         public string? RouteKey { get; init; }
         /// <summary>An external recipient's channel and normalized address.</summary>
@@ -234,7 +299,10 @@ namespace Juice.Notifications.Data
         public string? Address { get; init; }
         /// <summary>The resolver that produced it.</summary>
         public required string Resolver { get; init; }
-        /// <summary>What the request or step named, such as <c>route</c> or <c>address:email:ops@example.com</c>.</summary>
+        /// <summary>
+        /// What the request or step named, such as <c>route:ops</c> or <c>address:email:ops@example.com</c>; <c>subscriber:{id}</c> for a person,
+        /// so a person named twice is one recipient (the unique key).
+        /// </summary>
         public required string NamedAs { get; init; }
         public int EscalationStep { get; init; }
         public RecipientOutcome Outcome { get; set; }

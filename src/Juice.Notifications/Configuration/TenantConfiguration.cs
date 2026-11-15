@@ -221,7 +221,8 @@ namespace Juice.Notifications.Configuration
         }
     }
 
-    internal sealed class ConfigurationHandlers(NotificationsDbContext db, IChannelRegistry channels, IEnumerable<INotificationProvider> providers,
+    internal sealed partial class ConfigurationHandlers(NotificationsDbContext db, IChannelRegistry channels, IEnumerable<INotificationProvider> providers,
+        IEnumerable<IRecipientResolver> resolvers,
         Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions> delivery, TimeProvider clock) :
         IRequestHandler<PutIntegration, Outcome<IntegrationView>>, IRequestHandler<DeleteIntegration, Outcome<bool>>,
         IRequestHandler<PutTarget, Outcome<TargetView>>, IRequestHandler<DeleteTarget, Outcome<bool>>,
@@ -684,7 +685,7 @@ namespace Juice.Notifications.Configuration
         }
     }
 
-    public static class ConfigurationQueries
+    public static partial class ConfigurationQueries
     {
         internal static async Task<IntegrationView> IntegrationAsync(NotificationsDbContext db, Integration i, CancellationToken ct)
         {
@@ -703,7 +704,7 @@ namespace Juice.Notifications.Configuration
     }
 
     /// <summary>Reads a tenant's configuration, outside any command.</summary>
-    public sealed class ConfigurationReader(NotificationsDbContext db)
+    public sealed partial class ConfigurationReader(NotificationsDbContext db)
     {
         public async Task<IReadOnlyList<IntegrationView>> IntegrationsAsync(Guid tenantId, CancellationToken ct)
         {

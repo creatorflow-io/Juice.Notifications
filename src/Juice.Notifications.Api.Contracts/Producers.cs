@@ -17,8 +17,12 @@ namespace Juice.Notifications.Api.Contracts
         string Correlation, IReadOnlyList<string> Redact, JsonElement Schema, JsonElement Workflow,
         IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Templates, string SchemaHash, DateTimeOffset CreatedAt);
 
-    /// <summary><c>{ "kind": "route" }</c>, or <c>{ "kind": "address", "channel": "email", "address": "…" }</c> for a type that allows it.</summary>
-    public sealed record RecipientBody(string? Kind, string? Channel = null, string? Address = null);
+    /// <summary>
+    /// <c>{ "kind": "route" }</c>; <c>{ "kind": "address", "channel": "email", "address": "…" }</c> for a type that allows it; a person kind by id
+    /// (<c>{ "kind": "group", "id": "sre" }</c>) or a topic by key, with an optional <c>resolver</c> when the tenant has several for the kind.
+    /// </summary>
+    public sealed record RecipientBody(string? Kind, string? Channel = null, string? Address = null, string? Id = null, string? Key = null,
+        string? Resolver = null);
 
     public sealed record ActorBody(string? Kind, string? Id);
 

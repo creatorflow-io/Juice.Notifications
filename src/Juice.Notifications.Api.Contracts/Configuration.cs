@@ -22,4 +22,21 @@ namespace Juice.Notifications.Api.Contracts
     public sealed record RouteResponse(string Key, JsonElement Match, IReadOnlyList<string> Targets, bool Enabled, string ManagedBy, DateTimeOffset UpdatedAt);
 
     public sealed record AllowlistResponse(string Destination, IReadOnlyList<int> Ports, string ManagedBy, DateTimeOffset UpdatedAt);
+
+    /// <summary>
+    /// <c>PUT …/resolvers/{key}</c>: a resolver for the people kinds (design §6.1): its implementation (<c>kind</c>, fixed once created), the
+    /// recipient kinds it handles here (all it can, when left out on creation), and its settings.
+    /// </summary>
+    public sealed record PutResolverBody(string? Kind, List<string>? Handles, JsonElement? Settings, string? SecretRef, bool? Enabled);
+
+    public sealed record ResolverResponse(string Key, string Kind, IReadOnlyList<string> Handles, JsonElement Settings, string? SecretRef, bool Enabled,
+        string ManagedBy, DateTimeOffset UpdatedAt);
+
+    /// <summary><c>POST …/subscribers/{id}/aliases</c>: links another source's identity to the subscriber (design D23).</summary>
+    public sealed record LinkAliasBody(string? Source, string? ExternalId);
+
+    public sealed record AliasResponse(string Source, string ExternalId, string? LinkedBy, DateTimeOffset LinkedAt);
+
+    public sealed record SubscriberResponse(Guid Id, string Source, string ExternalId, string? Name, string? Locale, string? TimeZone, Guid? MergedInto,
+        IReadOnlyList<AliasResponse> Aliases, DateTimeOffset CreatedAt);
 }

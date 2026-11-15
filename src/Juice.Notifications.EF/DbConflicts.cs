@@ -21,6 +21,10 @@ namespace Juice.Notifications.Data
         public const string RouteTargetRoute = "fk_route_targets_routes";
         /// <summary>A route names the target: a delete that raced a route naming it, or a route naming a target deleted at the same moment.</summary>
         public const string RouteTargetTarget = "fk_route_targets_integration_targets";
+        public const string SubscriberIdentity = "ix_subscribers_identity";
+        public const string AliasIdentity = "ix_subscriber_aliases_identity";
+        /// <summary>An alias linked to a subscriber deleted at the same moment.</summary>
+        public const string AliasSubscriber = "fk_subscriber_aliases_subscribers";
     }
 
     public enum ConflictKind

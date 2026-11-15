@@ -423,7 +423,8 @@ namespace Juice.Notifications.IntegrationTests
 
             var refused = await client.PostAsJsonAsync(SendUrl, Send(closed, recipients: [new("address", "email", "ops@example.com")]), Ct);
             Assert.Equal((HttpStatusCode.UnprocessableEntity, ErrorCodes.RecipientNotAllowed), (refused.StatusCode, await CodeAsync(refused)));
-            var later = await client.PostAsJsonAsync(SendUrl, Send(open, recipients: [new("group", null, null)]), Ct);
+            // A person kind the tenant has no resolver for.
+            var later = await client.PostAsJsonAsync(SendUrl, Send(open, recipients: [new("group", Id: "sre")]), Ct);
             Assert.Equal((HttpStatusCode.UnprocessableEntity, ErrorCodes.RecipientNotAllowed), (later.StatusCode, await CodeAsync(later)));
             var malformed = await client.PostAsJsonAsync(SendUrl, Send(open, recipients: [new("address", "email", "Ops <ops@example.com>")]), Ct);
             Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);

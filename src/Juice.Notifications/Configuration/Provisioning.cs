@@ -27,12 +27,12 @@ namespace Juice.Notifications.Configuration
         public string? Path { get; set; }
     }
 
-    /// <summary>The provisioning file: <c>{ "tenants": { "&lt;tenant id&gt;": { "integrations": …, "routes": …, "allowlist": … } } }</c>.</summary>
+    /// <summary>The provisioning file: <c>{ "tenants": { "&lt;tenant id&gt;": { "integrations": …, "routes": …, "allowlist": …, "resolvers": … } } }</c>.</summary>
     public sealed record ProvisioningFile(Dictionary<Guid, TenantProvisioning>? Tenants);
 
     /// <summary>One tenant's setup. Integrations and routes are keyed by their key; targets sit under their integration.</summary>
     public sealed record TenantProvisioning(Dictionary<string, ProvisionedIntegration>? Integrations, Dictionary<string, ProvisionedRoute>? Routes,
-        List<ProvisionedAllowlistEntry>? Allowlist);
+        List<ProvisionedAllowlistEntry>? Allowlist, Dictionary<string, ProvisionedResolver>? Resolvers = null);
 
     public sealed record ProvisionedIntegration(string? Channel, string? Kind, JsonElement? Settings, string? SecretRef, int? Priority, bool? Enabled,
         Dictionary<string, ProvisionedTarget>? Targets);
@@ -42,6 +42,9 @@ namespace Juice.Notifications.Configuration
     public sealed record ProvisionedRoute(JsonElement? Match, List<string>? Targets, bool? Enabled);
 
     public sealed record ProvisionedAllowlistEntry(string? Destination, List<int>? Ports);
+
+    /// <summary>A resolver for the people kinds (phase-2-plan M10); handles defaults to every kind its implementation can.</summary>
+    public sealed record ProvisionedResolver(string? Kind, List<string>? Handles, JsonElement? Settings, string? SecretRef, bool? Enabled);
 
     /// <summary>
     /// Wraps one tenant's provisioning, so a host can record it: the audit host opens an audit scope (Juice.Notifications.Api). By default it just
@@ -97,6 +100,7 @@ namespace Juice.Notifications.Configuration
                     .Union(db.IntegrationTargets.Where(t => t.ManagedBy == ManagedBy.Configuration).Select(t => t.TenantId))
                     .Union(db.Routes.Where(r => r.ManagedBy == ManagedBy.Configuration).Select(r => r.TenantId))
                     .Union(db.Allowlist.Where(a => a.ManagedBy == ManagedBy.Configuration).Select(a => a.TenantId))
+                    .Union(db.Resolvers.Where(c => c.ManagedBy == ManagedBy.Configuration).Select(c => c.TenantId))
                     .ToListAsync(cancellationToken);
             }
             if (string.IsNullOrWhiteSpace(options.Value.Path))
@@ -289,6 +293,12 @@ namespace Juice.Notifications.Configuration
                     problems.Add($"allowlist entry '{a.Destination}': listed twice (as {view.Destination})");
                 }
             }
+            var resolverDefinitions = definition.Resolvers ?? [];
+            foreach (var (key, c) in resolverDefinitions)
+            {
+                await Put($"resolver '{key}'", handlers.Handle(new PutResolver(tenantId, key, c.Kind, c.Handles, c.Settings ?? JsonElement.Parse("{}"),
+                    c.SecretRef, c.Enabled ?? true) { Provisioned = true }, ct));
+            }
             if (problems.Count > 0)
             {
                 return changes;
@@ -326,6 +336,17 @@ namespace Juice.Notifications.Configuration
                     integration.Enabled = false;
                     integration.UpdatedAt = now;
                     integration.DefinitionHash = ConfigurationRules.IntegrationHash(integration);
+                    changes++;
+                }
+            }
+            foreach (var resolver in await db.Resolvers.Where(c => c.TenantId == tenantId && c.ManagedBy == ManagedBy.Configuration).ToListAsync(ct))
+            {
+                if (!resolverDefinitions.ContainsKey(resolver.Key))
+                {
+                    resolver.ManagedBy = ManagedBy.Api;
+                    resolver.Enabled = false;
+                    resolver.UpdatedAt = now;
+                    resolver.DefinitionHash = ConfigurationRules.ResolverHash(resolver);
                     changes++;
                 }
             }

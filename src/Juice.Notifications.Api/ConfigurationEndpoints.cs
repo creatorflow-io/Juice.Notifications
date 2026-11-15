@@ -6,7 +6,7 @@ using Juice.Notifications.Data;
 namespace Juice.Notifications.Api
 {
     /// <summary>
-    /// A tenant's delivery setup: integrations and their targets, routes, the outbound allowlist. For platform admins and the tenant's own admins
+    /// A tenant's delivery setup: integrations and their targets, routes, the outbound allowlist, and the resolvers for people. For platform admins and the tenant's own admins
     /// (<see cref="ITenantAccess"/>).
     /// </summary>
     internal static class ConfigurationEndpoints
@@ -42,6 +42,13 @@ namespace Juice.Notifications.Api
             // A destination can be a network (10.20.0.0/16), so it travels in the query, not the path.
             tenant.MapDelete("/allowlist", (Guid tenantId, string destination, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteAllowlistEntry(tenantId, destination), ct));
+
+            tenant.MapGet("/resolvers", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
+                => Results.Ok((await reader.ResolversAsync(tenantId, ct)).Select(ToResponse)));
+            tenant.MapPut("/resolvers/{key}", (Guid tenantId, string key, PutResolverBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => SendAsync(mediator, db, new PutResolver(tenantId, key, body.Kind, body.Handles, body.Settings, body.SecretRef, body.Enabled), ToResponse, ct));
+            tenant.MapDelete("/resolvers/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => DeleteAsync(mediator, db, new DeleteResolver(tenantId, key), ct));
         }
 
         /// <summary>
@@ -83,5 +90,7 @@ namespace Juice.Notifications.Api
         private static RouteResponse ToResponse(RouteView v) => new(v.Key, v.Match, v.Targets, v.Enabled, v.ManagedBy, v.UpdatedAt);
 
         private static AllowlistResponse ToResponse(AllowlistView v) => new(v.Destination, v.Ports, v.ManagedBy, v.UpdatedAt);
+
+        private static ResolverResponse ToResponse(ResolverView v) => new(v.Key, v.Kind, v.Handles, v.Settings, v.SecretRef, v.Enabled, v.ManagedBy, v.UpdatedAt);
     }
 }

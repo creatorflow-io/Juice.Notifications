@@ -18,10 +18,10 @@ namespace Juice.Notifications.Tests
         };
 
         private static (IReadOnlyList<RecipientSpec>? Result, List<FieldError> Invalid, List<FieldError> Refused) Recipients(
-            IReadOnlyList<RecipientSpec>? sent, bool external = true, IReadOnlySet<string>? templated = null)
+            IReadOnlyList<RecipientSpec>? sent, bool external = true, IReadOnlySet<string>? templated = null, IReadOnlyList<RecipientResolverConfig>? resolvers = null)
         {
             List<FieldError> invalid = [], refused = [];
-            var result = RequestRules.Recipients(sent, Type(external), Channels, templated, invalid, refused);
+            var result = RequestRules.Recipients(sent, Type(external), Channels, templated, resolvers ?? [], invalid, refused);
             return (result, invalid, refused);
         }
 
@@ -64,7 +64,7 @@ namespace Juice.Notifications.Tests
                 new(RecipientKinds.Address, null, "a@example.com"),  // 1: no channel
                 Address("not an address"),                           // 2
                 Address("https://x.example.com", channel: "webhook"),// 3: webhook takes no addresses in a request
-                new("group"),                                        // 4: a later kind
+                new("schedule"),                                     // 4: a later kind
                 new("nobody"),                                       // 5: no such kind
                 new(null),                                           // 6
             ]);
@@ -73,6 +73,43 @@ namespace Juice.Notifications.Tests
             Assert.Contains("use a route", invalid[3].Message);
             Assert.Contains("email address", invalid[2].Message);
             Assert.Equal("/recipients/4/kind", Assert.Single(refused).Pointer);
+        }
+
+        private static RecipientResolverConfig Resolver(string key, params string[] handles)
+            => new() { Key = key, Kind = "local", Handles = handles, Settings = "{}", DefinitionHash = "h" };
+
+        [Fact]
+        public void A_person_recipient_gets_the_tenants_resolver_for_its_kind()
+        {
+            RecipientResolverConfig[] resolvers = [Resolver("people", "user", "group"), Resolver("topics", "topic")];
+            var (result, invalid, refused) = Recipients([
+                new("group", Id: "sre"), new("user", Id: "adam"), new("topic", Key: "billing"), new("group", Id: "sre", Resolver: "people"),
+            ], resolvers: resolvers);
+            Assert.Empty(invalid);
+            Assert.Empty(refused);
+            // Stored with the resolver intake chose; the same group named again, with its resolver or without, is one.
+            Assert.Equal([new RecipientSpec("group", Id: "sre", Resolver: "people"), new RecipientSpec("user", Id: "adam", Resolver: "people"),
+                new RecipientSpec("topic", Key: "billing", Resolver: "topics")], result!);
+            Assert.Equal(["group:sre", "user:adam", "topic:billing"], result!.Select(r => r.Name));
+        }
+
+        [Fact]
+        public void A_person_recipient_without_an_id_or_a_resolver_is_refused_at_its_field()
+        {
+            RecipientResolverConfig[] resolvers = [Resolver("people", "user", "group"), Resolver("directory", "group")];
+            var (_, invalid, refused) = Recipients([
+                new("user"),                                          // 0: no id
+                new("topic", Id: "billing"),                          // 1: a topic is named by key
+                new("user", Id: new string('x', RequestRules.MaxRecipientIdLength + 1)), // 2
+                new("user", Id: "a\nb"),                              // 3: a control character
+                new("role", Id: "admin"),                             // 4: nothing handles roles here
+                new("group", Id: "sre"),                              // 5: two handle groups, none named
+                new("user", Id: "adam", Resolver: "directory"),       // 6: that resolver doesn't handle users
+                new("user", Id: new string('x', RequestRules.MaxRecipientIdLength), Resolver: "people"), // the longest id is fine
+            ], resolvers: resolvers);
+            Assert.Equal(["/recipients/0/id", "/recipients/1/key", "/recipients/2/id", "/recipients/3/id"], invalid.Select(e => e.Pointer));
+            Assert.Equal(["/recipients/4/kind", "/recipients/5/resolver", "/recipients/6/resolver"], refused.Select(e => e.Pointer));
+            Assert.Contains("directory, people", refused[1].Message);
         }
 
         [Fact]

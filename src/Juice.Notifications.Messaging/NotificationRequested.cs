@@ -50,11 +50,17 @@ namespace Juice.Notifications.Messaging
         public DateTimeOffset? ExpiresAt { get; init; }
     }
 
-    /// <summary><c>{ "kind": "route" }</c>, or <c>{ "kind": "address", "channel": "email", "address": "…" }</c>.</summary>
+    /// <summary>
+    /// <c>{ "kind": "route" }</c>, <c>{ "kind": "address", "channel": "email", "address": "…" }</c>, a person kind by id (<c>{ "kind": "group",
+    /// "id": "sre" }</c>) or a topic by key, with an optional <c>resolver</c>.
+    /// </summary>
     public sealed record RequestedRecipient(
         [property: JsonConverter(typeof(StrictStringConverter))] string? Kind,
         [property: JsonConverter(typeof(StrictStringConverter))] string? Channel = null,
-        [property: JsonConverter(typeof(StrictStringConverter))] string? Address = null);
+        [property: JsonConverter(typeof(StrictStringConverter))] string? Address = null,
+        [property: JsonConverter(typeof(StrictStringConverter))] string? Id = null,
+        [property: JsonConverter(typeof(StrictStringConverter))] string? Key = null,
+        [property: JsonConverter(typeof(StrictStringConverter))] string? Resolver = null);
 
     /// <summary>Who caused it: <c>user</c>, <c>system</c> or <c>service</c>, and an id.</summary>
     public sealed record RequestedActor(
@@ -143,7 +149,7 @@ namespace Juice.Notifications.Messaging
         private static readonly Dictionary<string, string> FieldNames = new[]
         {
             "type", "typeVersion", "idempotencyKey", "correlationKey", "recipients", "actor", "priority", "labels", "data", "links", "expiresAt",
-            "kind", "channel", "address", "id",
+            "kind", "channel", "address", "id", "key", "resolver",
         }.ToDictionary(n => n, StringComparer.OrdinalIgnoreCase);
 
         /// <summary>

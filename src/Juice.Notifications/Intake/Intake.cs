@@ -8,8 +8,18 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Juice.Notifications.Intake
 {
-    /// <summary>A recipient as sent: <c>{ "kind": "route" }</c>, or <c>{ "kind": "address", "channel": "email", "address": "…" }</c>.</summary>
-    public sealed record RecipientSpec(string? Kind, string? Channel = null, string? Address = null);
+    /// <summary>
+    /// A recipient as sent: <c>{ "kind": "route" }</c>, <c>{ "kind": "address", "channel": "email", "address": "…" }</c>,
+    /// <c>{ "kind": "group", "id": "sre" }</c> or <c>{ "kind": "topic", "key": "…" }</c>, with an optional <c>resolver</c> for the people kinds.
+    /// Stored with the resolver intake chose for them.
+    /// </summary>
+    public sealed record RecipientSpec(string? Kind, string? Channel = null, string? Address = null, string? Id = null, string? Key = null,
+        string? Resolver = null)
+    {
+        /// <summary>How the recipient reads in history (<c>group:sre</c>, <c>topic:billing</c>).</summary>
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string Name => Kind == RecipientKinds.Topic ? $"{Kind}:{Key}" : Id is null ? Kind ?? "" : $"{Kind}:{Id}";
+    }
 
     /// <summary>Who caused it: <c>user</c>, <c>system</c> or <c>service</c>, and an id.</summary>
     public sealed record ActorSpec(string? Kind, string? Id);
@@ -42,8 +52,8 @@ namespace Juice.Notifications.Intake
         public const int MaxLabels = 50;
         public const int MaxLinks = 20;
 
-        /// <summary>Recipient kinds of later phases, refused for now with a clear message rather than as unknown.</summary>
-        private static readonly string[] LaterKinds = ["user", "group", "role", "topic", "subscriber"];
+        /// <summary>Recipient kinds of later work, refused with a clear message rather than as unknown.</summary>
+        private static readonly string[] LaterKinds = ["schedule"];
 
         [GeneratedRegex(@"^[\x21-\x7E]{1,200}\z")]
         private static partial Regex Key();
@@ -59,9 +69,54 @@ namespace Juice.Notifications.Intake
         /// <summary>Text can't hold a NUL character: PostgreSQL stores it in neither text nor jsonb.</summary>
         public const string NulMessage = "This text holds a NUL character (\\u0000), which can't be stored.";
 
-        /// <summary>Normalized recipients, or null with the reason; the default is <c>[{ "kind": "route" }]</c>.</summary>
+        public const int MaxRecipientIdLength = 200;
+
+        /// <summary>A person's id or key, as a request names it or a source gives it: 1–200 characters, no control characters.</summary>
+        public static bool IsRecipientId([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? value)
+            => !string.IsNullOrEmpty(value) && value.Length <= MaxRecipientIdLength && !value.Any(char.IsControl);
+
+        /// <summary>
+        /// A person recipient (<c>user</c>, <c>group</c>, <c>role</c> by <c>id</c>; <c>topic</c> by <c>key</c>) with the tenant resolver that
+        /// handles it: the one named, or the only enabled one for the kind. Null with the reason when it can't be resolved here.
+        /// </summary>
+        private static RecipientSpec? Person(RecipientSpec r, string kind, string at, IReadOnlyList<RecipientResolverConfig> resolvers,
+            List<FieldError> invalid, List<FieldError> refused)
+        {
+            var (field, value) = kind == RecipientKinds.Topic ? ("key", r.Key) : ("id", r.Id);
+            if (!IsRecipientId(value))
+            {
+                invalid.Add(new FieldError($"{at}/{field}", $"A {kind} recipient names its {field}: 1–{MaxRecipientIdLength} characters, no control characters."));
+                return null;
+            }
+            if (r.Resolver is { } named)
+            {
+                if (!resolvers.Any(c => c.Key == named && c.Handles.Contains(kind)))
+                {
+                    refused.Add(new FieldError(at + "/resolver", $"This tenant has no enabled resolver '{named}' for {kind} recipients."));
+                    return null;
+                }
+            }
+            else
+            {
+                var handling = resolvers.Where(c => c.Handles.Contains(kind)).Select(c => c.Key).Order(StringComparer.Ordinal).ToList();
+                if (handling.Count != 1)
+                {
+                    refused.Add(handling.Count == 0
+                        ? new FieldError(at + "/kind", $"No resolver handles {kind} recipients for this tenant. A tenant admin enables one.")
+                        : new FieldError(at + "/resolver", $"Several resolvers handle {kind} recipients here ({string.Join(", ", handling)}): name one."));
+                    return null;
+                }
+                named = handling[0];
+            }
+            return kind == RecipientKinds.Topic ? new RecipientSpec(kind, Key: value, Resolver: named) : new RecipientSpec(kind, Id: value, Resolver: named);
+        }
+
+        /// <summary>
+        /// Normalized recipients, or null with the reason; the default is <c>[{ "kind": "route" }]</c>. <paramref name="resolvers"/> are the
+        /// tenant's enabled resolver configurations (read only when a person kind was sent).
+        /// </summary>
         internal static IReadOnlyList<RecipientSpec>? Recipients(IReadOnlyList<RecipientSpec>? sent, NotificationType type, IChannelRegistry channels,
-            IReadOnlySet<string>? templatedChannels, List<FieldError> invalid, List<FieldError> refused)
+            IReadOnlySet<string>? templatedChannels, IReadOnlyList<RecipientResolverConfig> resolvers, List<FieldError> invalid, List<FieldError> refused)
         {
             if (sent is null || sent.Count == 0)
             {
@@ -114,11 +169,17 @@ namespace Juice.Notifications.Intake
                             result.Add(new RecipientSpec(RecipientKinds.Address, channel.Key, address));
                         }
                         break;
+                    case { } kind when RecipientKinds.People.Contains(kind):
+                        if (Person(r, kind, at, resolvers, invalid, refused) is { } person && !result.Contains(person))
+                        {
+                            result.Add(person);
+                        }
+                        break;
                     case { } kind when LaterKinds.Contains(kind):
-                        refused.Add(new FieldError(at + "/kind", $"Recipients of kind '{kind}' come with people and the inbox (phase 2). Use route or address."));
+                        refused.Add(new FieldError(at + "/kind", $"Recipients of kind '{kind}' come with an on-call resolver, which isn't available yet."));
                         break;
                     default:
-                        invalid.Add(new FieldError(at + "/kind", "The kind is route or address."));
+                        invalid.Add(new FieldError(at + "/kind", "The kind is route, address, user, group, role or topic."));
                         break;
                 }
             }
@@ -218,7 +279,8 @@ namespace Juice.Notifications.Intake
         }
     }
 
-    internal sealed class IntakeHandler(NotificationsDbContext db, IChannelRegistry channels, DataSchemas schemas, TimeProvider clock)
+    internal sealed class IntakeHandler(NotificationsDbContext db, IChannelRegistry channels, DataSchemas schemas, TimeProvider clock,
+        IEnumerable<Planning.IRecipientResolver> installed)
         : IRequestHandler<AcceptNotification, Outcome<AcceptedView>>
     {
         public async ValueTask<Outcome<AcceptedView>> Handle(AcceptNotification request, CancellationToken cancellationToken)
@@ -301,7 +363,15 @@ namespace Juice.Notifications.Intake
                 ? (await db.Templates.AsNoTracking().Where(t => t.TypeId == type.Id && (t.TenantId == null || t.TenantId == tenant))
                     .Select(t => t.Channel).Distinct().ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal)
                 : null;
-            var recipients = RequestRules.Recipients(s.Recipients, type, channels, templated, invalid, refused);
+            var resolvers = s.Recipients?.Any(r => r?.Kind is { } k && RecipientKinds.People.Contains(k)) == true
+                // Only those whose implementation is installed and still handles the kind: the planner skips the others, so accepting them
+                // would plan no one.
+                ? (await db.Resolvers.AsNoTracking().Where(c => c.TenantId == tenant && c.Enabled).ToListAsync(cancellationToken))
+                    .Select(c => (Config: c, Implementation: installed.FirstOrDefault(i => i.Configurable && i.Key == c.Kind)))
+                    .Where(p => p.Implementation is not null)
+                    .Select(p => { p.Config.Handles = [.. p.Config.Handles.Where(p.Implementation!.Kinds.Contains)]; return p.Config; }).ToList()
+                : [];
+            var recipients = RequestRules.Recipients(s.Recipients, type, channels, templated, resolvers, invalid, refused);
             var data = s.Data is { ValueKind: not JsonValueKind.Null and not JsonValueKind.Undefined } d ? d : JsonDocument.Parse("{}").RootElement;
             if (data.ValueKind != JsonValueKind.Object)
             {

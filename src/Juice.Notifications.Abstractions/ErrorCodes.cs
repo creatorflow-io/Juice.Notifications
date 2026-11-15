@@ -57,5 +57,9 @@ namespace Juice.Notifications
         public const string NotTenantAdmin = "not_tenant_admin";
         /// <summary>A delivery that isn't failed, was never rendered, or whose request has expired can't be retried.</summary>
         public const string NotRetryable = "not_retryable";
+        /// <summary>The identity is already an alias of another subscriber: unlink it there first.</summary>
+        public const string AliasInUse = "alias_in_use";
+        /// <summary>The subscriber is linked into another one (or others are linked into it), so it can't be linked as asked.</summary>
+        public const string SubscriberMerged = "subscriber_merged";
     }
 }

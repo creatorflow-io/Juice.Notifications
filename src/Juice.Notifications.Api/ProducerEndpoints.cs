@@ -112,7 +112,7 @@ namespace Juice.Notifications.Api
                 return refusal!;
             }
             var submission = new NotificationSubmission(body.Type, body.TypeVersion, body.IdempotencyKey, body.CorrelationKey,
-                body.Recipients?.Select(r => new RecipientSpec(r?.Kind, r?.Channel, r?.Address)).ToList(), body.Actor is null ? null : new ActorSpec(body.Actor.Kind, body.Actor.Id),
+                body.Recipients?.Select(r => new RecipientSpec(r?.Kind, r?.Channel, r?.Address, r?.Id, r?.Key, r?.Resolver)).ToList(), body.Actor is null ? null : new ActorSpec(body.Actor.Kind, body.Actor.Id),
                 body.Priority, body.Labels, body.Data, body.Links, body.ExpiresAt);
             var traceParent = Activity.Current is { IdFormat: ActivityIdFormat.W3C } activity ? activity.Id : null;
             return await ApiResults.SendAsync(mediator, db, new AcceptNotification(tenantId, caller.Id, caller.Key, submission, traceParent, caller.Enabled),

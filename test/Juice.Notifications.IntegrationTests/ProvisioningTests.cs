@@ -5,6 +5,7 @@ using Juice.Notifications.Api.Contracts;
 using Juice.Notifications.Configuration;
 using Juice.Notifications.Data;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -48,7 +49,11 @@ namespace Juice.Notifications.IntegrationTests
         public ProvisioningTests()
         {
             var path = Write(Initial);
-            _app = new NotificationsApp(host => host.UseSetting("Provisioning:Path", path));
+            _app = new NotificationsApp(host =>
+            {
+                host.UseSetting("Provisioning:Path", path);
+                host.ConfigureTestServices(services => services.AddSingleton<Planning.IRecipientResolver>(new FakePeopleResolver()));
+            });
         }
 
         public ValueTask InitializeAsync() => _app.InitializeAsync();
@@ -382,6 +387,28 @@ namespace Juice.Notifications.IntegrationTests
                           "targets": { "site": { "address": "https://hooks.example.com/in" }, "ops": { "address": "https://hooks.example.com/ops" } } }
                 """)));
             Assert.Contains("moves only between integrations of one channel", error.Message);
+        }
+
+        [Fact]
+        public async Task A_file_provisions_resolvers_and_hands_back_the_ones_it_drops()
+        {
+            LocalStack.RequireAvailable();
+            using var admin = await AdminAsync();
+            await ProvisionAsync($$"""{ "tenants": { "{{Tenant}}": { "resolvers": { "people": { "kind": "fake", "handles": ["user"] } } } } }""");
+
+            var listed = Assert.Single(await (await admin.GetAsync($"{Url}/resolvers", Ct)).Content.ReadFromJsonAsync<List<ResolverResponse>>(Ct) ?? []);
+            Assert.Equal(("people", "fake", "user", true, ManagedBy.Configuration),
+                (listed.Key, listed.Kind, string.Join(",", listed.Handles), listed.Enabled, listed.ManagedBy));
+            Assert.Equal(ErrorCodes.ManagedByConfiguration,
+                await CodeAsync(await admin.PutAsJsonAsync($"{Url}/resolvers/people", new PutResolverBody(null, null, null, null, false), Ct)));
+            Assert.Equal(ErrorCodes.ManagedByConfiguration, await CodeAsync(await admin.DeleteAsync($"{Url}/resolvers/people", Ct)));
+            Assert.Contains("resolver 'bad'", (await Assert.ThrowsAsync<InvalidOperationException>(() => ProvisionAsync(
+                $$"""{ "tenants": { "{{Tenant}}": { "resolvers": { "bad": { "kind": "nope" } } } } }"""))).Message);
+
+            // Dropped from the file: back to the API, disabled.
+            await ProvisionAsync($$"""{ "tenants": { "{{Tenant}}": { } } }""");
+            listed = Assert.Single(await (await admin.GetAsync($"{Url}/resolvers", Ct)).Content.ReadFromJsonAsync<List<ResolverResponse>>(Ct) ?? []);
+            Assert.Equal((false, ManagedBy.Api), (listed.Enabled, listed.ManagedBy));
         }
 
         [Fact]

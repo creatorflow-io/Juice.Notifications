@@ -44,6 +44,9 @@ namespace Juice.Notifications.Data
         public DbSet<Route> Routes => Set<Route>();
         public DbSet<RouteTarget> RouteTargets => Set<RouteTarget>();
         public DbSet<AllowlistEntry> Allowlist => Set<AllowlistEntry>();
+        public DbSet<RecipientResolverConfig> Resolvers => Set<RecipientResolverConfig>();
+        public DbSet<Subscriber> Subscribers => Set<Subscriber>();
+        public DbSet<SubscriberAlias> SubscriberAliases => Set<SubscriberAlias>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
         public DbSet<Notification> Notifications => Set<Notification>();
         public DbSet<NotificationRecipient> Recipients => Set<NotificationRecipient>();
@@ -193,6 +196,48 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.ManagedBy).HasMaxLength(10);
             });
 
+            model.Entity<RecipientResolverConfig>(e =>
+            {
+                e.ToTable("recipient_resolvers");
+                TenantKey(e);
+                e.Property(x => x.Key).HasMaxLength(63);
+                e.Property(x => x.Kind).HasMaxLength(40);
+                e.Property(x => x.Settings).HasColumnType("jsonb");
+                e.Property(x => x.SecretRef).HasMaxLength(500);
+                e.Property(x => x.ManagedBy).HasMaxLength(10);
+                e.Property(x => x.DefinitionHash).HasMaxLength(64).IsConcurrencyToken();
+                e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
+            });
+
+            model.Entity<Subscriber>(e =>
+            {
+                e.ToTable("subscribers");
+                TenantKey(e);
+                e.Property(x => x.Source).HasMaxLength(63);
+                e.Property(x => x.ExternalId).HasMaxLength(200);
+                e.Property(x => x.Name).HasMaxLength(200);
+                e.Property(x => x.Locale).HasMaxLength(35);
+                e.Property(x => x.TimeZone).HasMaxLength(64);
+                e.Property(x => x.Version).IsConcurrencyToken();
+                // One subscriber per source and id: two planners resolving the same new person at once make one (phase-2-plan I15).
+                e.HasIndex(x => new { x.TenantId, x.Source, x.ExternalId }).IsUnique().HasDatabaseName(Constraints.SubscriberIdentity);
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.MergedInto }).OnDelete(DeleteBehavior.Restrict);
+            });
+
+            model.Entity<SubscriberAlias>(e =>
+            {
+                e.ToTable("subscriber_aliases");
+                TenantKey(e);
+                e.Property(x => x.Source).HasMaxLength(63);
+                e.Property(x => x.ExternalId).HasMaxLength(200);
+                e.Property(x => x.LinkedBy).HasMaxLength(200);
+                // An identity is an alias of at most one subscriber.
+                e.HasIndex(x => new { x.TenantId, x.Source, x.ExternalId }).IsUnique().HasDatabaseName(Constraints.AliasIdentity);
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId });
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName(Constraints.AliasSubscriber);
+            });
+
             model.Entity<NotificationRequest>(e =>
             {
                 e.ToTable("requests");
@@ -240,6 +285,8 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Resolver).HasMaxLength(63);
                 e.Property(x => x.NamedAs).HasMaxLength(500);
                 e.Property(x => x.Outcome).HasConversion<string>().HasMaxLength(30);
+                // A subscriber's history keeps its recipients: a subscriber with recipients isn't deleted.
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Restrict);
                 // One recipient per thing named, per escalation step: planning twice can't add a second set (proof 3).
                 e.HasIndex(x => new { x.TenantId, x.NotificationId, x.EscalationStep, x.NamedAs }).IsUnique().HasDatabaseName(Constraints.RecipientNamed);
                 e.HasOne<Notification>().WithMany().HasForeignKey(x => new { x.TenantId, x.NotificationId }).OnDelete(DeleteBehavior.Cascade);

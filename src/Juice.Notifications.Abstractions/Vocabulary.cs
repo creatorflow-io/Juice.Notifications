@@ -21,11 +21,19 @@ namespace Juice.Notifications
         Failed,
     }
 
-    /// <summary>The <c>kind</c> of a recipient in a request (design §5.2). Phase 1 resolves <c>route</c> and <c>address</c>.</summary>
+    /// <summary>The <c>kind</c> of a recipient in a request (design §5.2). <c>route</c> and <c>address</c> are built in; the people kinds go
+    /// through a resolver the tenant configures (phase-2-plan M10).</summary>
     public static class RecipientKinds
     {
         public const string Route = "route";
         public const string Address = "address";
+        public const string User = "user";
+        public const string Group = "group";
+        public const string Role = "role";
+        public const string Topic = "topic";
+
+        /// <summary>Kinds a tenant-configured resolver handles; each names one thing by <c>id</c> (a topic by <c>key</c>).</summary>
+        public static readonly IReadOnlyList<string> People = [User, Group, Role, Topic];
     }
 
     /// <summary>Who a recipient is (design §3).</summary>
