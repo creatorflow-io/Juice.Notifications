@@ -184,8 +184,8 @@ namespace Juice.Notifications.Types
             }
             catch (RegexMatchTimeoutException)
             {
-                // JsonSchema.Net matches each pattern with its own 5 s timeout (no hook to change it): a pattern that backtracks without end
-                // stops there, and the data is refused (docs/deferred.md #6).
+                // A pattern that backtracks without end stops at its short timeout (PatternTimeouts), which ends the whole evaluation, and the
+                // data is refused (docs/deferred.md #6).
                 return [new FieldError(pointer, "A pattern in the schema took too long to check against this data.")];
             }
             catch (Exception ex) when (ex is RefResolutionException or JsonSchemaException)
@@ -195,8 +195,13 @@ namespace Juice.Notifications.Types
             }
         }
 
+        /// <summary>Builds a schema whose patterns stop at a short timeout (<see cref="PatternTimeouts"/>).</summary>
         private static JsonSchema Build(JsonElement schema)
-            => JsonSchema.Build(schema, new BuildOptions { SchemaRegistry = new SchemaRegistry(), Dialect = Dialect.Draft202012 });
+        {
+            var built = JsonSchema.Build(schema, new BuildOptions { SchemaRegistry = new SchemaRegistry(), Dialect = Dialect.Draft202012 });
+            PatternTimeouts.Apply(built);
+            return built;
+        }
 
         private static IReadOnlyList<FieldError> Errors(EvaluationResults results, string pointer)
         {

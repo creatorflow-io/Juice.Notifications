@@ -68,6 +68,63 @@ namespace Juice.Notifications.Tests
             Key = "t.x", Name = "x", Category = "c", DisplayGroup = "general", SchemaHash = "h", Workflow = "[]", DeclarationHash = "d", Schema = schema,
         };
 
+        /// <summary>
+        /// A pattern that backtracks without end (5 s for each string before) stops at the short timeout, and the first timeout ends the check:
+        /// many strings cost one timeout. Wherever the pattern is: under a reference, under a <c>$schema</c> that switches the library to its own
+        /// dialect, and as a property-name pattern.
+        /// </summary>
+        [Theory]
+        [InlineData("""{ "properties": { "a": { "pattern": "^(a+)+$" } }, "additionalProperties": { "pattern": "^(a+)+$" } }""")]
+        [InlineData("""{ "$schema": "https://json-schema.org/draft/2020-12/schema", "additionalProperties": { "pattern": "^(a|aa)+$" } }""")]
+        [InlineData("""{ "$defs": { "s": { "pattern": "^(a*)*$" } }, "additionalProperties": { "$ref": "#/$defs/s" } }""")]
+        [InlineData("""{ "additionalProperties": { "$schema": "http://json-schema.org/draft-07/schema#", "pattern": "^(\\w+\\s?)*$" } }""")]
+        [InlineData("""{ "patternProperties": { "^(a+)+$": false } }""")]
+        public void A_pattern_that_backtracks_stops_at_the_short_timeout(string schema)
+        {
+            Assert.Empty(Check(schema));
+            var compiled = new DataSchemas().For(Type(schema));
+            // 40 strings that each backtrack: as values, and as property names (a different length each, so each is a property).
+            var data = JsonElement.Parse(JsonSerializer.Serialize(Enumerable.Range(0, 40).ToDictionary(i => new string('a', 40 + i) + "!", i => new string('a', 40 + i) + "!")));
+
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var errors = DataSchemas.Validate(compiled, data, "/data");
+            clock.Stop();
+
+            Assert.Contains(errors, e => e.Message.Contains("took too long"));
+            // One timeout of 100 ms; before, 5 s for the first string alone. Room for a busy machine.
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(2), $"took {clock.Elapsed}");
+        }
+
+        /// <summary>Only the timeout changes: patterns keep the library's ECMAScript meaning, lookarounds and backreferences included.</summary>
+        [Theory]
+        [InlineData("^\\d+$", "123", true)]
+        [InlineData("^\\d+$", "٣", false)]
+        [InlineData("^\\w$", "é", false)]
+        [InlineData("^(?!test)[a-z]+$", "prod", true)]
+        [InlineData("^(?!test)[a-z]+$", "testing", false)]
+        [InlineData("^(a)\\1$", "aa", true)]
+        [InlineData("^[^]$", "\n", true)]
+        [InlineData("^\\p{L}+$", "été", true)]
+        [InlineData("^.{0,5000}$", "short", true)]
+        public void Patterns_keep_their_meaning(string pattern, string value, bool valid)
+        {
+            var schema = $$"""{ "properties": { "a": { "pattern": {{JsonSerializer.Serialize(pattern)}} } } }""";
+            Assert.Empty(Check(schema));
+            var errors = DataSchemas.Validate(new DataSchemas().For(Type(schema)), JsonElement.Parse(JsonSerializer.Serialize(new { a = value })), "/data");
+            Assert.Equal(valid, errors.Count == 0);
+        }
+
+        [Fact]
+        public void A_regex_keeps_the_librarys_pattern_and_options_with_the_short_timeout()
+        {
+            var library = new System.Text.RegularExpressions.Regex(@"^\d+$", System.Text.RegularExpressions.RegexOptions.ECMAScript
+                | System.Text.RegularExpressions.RegexOptions.Compiled, TimeSpan.FromSeconds(5));
+            var shortened = PatternTimeouts.Shorten(library);
+            Assert.Equal(library.ToString(), shortened.ToString());
+            Assert.Equal(System.Text.RegularExpressions.RegexOptions.ECMAScript, shortened.Options);
+            Assert.Equal(PatternTimeouts.Timeout, shortened.MatchTimeout);
+        }
+
         [Fact]
         public void Data_errors_point_into_the_data()
         {
