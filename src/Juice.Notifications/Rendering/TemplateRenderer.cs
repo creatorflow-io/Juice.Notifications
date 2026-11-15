@@ -148,7 +148,7 @@ namespace Juice.Notifications.Rendering
 
         /// <summary>
         /// Renders synchronously on a thread of its own with <see cref="RenderStackBytes"/> of stack, in the invariant culture so the host's
-        /// <c>LANG</c> can't change the output (<c>array.sort</c> compares by culture).
+        /// <c>LANG</c> can't change the output (number formatting, and anything else of Scriban's that reads the current culture).
         /// </summary>
         private static Task<string> RenderOnOwnStackAsync(Template template, TemplateContext context)
         {
@@ -325,7 +325,10 @@ namespace Juice.Notifications.Rendering
                 strings.SetValue(name, function, true);
             }
             builtins.SetValue("string", strings, true);
-            builtins.SetValue("array", new ArrayFunctions(), true);
+            var arrays = new ArrayFunctions();
+            arrays.Remove("sort");
+            arrays.SetValue("sort", OrdinalSort.Function, true);
+            builtins.SetValue("array", arrays, true);
             var math = new MathFunctions();
             foreach (var name in WithheldMembers["math"])
             {
@@ -379,6 +382,193 @@ namespace Juice.Notifications.Rendering
                 var functions = new ScriptObject();
                 functions.Import(typeof(OrdinalStrings));
                 return functions;
+            }
+        }
+
+        /// <summary>
+        /// <c>array.sort</c> as Scriban's (a list, optionally by a member or a dotted member path; a stable sort; null first), but comparing
+        /// text ordinally (deferred #12): Scriban's compares by culture, which under ICU ignores a soft hyphen and puts <c>a</c> before <c>B</c>,
+        /// so a host without ICU would render differently. Numbers compare by value whatever their type (<c>1</c> and <c>1.5</c>), where Scriban's
+        /// failed on an integer next to a fraction. Values of different kinds (text and a number) don't compare: the render fails, as Scriban's did.
+        /// </summary>
+        private static class OrdinalSort
+        {
+            internal static readonly IScriptCustomFunction Function = DynamicCustomFunction.Create(null, typeof(OrdinalSort).GetMethod(nameof(Sort))!);
+
+            public static System.Collections.IEnumerable Sort(TemplateContext context, Scriban.Parsing.SourceSpan span, object? list, string? member = null)
+            {
+                if (list is null)
+                {
+                    return new ScriptRange();
+                }
+                if (list is not System.Collections.IEnumerable enumerable)
+                {
+                    return new ScriptArray(1) { list };
+                }
+                var items = new List<object?>();
+                foreach (var item in enumerable)
+                {
+                    // As Scriban's internal iteration: the loop limit and the render's budget hold.
+                    context.CancellationToken.ThrowIfCancellationRequested();
+                    if (context.LoopLimit != 0 && items.Count >= context.LoopLimit)
+                    {
+                        throw new Scriban.Syntax.ScriptRuntimeException(span, $"Exceeding number of iteration limit `{context.LoopLimit}` for internal iteration.");
+                    }
+                    items.Add(item);
+                }
+                var values = string.IsNullOrEmpty(member) ? items : items.Select(item => SortValue(context, span, item, member)).ToList();
+                // Checked before sorting, so the render says why: a comparer's exception reaches it as "Failed to compare two elements".
+                var keys = Keys(span, values);
+                return new ScriptArray(items.Select((item, i) => (Item: item, Key: keys[i])).OrderBy(p => p.Key, Comparer<object?>.Create(Compare))
+                    .Select(p => p.Item).ToList());
+            }
+
+            /// <summary>
+            /// What each value sorts by, once per value: text, or a number of one type as itself; numbers of several types as their exact
+            /// <see cref="Fraction"/>; nulls stay null. Values of different kinds (text and a number), or ones that don't compare, fail the render.
+            /// </summary>
+            private static object?[] Keys(Scriban.Parsing.SourceSpan span, List<object?> values)
+            {
+                var present = values.Where(v => v is not null).ToList();
+                if (present.Count < 2)
+                {
+                    return [.. values]; // nothing to compare but nulls, which go first whatever the value is
+                }
+                var kinds = present.Select(Kind).Distinct().ToList();
+                if (kinds.Count > 1)
+                {
+                    throw new Scriban.Syntax.ScriptRuntimeException(span,
+                        $"array.sort can't compare {kinds[0]} with {kinds[1]}: sort values of one kind (all text or all numbers).");
+                }
+                var types = present.Select(v => v!.GetType()).Distinct().Count();
+                if (kinds[0] == "a number" && types > 1)
+                {
+                    return [.. values.Select(v => v is null ? null : (object)Fraction.Of(v))];
+                }
+                if (types > 1 || present[0] is not IComparable)
+                {
+                    throw new Scriban.Syntax.ScriptRuntimeException(span, $"array.sort can't compare {kinds[0]} values: sort text, numbers or booleans.");
+                }
+                return [.. values];
+            }
+
+            /// <summary>Null first; text ordinally; anything else (one type, checked by <see cref="Keys"/>) by its own comparison.</summary>
+            private static int Compare(object? a, object? b) => (a, b) switch
+            {
+                (null, null) => 0,
+                (null, _) => -1,
+                (_, null) => 1,
+                (string x, string y) => string.CompareOrdinal(x, y),
+                _ => ((IComparable)a).CompareTo(b), // one numeric type, Fraction, bool, char: no culture involved
+            };
+
+            /// <summary>The member, else the dotted path (as Scriban looks it up); null when there is none.</summary>
+            private static object? SortValue(TemplateContext context, Scriban.Parsing.SourceSpan span, object? target, string member)
+            {
+                if (TryMember(context, span, target, member, out var value))
+                {
+                    return value;
+                }
+                if (member.Contains('.'))
+                {
+                    value = target;
+                    foreach (var part in member.Split('.'))
+                    {
+                        if (value is null || !TryMember(context, span, value, part, out value))
+                        {
+                            return null;
+                        }
+                    }
+                    return value;
+                }
+                return null;
+            }
+
+            private static bool TryMember(TemplateContext context, Scriban.Parsing.SourceSpan span, object? target, string member, out object? value)
+            {
+                value = null;
+                if (target is null)
+                {
+                    return false;
+                }
+                return context.GetMemberAccessor(target).TryGetValue(context, span, target, member, out value)
+                    || (context.TryGetMember?.Invoke(context, span, target, member, out value) ?? false);
+            }
+
+            private static string Kind(object? value) => value switch
+            {
+                string => "text",
+                bool => "a boolean",
+                _ when IsNumber(value!) => "a number",
+                _ => "an object",
+            };
+
+            private static bool IsNumber(object value) => value is sbyte or byte or short or ushort or int or uint or long or ulong
+                or float or double or decimal or System.Numerics.BigInteger;
+
+            /// <summary>
+            /// A number by exact value, for numbers of different types: each as the fraction it is (a double is a binary fraction, a decimal a
+            /// decimal one), so the order doesn't depend on which pairs are compared how, and is transitive (comparing some pairs as doubles and
+            /// others as decimals isn't). NaN sorts first, then negative infinity; positive infinity last.
+            /// </summary>
+            private readonly record struct Fraction(System.Numerics.BigInteger Numerator, System.Numerics.BigInteger Denominator, int Rank) : IComparable
+            {
+                public int CompareTo(object? other)
+                {
+                    var that = (Fraction)other!;
+                    if (Rank != 0 || that.Rank != 0)
+                    {
+                        return Rank.CompareTo(that.Rank);
+                    }
+                    return Denominator.IsOne && that.Denominator.IsOne ? Numerator.CompareTo(that.Numerator)
+                        : (Numerator * that.Denominator).CompareTo(that.Numerator * Denominator);
+                }
+
+                public static Fraction Of(object value)
+                {
+                    var (numerator, denominator, rank) = Exact(value);
+                    return new Fraction(numerator, denominator, rank);
+                }
+            }
+
+            /// <summary>A finite number as numerator / denominator (denominator positive); <c>Rank</c> -2 for NaN, ∓1 for the infinities.</summary>
+            private static (System.Numerics.BigInteger Numerator, System.Numerics.BigInteger Denominator, int Rank) Exact(object value)
+            {
+                switch (value)
+                {
+                    case System.Numerics.BigInteger big:
+                        return (big, 1, 0);
+                    case ulong u:
+                        return (u, 1, 0);
+                    case decimal d:
+                    {
+                        var bits = decimal.GetBits(d);
+                        var mantissa = new System.Numerics.BigInteger((uint)bits[0])
+                            | (new System.Numerics.BigInteger((uint)bits[1]) << 32) | (new System.Numerics.BigInteger((uint)bits[2]) << 64);
+                        var scale = (bits[3] >> 16) & 0xFF;
+                        return (bits[3] < 0 ? -mantissa : mantissa, System.Numerics.BigInteger.Pow(10, scale), 0);
+                    }
+                    case float or double:
+                    {
+                        var number = Convert.ToDouble(value, System.Globalization.CultureInfo.InvariantCulture); // a float widens exactly
+                        if (double.IsNaN(number))
+                        {
+                            return (0, 1, -2);
+                        }
+                        if (double.IsInfinity(number))
+                        {
+                            return (0, 1, number < 0 ? -1 : 1);
+                        }
+                        var bits = BitConverter.DoubleToInt64Bits(number);
+                        var exponent = (int)((bits >> 52) & 0x7FF);
+                        var fraction = bits & 0xFFFFFFFFFFFFFL;
+                        var (mantissa, power) = exponent == 0 ? (fraction, -1074) : (fraction | (1L << 52), exponent - 1075);
+                        System.Numerics.BigInteger numerator = number < 0 ? -mantissa : mantissa;
+                        return power >= 0 ? (numerator << power, 1, 0) : (numerator, System.Numerics.BigInteger.One << -power, 0);
+                    }
+                    default: // the other integer types
+                        return (Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture), 1, 0);
+                }
             }
         }
 

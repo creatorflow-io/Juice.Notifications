@@ -553,6 +553,7 @@ namespace Juice.Notifications.Configuration
             var (newMatch, newTargets, enabled) = (match ?? existing!.Match, targets ?? existing!.Targets, r.Enabled ?? existing?.Enabled ?? true);
             var hash = ConfigurationRules.RouteHash(newMatch, newTargets, enabled);
             List<RouteTarget> rows = [];
+            HashSet<Guid> named = [];
             var changed = existing is null || (existing.DefinitionHash, existing.ManagedBy) != (hash, managedBy);
             if (existing is null)
             {
@@ -565,6 +566,12 @@ namespace Juice.Notifications.Configuration
             }
             else
             {
+                if (targets is not null)
+                {
+                    // The targets the route names as read, before this Put changes them: its other rows are stale (below).
+                    var before = existing.Targets;
+                    named = [.. await db.IntegrationTargets.Where(t => t.TenantId == r.NotificationTenantId && before.Contains(t.Key)).Select(t => t.Id).ToListAsync(ct)];
+                }
                 if (changed)
                 {
                     existing.Match = newMatch;
@@ -585,9 +592,13 @@ namespace Juice.Notifications.Configuration
                 // step even when the route itself is unchanged, so a Put of the same route repairs rows that went missing. When the route changes,
                 // every row it keeps is written (its position), so one removed under this Put since it was read fails it, rather than the route
                 // newly naming a target no row holds (a stale-row release racing it, ReleaseStaleRowsAsync). A Put that changes nothing writes
-                // nothing, as for every Put. Removing a row a release took first is a conflict too (409, deferred #24).
+                // nothing, as for every Put.
+                // A stale row (one for a target the route doesn't name, left by an older replica) that this Put no longer needs is left alone:
+                // a release deletes exactly those (ReleaseStaleRowsAsync, when its target goes), and runs in its own statement, not in this
+                // Put's transaction, which only begins after this handler. Deleting it here too failed the Put (409) when a release took it
+                // between this read and the save (deferred #24). Left, it holds nothing a delete doesn't release first.
                 var positions = targets.Select((key, i) => (Id: known[key], Position: i)).ToDictionary(t => t.Id, t => t.Position);
-                db.RouteTargets.RemoveRange(rows.Where(x => !positions.ContainsKey(x.TargetId)));
+                db.RouteTargets.RemoveRange(rows.Where(x => !positions.ContainsKey(x.TargetId) && named.Contains(x.TargetId)));
                 foreach (var kept in rows.Where(x => positions.ContainsKey(x.TargetId)))
                 {
                     if (changed || kept.Position != positions[kept.TargetId])

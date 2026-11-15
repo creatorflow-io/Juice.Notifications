@@ -277,12 +277,15 @@ namespace Juice.Notifications.IntegrationTests
             var unknownType = "q-" + Short();
             var badData = "q-" + Short();
             var otherTenant = "q-" + Short();
+            var numbered = "q-" + Short();
             var marker = "q-" + Short();
             await PublishAsync(intake.Producer, null, Message(unstamped)); // no user_id: whatever it says, nobody vouches for it
             await PublishAsync(intake.Stranger, intake.Stranger, Message(stranger)); // a broker user no application publishes as
             await PublishAsync(intake.Producer, intake.Producer, Message(unknownType, type: $"{RabbitMQIntakeApp.Key}.missing"));
             await PublishAsync(intake.Producer, intake.Producer, Message(badData, data: """{ "other": 1 }"""));
             await PublishAsync(intake.Producer, intake.Producer, Message(otherTenant, tenant: ProducerApp.OtherTenant));
+            // A number where text goes: refused as over HTTP, not read as "5" (deferred #20).
+            await PublishAsync(intake.Producer, intake.Producer, Message(numbered).Replace("\"env\": \"test\"", "\"env\": 5"));
             // One consumer takes the queue in order: once the marker is in, the messages before it were handled.
             await PublishAsync(intake.Producer, intake.Producer, Message(marker));
             await AcceptedAsync(marker);
@@ -292,7 +295,7 @@ namespace Juice.Notifications.IntegrationTests
             await PublishAsync(intake.Producer, intake.Producer, Message(after));
             await AcceptedAsync(after);
 
-            foreach (var key in new[] { unstamped, stranger, unknownType, badData, otherTenant })
+            foreach (var key in new[] { unstamped, stranger, unknownType, badData, otherTenant, numbered })
             {
                 Assert.False(await StoredAsync(key), $"{key} was refused");
                 Assert.Equal(1, intake.Failures.Handled[key]); // refused once and taken off the queue, not retried

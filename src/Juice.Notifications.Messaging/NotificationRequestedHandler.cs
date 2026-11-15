@@ -41,6 +41,12 @@ namespace Juice.Notifications.Messaging
                     $"No application publishes as the broker user {publisher}. A platform admin sets an application's brokerUser.");
                 return;
             }
+            // A number, boolean, object or array where text goes: refused as HTTP refuses it, not read as its text (deferred #20).
+            if (NotificationRequestedConverter.TextErrors(message) is { Count: > 0 } textErrors)
+            {
+                Refuse(message, app.Key, ErrorCodes.InvalidRequest, "The request has errors.", textErrors);
+                return;
+            }
 
             var submission = new NotificationSubmission(message.Type, message.TypeVersion, message.IdempotencyKey, message.CorrelationKey,
                 message.Recipients?.Select(r => new RecipientSpec(r?.Kind, r?.Channel, r?.Address)).ToList(),

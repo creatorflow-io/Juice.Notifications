@@ -710,6 +710,10 @@ Ported from `Juice.Observability.Webhooks` (`DestinationPolicy`, the dispatcher'
   - `escalations` by outcome.
 - **Traces:** carried from the producer through each stage to the provider call.
 - **Health:** readiness needs the database (and the bus if used). A provider being down shows as a degraded integration, not as an unready service.
+- **Alerting:** alert on the metrics above (failed deliveries, `requests` refused by code, `dispatch_delay`, `due_backlog`, `lease_lost`) and
+  on readiness, not on Error-level log lines. A race between two callers that the API answers (`application_exists`, `tenant_in_use`,
+  `concurrent_change`, or a duplicate idempotency key answered 200) is normal traffic, but EF Core and Juice's `TransactionBehavior` log the
+  failed save at Error. A log-based rule has to leave out entries whose request ended in one of those answers (deferred #1).
 - **Storm protection** (phase 4): above N deliveries a minute to one route, the route switches to digest-only until the rate falls, and admins are
   told once.
 - **Dead letters:** failed deliveries can be queried with their attempts. `POST …/deliveries/{id}/retry` and bulk replay by filter are admin-only,

@@ -117,6 +117,58 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Empty(await NamedAsync(legacy));
         }
 
+        /// <summary>
+        /// Deferred #24: a route Put while a target delete releases the route's stale row (one for a target the route no longer names). The
+        /// release (here by hand, as <c>ReleaseStaleRowsAsync</c> does it) holds its delete open while the Put runs, which stands for a release
+        /// landing between the Put's read and its save. Before, the Put deleted the stale row too: it waited for the release, found the row gone
+        /// and answered 409. Now the stale row is the release's alone.
+        /// </summary>
+        [Fact]
+        public async Task A_route_put_leaves_a_stale_row_to_its_release_instead_of_failing()
+        {
+            LocalStack.RequireAvailable();
+            using var admin = producer.App.Client(await LocalStack.AdminTokenAsync());
+            var suffix = Guid.NewGuid().ToString("N")[..8];
+            var (integration, a, b, route) = ($"m{suffix}", $"a{suffix}", $"b{suffix}", $"r{suffix}");
+            await Ok(admin.PutAsJsonAsync($"{Url}/integrations/{integration}", new PutIntegrationBody("email", "smtp",
+                JsonElement.Parse("""{ "server": "local", "from": "notifications@juice.local" }"""), null, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Url}/integrations/{integration}/targets/{a}", new PutTargetBody("a@example.com", null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Url}/integrations/{integration}/targets/{b}", new PutTargetBody("b@example.com", null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Url}/routes/{route}", new PutRouteBody(JsonElement.Parse("{}"), [a, b], null), Ct));
+
+            await using var connection = new NpgsqlConnection(producer.App.Database.ConnectionString);
+            await connection.OpenAsync(Ct);
+            // A replica from before route_targets takes b out of the route and leaves its row.
+            await using (var stale = new NpgsqlCommand("UPDATE notifications.routes SET targets = @targets WHERE tenant_id = @t AND key = @k", connection))
+            {
+                stale.Parameters.AddWithValue("targets", new[] { a });
+                stale.Parameters.AddWithValue("t", ProducerApp.Tenant);
+                stale.Parameters.AddWithValue("k", route);
+                await stale.ExecuteNonQueryAsync(Ct);
+            }
+
+            await using var release = await connection.BeginTransactionAsync(Ct);
+            await using (var command = new NpgsqlCommand("""
+                WITH consulted AS (SELECT id FROM notifications.routes WHERE tenant_id = @t AND key = @k FOR SHARE)
+                DELETE FROM notifications.route_targets rt USING consulted r, notifications.integration_targets it
+                WHERE rt.tenant_id = @t AND rt.route_id = r.id AND it.tenant_id = rt.tenant_id AND it.id = rt.target_id AND it.key = @b
+                """, connection, release))
+            {
+                command.Parameters.AddWithValue("t", ProducerApp.Tenant);
+                command.Parameters.AddWithValue("k", route);
+                command.Parameters.AddWithValue("b", b);
+                Assert.Equal(1, await command.ExecuteNonQueryAsync(Ct));
+            }
+
+            var put = admin.PutAsJsonAsync($"{Url}/routes/{route}", new PutRouteBody(null, [a], null), Ct);
+            await Task.Delay(TimeSpan.FromSeconds(1), Ct); // before: the Put read the row, then waited at its own delete of it
+            await release.CommitAsync(Ct);
+
+            await Ok(put);
+            Assert.Equal([a], await NamedAsync(route));
+            await Ok(admin.DeleteAsync($"{Url}/integrations/{integration}/targets/{b}", Ct));
+        }
+
         private async Task<List<string>> NamedAsync(string route)
         {
             await using var db = producer.App.Database.Context();

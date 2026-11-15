@@ -51,6 +51,64 @@ namespace Juice.Notifications.Tests
             Assert.Equal(expected, await TemplateRenderer.RenderAsync(template, Model(data), Ct));
         }
 
+        /// <summary>
+        /// array.sort compares text ordinally (deferred #12): a soft hyphen counts, and capitals come before small letters. Otherwise it is
+        /// Scriban's: by a member or a dotted path, stable, null first; numbers by value whatever their type.
+        /// </summary>
+        [Theory]
+        [InlineData("""{{ ["b", "a", "B", "A"] | array.sort | array.join "," }}""", "A,B,a,b")]
+        [InlineData("""{{ data.words | array.sort | array.join "," }}""", "ab,a­a")]
+        [InlineData("""{{ [3, 1.5, 2, -1, 12345678901234567890] | array.sort | array.join "," }}""", "-1,1.5,2,3,12345678901234567890")]
+        [InlineData("""{{ data.numbers | array.sort | array.join "," }}""", "-2,0.5,1,10")]
+        [InlineData("""{{ [true, false] | array.sort | array.join "," }}""", "false,true")]
+        // By exact value whatever the types: 2^53 + 1 (an integer), 2^53 + 0.5 (a decimal from the data) and 2^53 (a double) are three values,
+        // where comparing some pairs as doubles made them equal and the order depend on the input's.
+        [InlineData("""{{ data.close | array.sort | array.join "," }}""", "9007199254740992,9007199254740992.5,9007199254740993")]
+        [InlineData("""{{ data.close | array.reverse | array.sort | array.join "," }}""", "9007199254740992,9007199254740992.5,9007199254740993")]
+        [InlineData("""{{ [0.1, 0.30000000000000004, 0.3] | array.sort | array.join "," }}""", "0.1,0.3,0.30000000000000004")]
+        [InlineData("""{{ ["b", null, "a"] | array.sort | array.size }}""", "3")]
+        [InlineData("""{{ (["b", null, "a"] | array.sort)[0] == null }}""", "true")]
+        [InlineData("""{{ data.people | array.sort "name" | array.map "id" | array.join "," }}""", "3,1,2,4")]
+        [InlineData("""{{ data.people | array.sort "home.city" | array.map "id" | array.join "," }}""", "4,2,1,3")]
+        [InlineData("""{{ data.people | array.sort "missing" | array.map "id" | array.join "," }}""", "1,2,3,4")]
+        [InlineData("""{{ [] | array.sort | array.size }}""", "0")]
+        // One value that doesn't compare, among nulls: nothing to compare, so it sorts (nulls first), as Scriban's did.
+        [InlineData("""{{ [{a: 1}] | array.sort | array.size }}""", "1")]
+        [InlineData("""{{ ([{a: 1}, null] | array.sort)[1].a }}""", "1")]
+        [InlineData("""{{ null | array.sort | array.size }}""", "0")]
+        [InlineData("""{{ 5 | array.sort | array.join "," }}""", "5")]
+        [InlineData("""{{ "cab" | array.sort | array.join "" }}""", "abc")]
+        public async Task Sorting_is_ordinal(string template, string expected)
+        {
+            var data = """
+                {
+                  "words": [ "a­a", "ab" ],
+                  "numbers": [ 10, 0.5, -2, 1 ],
+                  "close": [ 9007199254740993, 9007199254740992.5, 9007199254740992.0E0 ],
+                  "people": [
+                    { "id": 1, "name": "bo", "home": { "city": "Oslo" } },
+                    { "id": 2, "name": "bo", "home": { "city": "Hue" } },
+                    { "id": 3, "name": "Zed", "home": { "city": "Paris" } },
+                    { "id": 4, "name": "cy", "home": { "city": "Aden" } }
+                  ]
+                }
+                """;
+            Assert.Equal(expected, await TemplateRenderer.RenderAsync(template, Model(data), Ct));
+        }
+
+        [Theory]
+        [InlineData("""{{ ["a", 1] | array.sort }}""", "can't compare text with a number")]
+        [InlineData("""{{ [true, null, "a"] | array.sort }}""", "can't compare a boolean with text")]
+        [InlineData("""{{ [{a: 1}, {a: 2}] | array.sort }}""", "can't compare an object values")]
+        [InlineData("""{{ data.people | array.sort "home" }}""", "can't compare an object values")]
+        [InlineData("""{{ data.many | array.sort }}""", "iteration limit")]
+        public async Task Sorting_what_doesnt_compare_or_too_much_fails_the_render_and_says_why(string template, string why)
+        {
+            var data = $$"""{ "people": [ { "home": { "city": "Oslo" } }, { "home": { "city": "Hue" } } ], "many": [ {{string.Join(", ", Enumerable.Range(0, 1001))}} ] }""";
+            var failed = await Assert.ThrowsAsync<RenderException>(() => TemplateRenderer.RenderAsync(template, Model(data), Ct));
+            Assert.Contains(why, failed.Message);
+        }
+
         [Theory]
         [InlineData("")]
         [InlineData("nope")]
@@ -216,7 +274,7 @@ namespace Juice.Notifications.Tests
             Assert.Equal("c120", await TemplateRenderer.RenderAsync(template, Model("""{ "code": 120 }"""), Ct));
         }
 
-        /// <summary>The host's culture doesn't reach the output: array.sort compares by culture, and the render runs in the invariant one.</summary>
+        /// <summary>The host's culture doesn't reach the output: the render runs in the invariant culture, and array.sort compares ordinally.</summary>
         [Fact]
         public async Task The_hosts_culture_does_not_change_the_output()
         {
@@ -224,7 +282,7 @@ namespace Juice.Notifications.Tests
             try
             {
                 System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("sv-SE");
-                Assert.Equal("ä,z", await TemplateRenderer.RenderAsync("""{{ ["z","ä"] | array.sort | array.join "," }}""", Model(), Ct));
+                Assert.Equal("z,ä", await TemplateRenderer.RenderAsync("""{{ ["z","ä"] | array.sort | array.join "," }}""", Model(), Ct));
                 Assert.Equal("1.5", await TemplateRenderer.RenderAsync("{{ 1.5 }}", Model(), Ct));
             }
             finally
