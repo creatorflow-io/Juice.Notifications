@@ -301,7 +301,8 @@ Each tenant configures which resolvers it uses (`recipient_resolvers`) and which
    matchers (`=`, `!=`, `=~`, `in`) and minimum priority. Routes add recipients; they never remove ones the request named.
 2. Map each resolved person to a subscriber by `(Source, ExternalId)` or a linked alias, creating the subscriber the first time (D23). Contact points
    the source vouches for are stored as verified, marked with that source, and refreshed on each resolution.
-3. Deduplicate: a person named twice (directly and through a group, or through two linked sources) is one recipient.
+3. Deduplicate: a person named twice (directly and through a group, or through two linked sources) is one recipient, `subscriber:{id}`, with
+   every name that reached them kept in its `Via` (phase-2-plan I14).
 4. Apply tenant **mutes** and then **preferences** per §6.4. A muted or opted-out recipient is kept, with its outcome (`Muted`, `OptedOut`), so
    "why didn't I get it?" can be answered.
 
@@ -313,7 +314,8 @@ Each tenant configures which resolvers it uses (`recipient_resolvers`) and which
   recorded as `Truncated` and audited.
 - **Failure:** a resolver that's unavailable is retried with backoff, with planning waiting for it, for up to 5 minutes (a setting). After that,
   planning continues with what did resolve. The failed recipient is recorded as `ResolverUnavailable`, and `notification.recipient.unresolved` is
-  published to the producer. A failure is never silent.
+  published to the producer (phase 3; phase 2 logs and counts it). A failure is never silent. While it waits, the notification stays in
+  `Planning` and each try is one transaction, so a partial plan is never stored (phase-2-plan I22).
 - **Caching:** group and role expansions may be cached for up to 5 minutes per tenant. On-call results are never cached.
 
 ### 6.2 Choosing destinations (delivery planner)
@@ -341,7 +343,7 @@ Each tenant configures which resolvers it uses (`recipient_resolvers`) and which
 | Rule | Normal type | Mandatory type |
 |---|---|---|
 | Category opt-out | respected | **bypassed** |
-| Quiet hours | respected (deferred until they end) | **bypassed** |
+| Quiet hours | respected: personal channels are deferred until they end; the inbox item appears at once | **bypassed** |
 | Personal mute or snooze of the type | respected | **bypassed**, and recorded on the recipient |
 | A channel turned off by the person | respected | **respected**, but the inbox can't be turned off for mandatory types, so the person always gets at least the inbox |
 | Unverified contact point | blocked | **blocked** |
@@ -477,7 +479,7 @@ public interface IChannelRegistry
 - **One channel, three platforms.** `push` has providers `fcm` (Android, and iOS or web through Firebase where a tenant uses it), `apns` (iOS and
   macOS directly) and `webpush` (browsers, VAPID per RFC 8030/8291, no Firebase needed). Each device registration names its platform, and the
   delivery planner picks the tenant's integration for that platform.
-- **Device registrations** (phase 2): `POST /api/v1/me/devices` from the client app with the platform, token or Web Push subscription
+- **Device registrations** (phase 2): `POST /api/v1/tenants/{tenantId}/me/devices` from the client app with the platform, token or Web Push subscription
   (endpoint, `p256dh`, `auth`), app id and locale; `DELETE` on sign-out. Re-registering the same token moves it to the current person, so a shared
   device never pushes to its previous user. Registrations unseen for 60 days (a setting) are dropped.
 - **Not verified like an address.** A registration proves itself by being created from an authenticated session of that person. The "unverified
@@ -630,7 +632,8 @@ Workers always pass `TenantId` explicitly. Ids are UUIDv7.
 | `subscribers` | `Source`, `ExternalId` (unique per tenant together), `Name`, `Locale`, `TimeZone`, quiet hours |
 | `subscriber_aliases` | `SubscriberId`, `Source`, `ExternalId` (unique per tenant): another source's id for the same person, linked explicitly |
 | `local_groups`, `local_group_members` | groups kept here for `LocalRecipientResolver` |
-| `contact_points` | `SubscriberId`, `Channel`, `Address` (encrypted), `VerifiedAt`, `Health` |
+| `contact_points` | `SubscriberId`, `Channel`, `Address` (encrypted), `AddressHash` (HMAC, unique with subscriber and channel), `KeyId`, `VerifiedAt`, `VerifiedBy` (`self` or a source), `Health` |
+| `contact_verifications` | `ContactPointId`, `CodeHash`, `ExpiresAt`, `Tries` |
 | `device_registrations` | `SubscriberId`, `Platform` (`fcm`, `apns`, `webpush`), `AppId`, `Token` (encrypted; for Web Push the subscription JSON), `TokenHash` (**unique per tenant, platform and app**), `Locale`, `LastSeenAt` |
 | `preferences` | `SubscriberId`, `Category`, `Channel`, `Mode` (on, off, digest); quiet hours on the subscriber |
 | `topics`, `topic_subscriptions` | `Key`; `TopicId`, `SubscriberId` |
@@ -642,7 +645,7 @@ Workers always pass `TenantId` explicitly. Ids are UUIDv7.
 | `destination_allowlist` | `Destination`, `Ports`, `ManagedBy` |
 | `requests` | `ApplicationId`, `IdempotencyKey` (**unique with tenant and application**), `TypeId`, `TypeVersion`, `SchemaHash`, `CorrelationKey`, `Priority`, `Labels`, `Data`, `Actor`, `Links`, `ExpiresAt`, `AcceptedAt` |
 | `notifications` | `RequestId` (unique), `WorkflowStep`, `State`, `NextAt`, claim columns |
-| `notification_recipients` | `NotificationId`, `Kind` (subscriber, route, external), `SubscriberId`/`RouteId`/`Address`, `Resolver`, `NamedAs` (what the request or step named, such as `group:sre`), `EscalationStep`, `Outcome` (pending, muted, opted_out, deferred, planned, cancelled, truncated, resolver_unavailable), `NextAt`, claim columns |
+| `notification_recipients` | `NotificationId`, `Kind` (subscriber, route, external), `SubscriberId`/`RouteId`/`Address`, `Resolver`, `NamedAs` (what the request or step named, such as `route:ops`; `subscriber:{id}` for a person), `Via` (the names that reached a person, such as `group:sre`), `Bypassed` (rules a mandatory type bypassed), `EscalationStep`, `Outcome` (pending, muted, opted_out, deferred, planned, cancelled, truncated, resolver_unavailable), `NextAt`, claim columns |
 | `correlations` | `ApplicationId`, `Key` (**unique with tenant and application**), `State`, `AcknowledgedBy`/`At`, `ResolvedAt`, `Outcome` |
 | `escalations` | `CorrelationId`, `PolicyId`, `NextStep`, `NextAt`, `State`, `StopReason`, claim columns |
 | `deliveries` | `Channel`, `IntegrationId`, `DestinationKey`, `DestinationSnapshot`, `TemplateVersion`, `Locale`, `RendererVersion`, `Content`, `Status`, `FailureCategory`, `Attempts`, `NextAt`, `ProviderMessageId`, claim columns |
@@ -859,12 +862,11 @@ with several items (D19), which the review's one-parent tree didn't cover.
 | 7 | Web Push, Firebase, and new channels later? (10 Nov) | Yes: push covers FCM, APNs and Web Push over device registrations; channels come from a registry so new ones are packages. | D24, D25, §1, §3, §8.1, §9, §10.3, §12, §15, §16 |
 | 8 | How does a RabbitMQ message prove its application? (11 Nov) | Broker-validated `user_id`: each producer connects with its own RabbitMQ user and stamps `user_id`, which RabbitMQ checks against the connection. The service maps that user to the application and refuses messages without one. Needs Juice.EventBus to set `user_id` when publishing, pass it to handlers, and keep it across its retry path. | phase-1-plan I5, M2 |
 | 9 | How does a token say which tenants its holder administers? (11 Nov) | Behind an abstraction (`ITenantAccess`), so the answer can come from elsewhere later (juice-tenants membership, local grants). Today a platform admin administers every tenant, and the `notifications-tenant-admin` role administers the one tenant the token's `platform_tenant` claim names by id, as in Juice.Observability. | §13.2, phase-1-plan I11 |
+| 10 | Identity resolver contract (15 Nov) | `juice-tenants` holds no users, groups or roles; the OIDC provider is the source. The identity resolver reads Keycloak's admin REST API (service account, `view-users`) behind `IIdentityDirectory`, so another directory can be added later. An email counts as verified only when Keycloak marks it `emailVerified`. A user belongs to a tenant through a `platform_tenant` user attribute, issued as the token's claim. | D23, §6.1, phase-2-plan p2-d1 |
+| 11 | Who links subscriber aliases? (15 Nov) | Tenant admins, through the API, audited. The only automatic link is the signed-in person to their own `oidc` subscriber. A resolver-declared sync waits for an external directory resolver. | D23, phase-2-plan p2-d2, I16 |
 
 ## 20. Open questions
 
-None blocking phase 1. To settle before phase 2:
-
-1. **Identity resolver contract.** What the Juice identity/tenant service exposes for users, groups and roles (API or events), and whether it already
-   provides email addresses the tenant trusts (D23).
-2. **Subscriber linking.** Who links aliases across sources: tenant admins in the Console only, or a sync that a resolver can declare?
+None. The two questions open before phase 2 (the identity resolver contract, and who links subscriber aliases) were settled on 15 November
+2026: §19, decisions 10 and 11.
 
