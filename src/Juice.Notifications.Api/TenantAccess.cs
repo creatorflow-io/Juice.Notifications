@@ -11,6 +11,12 @@ namespace Juice.Notifications.Api
     public interface ITenantAccess
     {
         ValueTask<bool> CanAdministerAsync(ClaimsPrincipal user, Guid tenantId, CancellationToken ct);
+
+        /// <summary>
+        /// Whether the caller belongs to the tenant, for their own notifications (<c>me</c>): today, the token names it. An implementation
+        /// written before <c>me</c> existed answers no, so it grants no <c>me</c> it never decided on.
+        /// </summary>
+        ValueTask<bool> IsMemberAsync(ClaimsPrincipal user, Guid tenantId, CancellationToken ct) => ValueTask.FromResult(false);
     }
 
     /// <summary>
@@ -29,6 +35,9 @@ namespace Juice.Notifications.Api
             var claimed = user.FindFirst(auth.Value.TenantClaim)?.Value;
             return ValueTask.FromResult(user.IsInRole(auth.Value.TenantAdminRole) && Guid.TryParse(claimed, out var id) && id == tenantId);
         }
+
+        public ValueTask<bool> IsMemberAsync(ClaimsPrincipal user, Guid tenantId, CancellationToken ct)
+            => ValueTask.FromResult(Guid.TryParse(user.FindFirst(auth.Value.TenantClaim)?.Value, out var id) && id == tenantId);
     }
 
     internal static class TenantAccessFilter

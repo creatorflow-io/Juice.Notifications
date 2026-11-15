@@ -39,4 +39,20 @@ namespace Juice.Notifications.Api.Contracts
 
     public sealed record SubscriberResponse(Guid Id, string Source, string ExternalId, string? Name, string? Locale, string? TimeZone, Guid? MergedInto,
         IReadOnlyList<AliasResponse> Aliases, DateTimeOffset CreatedAt);
+
+    /// <summary><c>PUT …/local-users/{id}</c>: a person kept in this service for the <c>local</c> resolver. A field left out keeps its value.</summary>
+    public sealed record PutLocalUserBody(string? Name, string? Locale, string? TimeZone);
+
+    /// <summary><c>PUT …/groups/{key}</c>: a local group; its members are added one by one (<c>PUT …/groups/{key}/members/{subscriberId}</c>).</summary>
+    public sealed record PutGroupBody(string? Name);
+
+    public sealed record GroupResponse(string Key, string Name, int Members, DateTimeOffset UpdatedAt);
+
+    /// <summary><c>PUT …/topics/{key}</c>: a topic; <c>selfService</c> (default true) lets people subscribe themselves.</summary>
+    public sealed record PutTopicBody(string? Name, bool? SelfService);
+
+    public sealed record TopicResponse(string Key, string Name, bool SelfService, int Subscribers, DateTimeOffset UpdatedAt);
+
+    /// <summary>A topic as the signed-in person sees it: whether they follow it. Subscriber counts aren't shown.</summary>
+    public sealed record MyTopicResponse(string Key, string Name, bool SelfService, bool Subscribed);
 }

@@ -78,8 +78,8 @@ New tables, all tenant-owned with composite keys (§12):
 | `subscribers` | `Source`, `ExternalId` (unique per tenant), `Name`, `Locale`, `TimeZone`, `QuietHours` (jsonb: days, start, end), `CreatedAt`, `LastResolvedAt` |
 | `subscriber_aliases` | `SubscriberId`, `Source`, `ExternalId` (unique per tenant), `LinkedBy`, `LinkedAt` |
 | `recipient_resolvers` | as §12; `ManagedBy` config or API (I12 provisioning extended) |
-| `local_groups`, `local_group_members` | `Key` (unique per tenant), `Name`; members by subscriber |
-| `topics`, `topic_subscriptions` | `Key` (unique per tenant), `Name`, `Category`; subscriptions by subscriber, unique per topic |
+| `local_groups`, `local_group_members` | `Key` (unique per tenant), `Name`; members by subscriber, of any source; a local user is the subscriber `local:{id}` |
+| `topics`, `topic_subscriptions` | `Key` (unique per tenant, as requests name it), `Name`, `SelfService` (people may follow it themselves through `me/topics`; otherwise an admin adds them); subscriptions by subscriber, unique per topic |
 | `contact_points` | `SubscriberId`, `Channel`, `Address` (encrypted), `AddressHash`, `KeyId`, `VerifiedAt`, `VerifiedBy` (`self` or a source), `Health` (`ok`, `bouncing`, `failed`), `HealthReason`; unique `(SubscriberId, Channel, AddressHash)` |
 | `contact_verifications` | `ContactPointId`, `CodeHash`, `ExpiresAt`, `Tries` |
 | `device_registrations` | as §12, plus `KeyId` |

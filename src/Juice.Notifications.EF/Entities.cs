@@ -265,6 +265,45 @@ namespace Juice.Notifications.Data
         public DateTimeOffset LinkedAt { get; init; }
     }
 
+    /// <summary>A group kept in this service for the <c>local</c> resolver (design §6.1): any subscribers, of any source.</summary>
+    public sealed class LocalGroup : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public required string Key { get; init; }
+        public required string Name { get; set; }
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    public sealed class LocalGroupMember : Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid GroupId { get; init; }
+        public Guid SubscriberId { get; init; }
+        public DateTimeOffset AddedAt { get; init; }
+    }
+
+    /// <summary>Something people follow (design §6.1, <c>topic</c> recipients): its subscribers are who a request naming it reaches.</summary>
+    public sealed class Topic : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        /// <summary>As requests name it: <c>observability.service:billing</c>.</summary>
+        public required string Key { get; init; }
+        public required string Name { get; set; }
+        /// <summary>Whether people may subscribe themselves (<c>me/topics</c>); otherwise only an admin adds them.</summary>
+        public bool SelfService { get; set; } = true;
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    public sealed class TopicSubscription : Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid TopicId { get; init; }
+        public Guid SubscriberId { get; init; }
+        public DateTimeOffset SubscribedAt { get; init; }
+    }
+
     /// <summary>A request's processing state. One per request.</summary>
     public sealed class Notification : Claimable, ITenantOwned
     {

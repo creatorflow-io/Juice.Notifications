@@ -263,6 +263,8 @@ namespace Juice.Notifications.Planning
         {
             services.AddSingleton<IRecipientResolver, RouteRecipientResolver>();
             services.AddSingleton<IRecipientResolver, StaticAddressResolver>();
+            services.AddSingleton<IRecipientResolver, LocalRecipientResolver>();
+            services.AddSingleton<IRecipientResolver, TopicRecipientResolver>();
             return services.AddStage<Notification, PlannerStage>(options, runWorkers);
         }
     }

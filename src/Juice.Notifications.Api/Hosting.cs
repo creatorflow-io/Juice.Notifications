@@ -98,6 +98,7 @@ namespace Juice.Notifications.Api
             services.TryAddSingleton<ITenantAccess, ClaimTenantAccess>(); // replace to answer from juice-tenants or local grants
             services.AddScoped<Configuration.ConfigurationReader>();
             services.AddScoped<People.SubscriberReader>();
+            services.AddScoped<People.DirectoryReader>();
             services.AddScoped<History.DeliveryHistory>();
 
             // The pipeline stages (design §4.1). Their workers run unless Stages:Run is false (a host that only takes requests).
@@ -230,6 +231,7 @@ namespace Juice.Notifications.Api
             app.MapProducerEndpoints();
             app.MapConfigurationEndpoints();
             app.MapPeopleEndpoints();
+            app.MapMeEndpoints();
             app.MapHistoryEndpoints();
             return app;
         }

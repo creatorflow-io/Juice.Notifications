@@ -47,6 +47,10 @@ namespace Juice.Notifications.Data
         public DbSet<RecipientResolverConfig> Resolvers => Set<RecipientResolverConfig>();
         public DbSet<Subscriber> Subscribers => Set<Subscriber>();
         public DbSet<SubscriberAlias> SubscriberAliases => Set<SubscriberAlias>();
+        public DbSet<LocalGroup> LocalGroups => Set<LocalGroup>();
+        public DbSet<LocalGroupMember> LocalGroupMembers => Set<LocalGroupMember>();
+        public DbSet<Topic> Topics => Set<Topic>();
+        public DbSet<TopicSubscription> TopicSubscriptions => Set<TopicSubscription>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
         public DbSet<Notification> Notifications => Set<Notification>();
         public DbSet<NotificationRecipient> Recipients => Set<NotificationRecipient>();
@@ -236,6 +240,44 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.TenantId, x.SubscriberId });
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
                     .HasConstraintName(Constraints.AliasSubscriber);
+            });
+
+            model.Entity<LocalGroup>(e =>
+            {
+                e.ToTable("local_groups");
+                TenantKey(e);
+                e.Property(x => x.Key).HasMaxLength(63);
+                e.Property(x => x.Name).HasMaxLength(200);
+                e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique().HasDatabaseName(Constraints.LocalGroupKey);
+            });
+
+            model.Entity<LocalGroupMember>(e =>
+            {
+                e.ToTable("local_group_members");
+                e.HasKey(x => new { x.TenantId, x.GroupId, x.SubscriberId }).HasName(Constraints.LocalGroupMember);
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId });
+                e.HasOne<LocalGroup>().WithMany().HasForeignKey(x => new { x.TenantId, x.GroupId }).OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName(Constraints.LocalGroupMemberGroup);
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            model.Entity<Topic>(e =>
+            {
+                e.ToTable("topics");
+                TenantKey(e);
+                e.Property(x => x.Key).HasMaxLength(200);
+                e.Property(x => x.Name).HasMaxLength(200);
+                e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique().HasDatabaseName(Constraints.TopicKey);
+            });
+
+            model.Entity<TopicSubscription>(e =>
+            {
+                e.ToTable("topic_subscriptions");
+                e.HasKey(x => new { x.TenantId, x.TopicId, x.SubscriberId }).HasName(Constraints.TopicSubscription);
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId });
+                e.HasOne<Topic>().WithMany().HasForeignKey(x => new { x.TenantId, x.TopicId }).OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName(Constraints.TopicSubscriptionTopic);
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade);
             });
 
             model.Entity<NotificationRequest>(e =>

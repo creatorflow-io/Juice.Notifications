@@ -25,6 +25,14 @@ namespace Juice.Notifications.Data
         public const string AliasIdentity = "ix_subscriber_aliases_identity";
         /// <summary>An alias linked to a subscriber deleted at the same moment.</summary>
         public const string AliasSubscriber = "fk_subscriber_aliases_subscribers";
+        public const string LocalGroupKey = "ix_local_groups_key";
+        public const string LocalGroupMember = "pk_local_group_members";
+        /// <summary>A member added to a group deleted at the same moment.</summary>
+        public const string LocalGroupMemberGroup = "fk_local_group_members_local_groups";
+        public const string TopicKey = "ix_topics_key";
+        public const string TopicSubscription = "pk_topic_subscriptions";
+        /// <summary>A subscription to a topic deleted at the same moment.</summary>
+        public const string TopicSubscriptionTopic = "fk_topic_subscriptions_topics";
     }
 
     public enum ConflictKind

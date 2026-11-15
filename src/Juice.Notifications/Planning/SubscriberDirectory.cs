@@ -35,9 +35,9 @@ namespace Juice.Notifications.Planning
         };
 
         // The subscribers table's column lengths (NotificationsDbContext).
-        private const int MaxName = 200;
-        private const int MaxLocale = 35;
-        private const int MaxTimeZone = 64;
+        internal const int MaxName = 200;
+        internal const int MaxLocale = 35;
+        internal const int MaxTimeZone = 64;
 
         public static async Task<IReadOnlyDictionary<(string Source, string ExternalId), Guid>> MapAsync(NotificationsDbContext db, Guid tenantId,
             IReadOnlyList<ResolvedPerson> people, DateTimeOffset now, CancellationToken ct)

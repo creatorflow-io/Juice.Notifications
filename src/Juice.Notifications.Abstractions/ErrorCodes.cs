@@ -61,5 +61,9 @@ namespace Juice.Notifications
         public const string AliasInUse = "alias_in_use";
         /// <summary>The subscriber is linked into another one (or others are linked into it), so it can't be linked as asked.</summary>
         public const string SubscriberMerged = "subscriber_merged";
+        /// <summary>People can't subscribe themselves to this topic; an admin adds them.</summary>
+        public const string TopicNotSelfService = "topic_not_self_service";
+        /// <summary>The caller's token doesn't belong to the tenant in the path, or names no person (no subject).</summary>
+        public const string NotTenantMember = "not_tenant_member";
     }
 }
