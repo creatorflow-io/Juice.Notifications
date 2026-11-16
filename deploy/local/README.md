@@ -64,6 +64,10 @@ The sample producer also receives a signed webhook on this machine's private add
 with `SAMPLE_WEBHOOK_SECRET` from `.env` (passed to it as `NOTIFICATIONS_SECRET_SAMPLE_HOOK` by `run-app.sh` and the `app` service). It
 exits non-zero when a delivery doesn't arrive.
 
+Contact addresses and device tokens are encrypted at rest under `NOTIFICATIONS_CONTACT_KEY`, with hashes under `NOTIFICATIONS_CONTACT_HASH_KEY`
+(both base64 32-byte keys in `.env`, passed by `run-app.sh` and the `app` service). The service doesn't start without them. A `.env` made before
+16 Nov 2026 lacks them: `scripts/init.sh` adds them and keeps the rest.
+
 ## Clients in realm `juice`
 
 | Client | Grant | Roles | Use |

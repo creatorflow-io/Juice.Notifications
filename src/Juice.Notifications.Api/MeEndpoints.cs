@@ -49,7 +49,59 @@ namespace Juice.Notifications.Api
             me.MapDelete("/topics/{key}", (Guid tenantId, string key, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => ApiResults.SendAsync(mediator, db, new Unsubscribe(tenantId, key, Me(http), BySelf: true), _ => Results.NoContent(),
                     PeopleEndpoints.RemoveConflict, ct));
+
+            // Contact points (phase-2-plan M13): add, then ask for a code and enter it.
+            me.MapGet("/contact-points", async (Guid tenantId, HttpContext http, ContactPointReader reader, CancellationToken ct)
+                => Results.Ok((await reader.ListAsync(tenantId, Me(http), ct)).Select(ToResponse)));
+            me.MapPost("/contact-points", (Guid tenantId, AddContactPointBody body, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => ApiResults.SendAsync(mediator, db, new AddContactPoint(tenantId, Me(http), body.Channel, body.Address),
+                    o => Results.Created($"/api/v1/tenants/{tenantId}/me/contact-points/{o.Value!.Id}", ToResponse(o.Value)),
+                    conflict => Task.FromResult<IResult?>(conflict is { Kind: ConflictKind.Unique, Constraint: Constraints.ContactPointAddress }
+                        // The same address added twice at once: the second is the duplicate it would have been a moment later.
+                        ? ApiResults.Problem(StatusCodes.Status409Conflict, ErrorCodes.ContactPointExists, "You already have this address.")
+                        : null), ct));
+            me.MapDelete("/contact-points/{id:guid}", (Guid tenantId, Guid id, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => ApiResults.SendAsync(mediator, db, new RemoveContactPoint(tenantId, Me(http), id), _ => Results.NoContent(),
+                    conflict => Task.FromResult<IResult?>(conflict.Kind == ConflictKind.RowGone ? Results.NoContent() : null), ct));
+            me.MapPost("/contact-points/{id:guid}/verification", async (Guid tenantId, Guid id, HttpContext http, ContactVerifier verifier, CancellationToken ct) =>
+            {
+                Outcome<IssuedCode> sent;
+                try
+                {
+                    sent = await verifier.SendAsync(tenantId, Me(http), id, ct);
+                }
+                catch (Exception ex) when (DbConflicts.Classify(ex) is { Kind: ConflictKind.ForeignKey, Constraint: Constraints.VerificationContactPoint })
+                {
+                    // Removed while its code was being made: there is nothing to verify.
+                    return ApiResults.NotFound("No such contact point.");
+                }
+                return ApiResults.Failure(sent) ?? Results.Accepted(value: new VerificationSentResponse(sent.Value!.ExpiresAt));
+            });
+            me.MapPost("/contact-points/{id:guid}/verify", (Guid tenantId, Guid id, VerifyContactPointBody body, HttpContext http, IMediator mediator,
+                NotificationsDbContext db, CancellationToken ct)
+                => ApiResults.SendAsync(mediator, db, new VerifyContactPoint(tenantId, Me(http), id, body.Code), o => Results.Ok(ToResponse(o.Value!)),
+                    conflict => Task.FromResult<IResult?>(conflict.Kind == ConflictKind.RowGone
+                        // Removed, or verified by the same code at the same moment: what it is now answers either.
+                        ? ApiResults.Problem(StatusCodes.Status422UnprocessableEntity, ErrorCodes.VerificationExpired, "No code is waiting for this address.")
+                        : null), ct));
+
+            // Device registrations for push (design §9.2): the app registers on start and removes its registration on sign-out.
+            me.MapGet("/devices", async (Guid tenantId, HttpContext http, DeviceRegistry devices, CancellationToken ct)
+                => Results.Ok((await devices.ListAsync(tenantId, Me(http), ct)).Select(ToResponse)));
+            me.MapPost("/devices", async (Guid tenantId, RegisterDeviceBody body, HttpContext http, DeviceRegistry devices, CancellationToken ct) =>
+            {
+                var registered = await devices.RegisterAsync(tenantId, Me(http), body.Platform, body.AppId, body.Token,
+                    body.Subscription is { } s ? new WebPushSubscription(s.Endpoint, s.P256dh, s.Auth) : null, body.Locale, ct);
+                return ApiResults.Failure(registered) ?? Results.Ok(ToResponse(registered.Value!));
+            });
+            me.MapDelete("/devices/{id:guid}", async (Guid tenantId, Guid id, HttpContext http, DeviceRegistry devices, CancellationToken ct)
+                => await devices.RemoveAsync(tenantId, Me(http), id, ct) ? Results.NoContent() : ApiResults.NotFound("No such device registration."));
         }
+
+        private static ContactPointResponse ToResponse(ContactPointView v)
+            => new(v.Id, v.Channel, v.Address, v.VerifiedAt is not null, v.VerifiedAt, v.VerifiedBy, v.Health, v.HealthReason, v.CreatedAt);
+
+        private static DeviceResponse ToResponse(DeviceView v) => new(v.Id, v.Platform, v.AppId, v.Locale, v.CreatedAt, v.LastSeenAt);
 
         /// <summary>
         /// The person's subscriber when it is known and needs nothing written (one read): their identity's alias, or their own subscriber with the

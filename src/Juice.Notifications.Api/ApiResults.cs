@@ -32,6 +32,7 @@ namespace Juice.Notifications.Api
             OutcomeKind.Invalid => Problem(StatusCodes.Status400BadRequest, outcome.Code!, outcome.Message!, outcome.Errors),
             OutcomeKind.Unprocessable => Problem(StatusCodes.Status422UnprocessableEntity, outcome.Code!, outcome.Message!, outcome.Errors),
             OutcomeKind.Forbidden => Problem(StatusCodes.Status403Forbidden, outcome.Code!, outcome.Message!),
+            OutcomeKind.TooManyRequests => Problem(StatusCodes.Status429TooManyRequests, outcome.Code!, outcome.Message!),
             _ => null,
         };
 
@@ -74,7 +75,9 @@ namespace Juice.Notifications.Api
             var azp = user.FindFirst("azp")?.Value;
             var proof = auth.Value.ProducerProof == ProducerProofs.SubjectIsClient ? user.FindFirst("sub")?.Value : user.FindFirst("client_id")?.Value;
             var client = azp is not null && proof == azp ? azp : null;
-            var app = client is null ? null : await db.Applications.AsNoTracking().SingleOrDefaultAsync(a => a.ClientId == client, ct);
+            // The service's own application (contact verification) is never a producer, whatever client a token names.
+            var app = client is null ? null : await db.Applications.AsNoTracking()
+                .SingleOrDefaultAsync(a => a.ClientId == client && a.Key != People.ServiceTypes.ApplicationKey, ct);
             if (app is null)
             {
                 return (null, ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotAProducer,

@@ -31,6 +31,11 @@ namespace Juice.Notifications
         public const string Group = "group";
         public const string Role = "role";
         public const string Topic = "topic";
+        /// <summary>
+        /// A person's own contact point, by id: only the service's own requests name one (a verification code, which goes to a point before it is
+        /// verified), so the address never appears in a request.
+        /// </summary>
+        public const string ContactPoint = "contact-point";
 
         /// <summary>Kinds a tenant-configured resolver handles; each names one thing by <c>id</c> (a topic by <c>key</c>).</summary>
         public static readonly IReadOnlyList<string> People = [User, Group, Role, Topic];
@@ -51,11 +56,34 @@ namespace Juice.Notifications
         /// (<see cref="RecipientOutcome.ResolverUnavailable"/>), or not everyone because it reached past the bound (<see cref="RecipientOutcome.Truncated"/>).
         /// </summary>
         Name,
+        /// <summary>A contact point the service's own request named (<see cref="RecipientKinds.ContactPoint"/>): <c>NamedAs</c> is <c>contact-point:{id}</c>.</summary>
+        ContactPoint,
     }
 
     /// <summary>What happened to a recipient, so "why didn't I get it?" has an answer.</summary>
     [JsonConverter(typeof(JsonStringEnumConverter<RecipientOutcome>))]
     public enum RecipientOutcome { Pending, Planned, Muted, OptedOut, Deferred, Cancelled, Truncated, ResolverUnavailable, Failed }
+
+    /// <summary>Whether a contact point still works (design §9): a failed one isn't planned until the person verifies it again.</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter<ContactHealth>))]
+    public enum ContactHealth
+    {
+        Ok,
+        /// <summary>Soft bounces (phase 4 bounce callbacks); still planned.</summary>
+        Bouncing,
+        /// <summary>The provider said the address doesn't exist.</summary>
+        Failed,
+    }
+
+    /// <summary>Push platforms a device registration names (design §9.2).</summary>
+    public static class DevicePlatforms
+    {
+        public const string Fcm = "fcm";
+        public const string Apns = "apns";
+        public const string WebPush = "webpush";
+
+        public static readonly IReadOnlyList<string> All = [Fcm, Apns, WebPush];
+    }
 
     /// <summary>A delivery's state (design §10.2).</summary>
     [JsonConverter(typeof(JsonStringEnumConverter<DeliveryStatus>))]

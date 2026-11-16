@@ -65,5 +65,21 @@ namespace Juice.Notifications
         public const string TopicNotSelfService = "topic_not_self_service";
         /// <summary>The caller's token doesn't belong to the tenant in the path, or names no person (no subject).</summary>
         public const string NotTenantMember = "not_tenant_member";
+        /// <summary>The person already has this address on this channel.</summary>
+        public const string ContactPointExists = "contact_point_exists";
+        /// <summary>The person has as many contact points (or verification sends) as allowed; remove one, or wait.</summary>
+        public const string ContactPointLimit = "contact_point_limit";
+        /// <summary>A verification code is sent at most once a minute per contact point, and a few times an hour per person.</summary>
+        public const string TooManyRequests = "too_many_requests";
+        /// <summary>The code is wrong; the response says how many tries are left.</summary>
+        public const string VerificationFailed = "verification_failed";
+        /// <summary>No code is outstanding: none was sent, it expired, its tries ran out, or the address is already verified.</summary>
+        public const string VerificationExpired = "verification_expired";
+        /// <summary>The contact point is verified and working; there is nothing to verify.</summary>
+        public const string AlreadyVerified = "already_verified";
+        /// <summary>The tenant has no enabled integration for the channel, so a code can't be sent.</summary>
+        public const string ChannelUnavailable = "channel_unavailable";
+        /// <summary>The service's own application or types, which the API doesn't change.</summary>
+        public const string ManagedByService = "managed_by_service";
     }
 }

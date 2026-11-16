@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Juice.Notifications.Data;
+using Juice.Notifications.People;
 using Juice.Notifications.Planning;
 using Juice.Notifications.Rendering;
 using Juice.Notifications.Stages;
@@ -15,6 +16,9 @@ namespace Juice.Notifications.Delivering
         public static string Target(Guid targetId) => $"it:{targetId}";
 
         public static string External(string channel, string address) => $"ext:{channel}:{address}";
+
+        /// <summary>A person's contact point (design §3): its id, never its address, which is encrypted (phase-2-plan I19).</summary>
+        public static string ContactPoint(Guid contactPointId) => $"cp:{contactPointId}";
     }
 
     /// <summary>
@@ -27,7 +31,8 @@ namespace Juice.Notifications.Delivering
     /// <summary>The stage's step-failure limit, which the planner's timeout retries have to stay under.</summary>
     public sealed record DeliveryPlannerLimits(int MaxStepFailures);
 
-    public sealed class DeliveryPlannerStage(ILogger<DeliveryPlannerStage> logger, IChannelRegistry channels, DeliveryPlannerLimits? limits = null) : IStage<NotificationRecipient>
+    public sealed class DeliveryPlannerStage(ILogger<DeliveryPlannerStage> logger, IChannelRegistry channels,
+        DeliveryPlannerLimits? limits = null) : IStage<NotificationRecipient>
     {
         public string Name => DeliveryStageNames.DeliveryPlanner;
 
@@ -84,7 +89,7 @@ namespace Juice.Notifications.Delivering
             var existing = (await db.DeliveryItems.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.RecipientId == row.Id)
                 .Select(i => new { i.DestinationKey, i.Channel }).ToListAsync(ct)).Select(i => (i.DestinationKey, i.Channel)).ToHashSet();
             var rendered = new Dictionary<string, Rendered>(StringComparer.Ordinal);
-            foreach (var destination in await DestinationsAsync(db, row, ct))
+            foreach (var destination in await DestinationsAsync(db, row, type, ct))
             {
                 if (existing.Contains((destination.Key, destination.Channel)))
                 {
@@ -146,7 +151,7 @@ namespace Juice.Notifications.Delivering
             }
         }
 
-        private async Task<List<Destination>> DestinationsAsync(NotificationsDbContext db, NotificationRecipient row, CancellationToken ct)
+        private async Task<List<Destination>> DestinationsAsync(NotificationsDbContext db, NotificationRecipient row, NotificationType type, CancellationToken ct)
         {
             if (row.Kind == RecipientKind.Route)
             {
@@ -172,12 +177,77 @@ namespace Juice.Notifications.Delivering
             }
             if (row.Kind == RecipientKind.External && row.Channel is { } channel && row.Address is { } address)
             {
-                var integration = await db.Integrations.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.Channel == channel && i.Enabled)
-                    .OrderBy(i => i.Priority).ThenBy(i => i.Key).FirstOrDefaultAsync(ct);
+                var integration = await FirstIntegrationAsync(db, row.TenantId, channel, ct);
                 return [new Destination(DestinationKeys.External(channel, address), channel, integration, JsonSerializer.Serialize(new { address }, Snapshot),
                     integration is null ? $"The tenant has no enabled {channel} integration." : null)];
             }
+            if (row.Kind == RecipientKind.Subscriber && row.SubscriberId is { } subscriberId)
+            {
+                return await ContactDestinationsAsync(db, row, subscriberId, type, ct);
+            }
+            if (row.Kind == RecipientKind.ContactPoint && Guid.TryParse(row.NamedAs.AsSpan("contact-point:".Length), out var pointId)
+                && await db.ContactPoints.AsNoTracking().SingleOrDefaultAsync(c => c.TenantId == row.TenantId && c.Id == pointId, ct) is { } named)
+            {
+                // A verification code: to the point the person is verifying, verified or not (removed since: nothing to send to).
+                return [PointDestination(named, await FirstIntegrationAsync(db, row.TenantId, named.Channel, ct), verification: true)];
+            }
             return [];
+        }
+
+        /// <summary>The tenant's integration a destination on <paramref name="channel"/> goes through: its first enabled one, by priority then key.</summary>
+        private static Task<Integration?> FirstIntegrationAsync(NotificationsDbContext db, Guid tenantId, string channel, CancellationToken ct)
+            => db.Integrations.AsNoTracking().Where(i => i.TenantId == tenantId && i.Channel == channel && i.Enabled)
+                .OrderBy(i => i.Priority).ThenBy(i => i.Key).FirstOrDefaultAsync(ct);
+
+        /// <summary>
+        /// A person's destinations (design §6.2, §6.4): each of their contact points (and those of an identity linked into them) that is verified,
+        /// not failed, and on a channel the type has a template for, through the tenant's first enabled integration for that channel. None of
+        /// these rules bends for a mandatory type. The same address on two linked identities is one destination. The inbox (M15) and push devices
+        /// (phase 4, once push is registered) come later.
+        /// </summary>
+        private async Task<List<Destination>> ContactDestinationsAsync(NotificationsDbContext db, NotificationRecipient row, Guid subscriberId,
+            NotificationType type, CancellationToken ct)
+        {
+            var self = await People.DirectoryReader.SelfAsync(db, row.TenantId, subscriberId, ct);
+            var declared = await db.Templates.AsNoTracking().Where(t => t.TypeId == type.Id && (t.TenantId == null || t.TenantId == row.TenantId))
+                .Select(t => t.Channel).Distinct().ToListAsync(ct);
+            var points = (await db.ContactPoints.AsNoTracking()
+                .Where(c => c.TenantId == row.TenantId && self.Contains(c.SubscriberId) && c.VerifiedAt != null && c.Health != ContactHealth.Failed
+                    && declared.Contains(c.Channel))
+                .OrderBy(c => c.Channel).ThenBy(c => c.CreatedAt).ThenBy(c => c.Id).ToListAsync(ct))
+                // The hash is of the tenant, channel and address, not the person: one address on two linked identities is sent once.
+                .DistinctBy(c => (c.Channel, c.AddressHash)).ToList();
+            var integrations = new Dictionary<string, Integration?>(StringComparer.Ordinal);
+            var destinations = new List<Destination>(points.Count);
+            foreach (var point in points)
+            {
+                if (!People.ContactRules.TakesContactPoints(channels.Find(point.Channel)))
+                {
+                    continue; // its channel's package was removed, or no longer reaches people
+                }
+                if (!integrations.TryGetValue(point.Channel, out var integration))
+                {
+                    integrations[point.Channel] = integration = await FirstIntegrationAsync(db, row.TenantId, point.Channel, ct);
+                }
+                destinations.Add(PointDestination(point, integration, verification: false));
+            }
+            return destinations;
+        }
+
+        /// <summary>
+        /// A contact point as a destination. The snapshot names the point and a masked address, never the address: the dispatcher reads and decrypts
+        /// it when sending, so a point removed in between isn't sent to. <paramref name="verification"/> marks a verification code, which goes to a
+        /// point that isn't verified yet. One whose key is gone waits at the dispatcher until the key is back.
+        /// </summary>
+        private static Destination PointDestination(ContactPoint point, Integration? integration, bool verification)
+        {
+            // Never decrypted here: the stored mask is what history shows, and the dispatcher reads the address (and a missing key retries there).
+            var masked = point.Masked;
+            var snapshot = verification
+                ? JsonSerializer.Serialize(new { contactPoint = point.Id, masked, verification }, Snapshot)
+                : JsonSerializer.Serialize(new { contactPoint = point.Id, masked }, Snapshot);
+            return new Destination(DestinationKeys.ContactPoint(point.Id), point.Channel, integration, snapshot,
+                integration is null ? $"The tenant has no enabled {point.Channel} integration." : null);
         }
 
         /// <summary>One channel's content, or the problem that stopped it and its failure category.</summary>

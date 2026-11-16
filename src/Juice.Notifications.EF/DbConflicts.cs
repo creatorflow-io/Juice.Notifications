@@ -33,6 +33,12 @@ namespace Juice.Notifications.Data
         public const string TopicSubscription = "pk_topic_subscriptions";
         /// <summary>A subscription to a topic deleted at the same moment.</summary>
         public const string TopicSubscriptionTopic = "fk_topic_subscriptions_topics";
+        public const string ContactPointAddress = "ix_contact_points_address";
+        /// <summary>A contact point added for a subscriber deleted at the same moment.</summary>
+        public const string ContactPointSubscriber = "fk_contact_points_subscribers";
+        /// <summary>A code sent for a contact point removed at the same moment.</summary>
+        public const string VerificationContactPoint = "fk_contact_verifications_contact_points";
+        public const string DeviceToken = "ix_device_registrations_token";
     }
 
     public enum ConflictKind

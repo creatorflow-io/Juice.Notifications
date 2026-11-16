@@ -136,7 +136,8 @@ namespace Juice.Notifications.Intake
         /// tenant's enabled resolver configurations (read only when a person kind was sent).
         /// </summary>
         internal static IReadOnlyList<RecipientSpec>? Recipients(IReadOnlyList<RecipientSpec>? sent, NotificationType type, IChannelRegistry channels,
-            IReadOnlySet<string>? templatedChannels, IReadOnlyList<RecipientResolverConfig> resolvers, List<FieldError> invalid, List<FieldError> refused)
+            IReadOnlySet<string>? templatedChannels, IReadOnlyList<RecipientResolverConfig> resolvers, List<FieldError> invalid, List<FieldError> refused,
+            bool serviceOwn = false)
         {
             if (sent is null || sent.Count == 0)
             {
@@ -188,6 +189,20 @@ namespace Juice.Notifications.Intake
                         {
                             result.Add(new RecipientSpec(RecipientKinds.Address, channel.Key, address));
                         }
+                        break;
+                    case RecipientKinds.ContactPoint:
+                        // The service's own requests only (a verification code): a producer names people, never their stored addresses.
+                        if (!serviceOwn)
+                        {
+                            invalid.Add(new FieldError(at + "/kind", "The kind is route, address, user, group, role or topic."));
+                            break;
+                        }
+                        if (!Guid.TryParse(r.Id, out var pointId))
+                        {
+                            invalid.Add(new FieldError(at + "/id", "A contact point is named by its id."));
+                            break;
+                        }
+                        result.Add(new RecipientSpec(RecipientKinds.ContactPoint, Id: pointId.ToString()));
                         break;
                     case { } kind when RecipientKinds.People.Contains(kind):
                         if (Person(r, kind, at, resolvers, invalid, refused) is { } person && !result.Contains(person))
@@ -391,7 +406,8 @@ namespace Juice.Notifications.Intake
                     .Where(p => p.Implementation is not null)
                     .Select(p => { p.Config.Handles = [.. p.Config.Handles.Where(p.Implementation!.Kinds.Contains)]; return p.Config; }).ToList()
                 : [];
-            var recipients = RequestRules.Recipients(s.Recipients, type, channels, templated, resolvers, invalid, refused);
+            var recipients = RequestRules.Recipients(s.Recipients, type, channels, templated, resolvers, invalid, refused,
+                serviceOwn: request.ApplicationKey == People.ServiceTypes.ApplicationKey);
             var data = s.Data is { ValueKind: not JsonValueKind.Null and not JsonValueKind.Undefined } d ? d : JsonDocument.Parse("{}").RootElement;
             if (data.ValueKind != JsonValueKind.Object)
             {

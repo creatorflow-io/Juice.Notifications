@@ -20,6 +20,8 @@ namespace Juice.Notifications.IntegrationTests
         private readonly ConcurrentQueue<SendResult> _script = new();
 
         public ConcurrentQueue<(Guid Delivery, int Attempt, CancellationToken Token)> Seen { get; } = new();
+        /// <summary>The address each send went to, as the dispatcher resolved it.</summary>
+        public ConcurrentQueue<string> Destinations { get; } = new();
         public int Sends => Seen.Count;
         public Func<Task>? OnSend { get; set; }
 
@@ -41,6 +43,7 @@ namespace Juice.Notifications.IntegrationTests
         public async Task<SendResult> SendAsync(RenderedDelivery delivery, IntegrationContext integration, CancellationToken ct)
         {
             Seen.Enqueue((delivery.DeliveryId, delivery.Attempt, ct));
+            Destinations.Enqueue(delivery.Destination);
             if (OnSend is { } onSend)
             {
                 await onSend();
@@ -119,6 +122,7 @@ namespace Juice.Notifications.IntegrationTests
             services.AddSingleton<INotificationProvider>(_email);
             services.AddSingleton<INotificationProvider>(_webhook);
             services.AddBuiltInChannels();
+            People.ContactEncryptionRegistration.AddContactEncryption(services);
             services.AddStage<Delivery, DispatcherStage>(Options, runWorkers: false);
             // The real handler, without the API's transaction behavior: the test saves what it changed, as that behavior would.
             services.AddMediatR(mediator => mediator.RegisterServicesFromAssemblyContaining<RetryDelivery>(includeNonPublicTypes: true));
@@ -807,6 +811,156 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains(variable, row.LastError);
             Assert.Empty(attempts);
             Assert.Equal(0, _email.Sends);
+        }
+
+        /// <summary>A person with an email contact point, encrypted as the service stores it, verified unless <paramref name="verified"/> is false.</summary>
+        private async Task<ContactPoint> ContactPointAsync(string address, bool verified = true)
+        {
+            var crypto = _services!.GetRequiredService<People.ContactCrypto>();
+            await using var db = _database.Context();
+            var subscriber = new Subscriber { TenantId = Tenant, Source = "local", ExternalId = Guid.NewGuid().ToString("N"), CreatedAt = Seed.Now };
+            var point = new ContactPoint
+            {
+                TenantId = Tenant, SubscriberId = subscriber.Id, Channel = Channels.Email, KeyId = crypto.KeyId, CreatedAt = Seed.Now,
+                Address = crypto.Protect(address, People.ContactCrypto.ContactContext(Tenant, subscriber.Id, Channels.Email)),
+                AddressHash = crypto.ContactHash(Tenant, Channels.Email, address), VerifiedAt = verified ? Seed.Now : null, VerifiedBy = verified ? "self" : null,
+                Masked = People.ContactCrypto.Mask(address),
+            };
+            db.AddRange(subscriber, point);
+            await db.SaveChangesAsync(Ct);
+            return point;
+        }
+
+        private static string PointSnapshot(ContactPoint point) => $$"""{"contactPoint":"{{point.Id}}","masked":"p…@example.com"}""";
+
+        /// <summary>
+        /// A delivery to a person's contact point is sent to the address decrypted at send time. A provider saying the address doesn't exist (SMTP
+        /// 5.1.1) fails the delivery and the contact point, so the next delivery to it isn't sent (phase-2-plan M13).
+        /// </summary>
+        [Fact]
+        public async Task A_provider_saying_the_address_is_gone_fails_the_contact_point()
+        {
+            LocalStack.RequireAvailable();
+            var point = await ContactPointAsync("pat@example.com");
+            var first = await DeliveryAsync(snapshot: PointSnapshot(point));
+            _email.Then(SendResult.Gone("The server refused the recipient: 5.1.1 <pat@example.com>: user unknown", 550));
+
+            Assert.Equal(1, (await PassAsync()).Completed);
+
+            Assert.Equal(["pat@example.com"], _email.Destinations);
+            var (row, attempts) = await ReadAsync(first.Id);
+            Assert.Equal((DeliveryStatus.Failed, FailureCategory.Destination), (row.Status, row.FailureCategory));
+            Assert.Equal(AttemptOutcome.PermanentFailure, Assert.Single(attempts).Outcome);
+            Assert.DoesNotContain("pat@example.com", row.LastError);
+            await using (var db = _database.Context())
+            {
+                var failed = await db.ContactPoints.AsNoTracking().SingleAsync(c => c.Id == point.Id, Ct);
+                Assert.Equal(ContactHealth.Failed, failed.Health);
+                Assert.Contains("5.1.1", failed.HealthReason);
+                // The server's reply quoted the address: kept out of everything stored.
+                Assert.DoesNotContain("pat@example.com", failed.HealthReason);
+                Assert.Contains("<p…@example.com>", failed.HealthReason);
+                Assert.DoesNotContain("pat@example.com", (await db.Attempts.AsNoTracking().SingleAsync(a => a.DeliveryId == first.Id, Ct)).Error);
+                Assert.InRange(failed.HealthChangedAt!.Value, _clock.GetUtcNow(), _clock.GetUtcNow().AddSeconds(5));
+            }
+
+            var second = await DeliveryAsync(snapshot: PointSnapshot(point));
+            Assert.Equal(1, (await PassAsync()).Completed);
+            (row, attempts) = await ReadAsync(second.Id);
+            Assert.Equal((DeliveryStatus.Failed, FailureCategory.Destination), (row.Status, row.FailureCategory));
+            Assert.Contains("it failed", row.LastError);
+            Assert.Empty(attempts);
+            Assert.Equal(1, _email.Sends);
+        }
+
+        /// <summary>A destination refused for another reason (a full mailbox) fails the delivery but leaves the contact point working.</summary>
+        [Fact]
+        public async Task Another_refusal_of_the_address_leaves_the_contact_point_working()
+        {
+            LocalStack.RequireAvailable();
+            var point = await ContactPointAsync("pat@example.com");
+            var delivery = await DeliveryAsync(snapshot: PointSnapshot(point));
+            _email.Then(SendResult.Permanent(FailureCategory.Destination, "The server refused the recipient: 5.2.2 mailbox full", 552));
+
+            Assert.Equal(1, (await PassAsync()).Completed);
+
+            Assert.Equal(DeliveryStatus.Failed, (await ReadAsync(delivery.Id)).Row.Status);
+            await using var db = _database.Context();
+            Assert.Equal(ContactHealth.Ok, (await db.ContactPoints.AsNoTracking().SingleAsync(c => c.Id == point.Id, Ct)).Health);
+        }
+
+        /// <summary>A contact point removed, or never verified, after the delivery was planned isn't sent to.</summary>
+        [Fact]
+        public async Task A_contact_point_removed_or_unverified_since_planning_is_not_sent_to()
+        {
+            LocalStack.RequireAvailable();
+            var removed = await ContactPointAsync("gone@example.com");
+            var unverified = await ContactPointAsync("new@example.com", verified: false);
+            var toRemoved = await DeliveryAsync(snapshot: PointSnapshot(removed));
+            var toUnverified = await DeliveryAsync(snapshot: PointSnapshot(unverified));
+            await using (var db = _database.Context())
+            {
+                await db.ContactPoints.Where(c => c.Id == removed.Id).ExecuteDeleteAsync(Ct);
+            }
+
+            Assert.Equal(1, (await PassAsync()).Completed);
+            Assert.Equal(1, (await PassAsync()).Completed);
+
+            var (row, attempts) = await ReadAsync(toRemoved.Id);
+            Assert.Equal((DeliveryStatus.Failed, FailureCategory.Destination), (row.Status, row.FailureCategory));
+            Assert.Contains("removed", row.LastError);
+            Assert.Empty(attempts);
+            (row, _) = await ReadAsync(toUnverified.Id);
+            Assert.Contains("isn't verified", row.LastError);
+            Assert.Equal(0, _email.Sends);
+        }
+
+        /// <summary>An address that doesn't decrypt (damaged, or moved from another row) fails the delivery at once: no retry will read it.</summary>
+        [Fact]
+        public async Task A_contact_point_that_doesnt_decrypt_fails_the_delivery_without_a_send()
+        {
+            LocalStack.RequireAvailable();
+            var point = await ContactPointAsync("pat@example.com");
+            var other = await ContactPointAsync("sam@example.com");
+            await using (var db = _database.Context())
+            {
+                // Another person's ciphertext: bound to that person, so it doesn't decrypt here.
+                await db.ContactPoints.Where(c => c.Id == point.Id).ExecuteUpdateAsync(c => c.SetProperty(x => x.Address, other.Address), Ct);
+            }
+            var delivery = await DeliveryAsync(snapshot: PointSnapshot(point));
+
+            Assert.Equal(1, (await PassAsync()).Completed);
+
+            var (row, attempts) = await ReadAsync(delivery.Id);
+            Assert.Equal((DeliveryStatus.Failed, FailureCategory.Destination), (row.Status, row.FailureCategory));
+            Assert.Contains("can't be decrypted", row.LastError);
+            Assert.Empty(attempts);
+            Assert.Equal(0, _email.Sends);
+        }
+
+        /// <summary>A provider that throws with the address in its message: the attempt and the delivery keep it masked.</summary>
+        [Fact]
+        public async Task A_provider_exception_quoting_the_address_is_stored_masked()
+        {
+            LocalStack.RequireAvailable();
+            var point = await ContactPointAsync("pat@example.com");
+            var delivery = await DeliveryAsync(snapshot: PointSnapshot(point));
+            _email.OnSend = () => throw new InvalidOperationException("Can't deliver to <pat@example.com>");
+            try
+            {
+                Assert.Equal(1, (await PassAsync()).Completed);
+            }
+            finally
+            {
+                _email.OnSend = null;
+            }
+
+            var (row, attempts) = await ReadAsync(delivery.Id);
+            var attempt = Assert.Single(attempts);
+            Assert.Equal(AttemptOutcome.Unknown, attempt.Outcome);
+            Assert.Contains("<p…@example.com>", attempt.Error);
+            Assert.DoesNotContain("pat@example.com", attempt.Error);
+            Assert.DoesNotContain("pat@example.com", row.LastError);
         }
     }
 }

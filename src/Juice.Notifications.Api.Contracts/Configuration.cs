@@ -55,4 +55,32 @@ namespace Juice.Notifications.Api.Contracts
 
     /// <summary>A topic as the signed-in person sees it: whether they follow it. Subscriber counts aren't shown.</summary>
     public sealed record MyTopicResponse(string Key, string Name, bool SelfService, bool Subscribed);
+
+    /// <summary>A contact point the person adds: a channel that reaches people (<c>email</c>) and the address. It starts unverified.</summary>
+    public sealed record AddContactPointBody(string? Channel, string? Address);
+
+    /// <summary>The six-digit code sent to the address.</summary>
+    public sealed record VerifyContactPointBody(string? Code);
+
+    /// <summary>
+    /// One of the person's contact points. Only a verified one that hasn't failed is ever used; <c>verifiedBy</c> is <c>self</c> (a code) or the
+    /// source that vouched for it.
+    /// </summary>
+    public sealed record ContactPointResponse(Guid Id, string Channel, string Address, bool Verified, DateTimeOffset? VerifiedAt, string? VerifiedBy,
+        ContactHealth Health, string? HealthReason, DateTimeOffset CreatedAt);
+
+    /// <summary>A code is on its way; it works until <c>expiresAt</c>, for a few tries.</summary>
+    public sealed record VerificationSentResponse(DateTimeOffset ExpiresAt);
+
+    /// <summary>A Web Push subscription as the browser's <c>PushSubscription.toJSON()</c> gives it, keys flattened.</summary>
+    public sealed record WebPushSubscriptionBody(string? Endpoint, string? P256dh, string? Auth);
+
+    /// <summary>
+    /// Registers the app on this device for push (design §9.2): <c>fcm</c> or <c>apns</c> with a token, or <c>webpush</c> with a subscription. The
+    /// same token again refreshes the registration, and moves it to the caller.
+    /// </summary>
+    public sealed record RegisterDeviceBody(string? Platform, string? AppId, string? Token, WebPushSubscriptionBody? Subscription, string? Locale);
+
+    /// <summary>A registration; its token is never returned.</summary>
+    public sealed record DeviceResponse(Guid Id, string Platform, string AppId, string? Locale, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt);
 }

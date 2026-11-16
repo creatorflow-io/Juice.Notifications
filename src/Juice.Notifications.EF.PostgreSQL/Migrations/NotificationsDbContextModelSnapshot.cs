@@ -283,6 +283,130 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasAnnotation("Juice:Auditable", true);
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.ContactPoint", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Address")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("address");
+
+                    b.Property<string>("AddressHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("address_hash");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("channel");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Health")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("health");
+
+                    b.Property<DateTimeOffset?>("HealthChangedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("health_changed_at");
+
+                    b.Property<string>("HealthReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("health_reason");
+
+                    b.Property<string>("KeyId")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("key_id");
+
+                    b.Property<string>("Masked")
+                        .IsRequired()
+                        .HasMaxLength(400)
+                        .HasColumnType("character varying(400)")
+                        .HasColumnName("masked");
+
+                    b.Property<Guid>("SubscriberId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subscriber_id");
+
+                    b.Property<DateTimeOffset?>("VerifiedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("verified_at");
+
+                    b.Property<string>("VerifiedBy")
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)")
+                        .HasColumnName("verified_by");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_contact_points");
+
+                    b.HasIndex("TenantId", "AddressHash")
+                        .HasDatabaseName("ix_contact_points_tenant_id_address_hash");
+
+                    b.HasIndex("TenantId", "SubscriberId", "Channel", "AddressHash")
+                        .IsUnique()
+                        .HasDatabaseName("ix_contact_points_address");
+
+                    b.ToTable("contact_points", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.ContactVerification", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("ContactPointId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("contact_point_id");
+
+                    b.Property<string>("CodeHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("code_hash");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<DateTimeOffset>("SentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sent_at");
+
+                    b.Property<int>("Tries")
+                        .HasColumnType("integer")
+                        .HasColumnName("tries");
+
+                    b.HasKey("TenantId", "ContactPointId")
+                        .HasName("pk_contact_verifications");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("ix_contact_verifications_expires_at");
+
+                    b.ToTable("contact_verifications", "notifications");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.Delivery", b =>
                 {
                     b.Property<Guid>("TenantId")
@@ -551,6 +675,79 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_delivery_items_tenant_id_recipient_id_destination_key_chann");
 
                     b.ToTable("delivery_items", "notifications");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.DeviceRegistration", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AppId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("app_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("KeyId")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("key_id");
+
+                    b.Property<DateTimeOffset>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen_at");
+
+                    b.Property<string>("Locale")
+                        .HasMaxLength(35)
+                        .HasColumnType("character varying(35)")
+                        .HasColumnName("locale");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("platform");
+
+                    b.Property<Guid>("SubscriberId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subscriber_id");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasMaxLength(6000)
+                        .HasColumnType("character varying(6000)")
+                        .HasColumnName("token");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("token_hash");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_device_registrations");
+
+                    b.HasIndex("LastSeenAt")
+                        .HasDatabaseName("ix_device_registrations_last_seen_at");
+
+                    b.HasIndex("TenantId", "SubscriberId")
+                        .HasDatabaseName("ix_device_registrations_tenant_id_subscriber_id");
+
+                    b.HasIndex("TenantId", "Platform", "AppId", "TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ix_device_registrations_token");
+
+                    b.ToTable("device_registrations", "notifications");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.Integration", b =>
@@ -1371,6 +1568,14 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("time_zone");
 
+                    b.Property<DateTimeOffset?>("VerificationWindowStart")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("verification_window_start");
+
+                    b.Property<int>("VerificationsInWindow")
+                        .HasColumnType("integer")
+                        .HasColumnName("verifications_in_window");
+
                     b.Property<int>("Version")
                         .IsConcurrencyToken()
                         .HasColumnType("integer")
@@ -1596,6 +1801,26 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasConstraintName("fk_application_tenants_applications_application_id");
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.ContactPoint", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.Subscriber", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubscriberId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_contact_points_subscribers");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.ContactVerification", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.ContactPoint", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ContactPointId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_contact_verifications_contact_points");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.Delivery", b =>
                 {
                     b.HasOne("Juice.Notifications.Data.Integration", null)
@@ -1645,6 +1870,16 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_delivery_items_requests_tenant_id_request_id");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.DeviceRegistration", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.Subscriber", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubscriberId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_device_registrations_subscribers_tenant_id_subscriber_id");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.IntegrationTarget", b =>

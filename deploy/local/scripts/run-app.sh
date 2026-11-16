@@ -12,6 +12,8 @@ export ASPNETCORE_URLS=http://localhost:5280
 export ASPNETCORE_ENVIRONMENT=Development
 # The signing secret the sample producer's webhook integration names (env:NOTIFICATIONS_SECRET_SAMPLE_HOOK).
 export NOTIFICATIONS_SECRET_SAMPLE_HOOK="${SAMPLE_WEBHOOK_SECRET:-}"
+# Contact addresses and device tokens are encrypted under these (Encryption:KeyRef and HashKeyRef in appsettings.json name them).
+export NOTIFICATIONS_CONTACT_KEY NOTIFICATIONS_CONTACT_HASH_KEY
 # NotificationRequested over RabbitMQ, from the stack's broker.
 export Intake__RabbitMQ__Enabled=true
 export Intake__RabbitMQ__Host=127.0.0.1

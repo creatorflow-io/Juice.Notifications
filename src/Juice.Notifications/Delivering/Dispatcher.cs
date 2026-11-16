@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Juice.Notifications.Data;
+using Juice.Notifications.People;
 using Juice.Notifications.Planning;
 using Juice.Notifications.Providers;
 using Juice.Notifications.Stages;
@@ -25,7 +26,7 @@ namespace Juice.Notifications.Delivering
     /// turns out to have lost its lease (§11).
     /// </summary>
     public sealed class DispatcherStage(IEnumerable<INotificationProvider> providers, IChannelRegistry channels, IOptions<DeliveryOptions> options, IServiceScopeFactory scopes,
-        ILogger<DispatcherStage> logger, TimeProvider? clock = null) : IStage<Delivery>
+        ILogger<DispatcherStage> logger, People.ContactCrypto crypto, TimeProvider? clock = null) : IStage<Delivery>
     {
         public string Name => DeliveryStageNames.Dispatcher;
 
@@ -96,10 +97,39 @@ namespace Juice.Notifications.Delivering
                 Finish(context, row, DeliveryStatus.Failed, FailureCategory.Destination, "The delivery has no address.", context.Now);
                 return;
             }
-            // A secret (the integration's, or an address kept as a reference) that isn't set is a deployment problem someone can fix. It isn't
-            // an attempt (nothing was sent): the step fails, so the runner tries it again with its backoff, and gives the delivery up as failed
-            // after its step-failure limit, with the reason.
-            var destination = address.IsReference ? SecretReferences.Resolve(address.Value) : address.Value;
+            string destination;
+            string? masked = null;
+            if (address.ContactPointId is { } contactPointId)
+            {
+                // A person's contact point, read now (phase-2-plan I19): removed, unverified or failed since planning, it isn't sent to; a
+                // verification code goes to the point being verified whatever its state. A key that is gone fails the step like an unset secret
+                // below, so restoring the key lets the runner's retry send it; a value that doesn't decrypt never will, and fails the delivery.
+                var point = await db.ContactPoints.AsNoTracking().SingleOrDefaultAsync(c => c.TenantId == row.TenantId && c.Id == contactPointId, ct);
+                if (point is null || !address.Verification && (point.VerifiedAt is null || point.Health == ContactHealth.Failed))
+                {
+                    Finish(context, row, DeliveryStatus.Failed, FailureCategory.Destination, point is null
+                        ? "The contact point was removed before the delivery was sent."
+                        : $"The contact point can't be used: {(point.VerifiedAt is null ? "it isn't verified" : "it failed: " + point.HealthReason)}.", context.Now);
+                    return;
+                }
+                try
+                {
+                    destination = crypto.UnprotectAddress(point);
+                    masked = point.Masked;
+                }
+                catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or FormatException)
+                {
+                    Finish(context, row, DeliveryStatus.Failed, FailureCategory.Destination, "The contact point's address can't be decrypted: " + ex.Message, context.Now);
+                    return;
+                }
+            }
+            else
+            {
+                // A secret (the integration's, or an address kept as a reference) that isn't set is a deployment problem someone can fix. It isn't
+                // an attempt (nothing was sent): the step fails, so the runner tries it again with its backoff, and gives the delivery up as failed
+                // after its step-failure limit, with the reason.
+                destination = address.IsReference ? SecretReferences.Resolve(address.Value!) : address.Value!;
+            }
             var secret = integration.SecretRef is { } reference ? SecretReferences.Resolve(reference) : null;
 
             // The producer's trace continues here, so the provider call (a webhook's HTTP request carries it on) links back to the request.
@@ -128,8 +158,23 @@ namespace Juice.Notifications.Delivering
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Provider {Kind} threw sending delivery {Delivery}", integration.Kind, row.Id);
+                if (masked is null)
+                {
+                    logger.LogError(ex, "Provider {Kind} threw sending delivery {Delivery}", integration.Kind, row.Id);
+                }
+                else
+                {
+                    // A person's address may be in the exception's message (and the messages of those it wraps): logged masked, without them.
+                    logger.LogError("Provider {Kind} threw sending delivery {Delivery}: {Exception}: {Message}", integration.Kind, row.Id,
+                        ex.GetType().FullName, Masking.Scrub(ex.Message, destination, masked));
+                }
                 result = SendResult.Unknown("The provider failed unexpectedly: " + ex.Message);
+            }
+            if (masked is not null && result.Error is { } said)
+            {
+                // A server's reply often quotes the address ('55x 5.1.1 <jane@corp.com>'): kept out of the attempt, the delivery, the contact
+                // point's reason and the log, as the snapshot keeps it out of history (phase-2-plan I19).
+                result = result with { Error = Masking.Scrub(said, destination, masked) };
             }
             activity?.SetTag("notifications.outcome", result.Outcome.ToString());
             if (result.Outcome is not (AttemptOutcome.Delivered or AttemptOutcome.Accepted))
@@ -139,8 +184,32 @@ namespace Juice.Notifications.Delivering
             var elapsed = time.GetElapsedTime(started);
             Telemetry.ProviderLatency.Record(elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("channel", row.Channel),
                 new KeyValuePair<string, object?>("outcome", result.Outcome.ToString()));
+            if (result is { AddressGone: true, Outcome: AttemptOutcome.PermanentFailure } && address.ContactPointId is { } gone)
+            {
+                await MarkFailedAsync(row.TenantId, gone, result.Error, context.Now + elapsed);
+            }
             // Timed from when the send ended, so a slow failure (a timeout) still waits its whole backoff before the next one.
             await RecordAndApplyAsync(context, row, integration, attempt, result, (int)elapsed.TotalMilliseconds, context.Now + elapsed, provider);
+        }
+
+        /// <summary>
+        /// The provider said a person's address doesn't exist (SMTP 5.1.1, 5.1.6, 5.1.10): the contact point is failed, so nothing more is planned to it until they
+        /// verify it again (design §9, phase-2-plan M13). Its own statement, like the attempt: the provider's answer stands even if this worker's
+        /// lease ended. Not audited: it is the service's observation, not someone's change.
+        /// </summary>
+        private async Task MarkFailedAsync(Guid tenantId, Guid contactPointId, string? reason, DateTimeOffset at)
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
+            var text = reason is { Length: > 500 } ? reason[..500] : reason ?? "The provider said the address doesn't exist.";
+            var marked = await db.ContactPoints.Where(c => c.TenantId == tenantId && c.Id == contactPointId && c.Health != ContactHealth.Failed)
+                .ExecuteUpdateAsync(c => c.SetProperty(x => x.Health, ContactHealth.Failed).SetProperty(x => x.HealthReason, text)
+                    .SetProperty(x => x.HealthChangedAt, at), CancellationToken.None);
+            if (marked > 0)
+            {
+                logger.LogWarning("Contact point {ContactPoint} in tenant {Tenant} failed: {Reason}", contactPointId, tenantId, text);
+                Telemetry.ContactPointsFailed.Add(1);
+            }
         }
 
         /// <summary>
@@ -312,9 +381,12 @@ namespace Juice.Notifications.Delivering
             return TimeSpan.FromSeconds(delay * (0.8 + Random.Shared.NextDouble() * 0.4));
         }
 
-        private sealed record SnapshotAddress(string Value, bool IsReference);
+        private sealed record SnapshotAddress(string? Value, bool IsReference, Guid? ContactPointId = null, bool Verification = false);
 
-        /// <summary>The address in a delivery's snapshot, as stored or as a secret reference to read at send time; null when it has none.</summary>
+        /// <summary>
+        /// The address in a delivery's snapshot, as stored, as a secret reference to read at send time, or as a person's contact point to read and
+        /// decrypt then; null when it has none.
+        /// </summary>
         private static SnapshotAddress? Address(string snapshot)
         {
             try
@@ -324,6 +396,11 @@ namespace Juice.Notifications.Delivering
                 if (root.ValueKind != JsonValueKind.Object)
                 {
                     return null;
+                }
+                if (root.TryGetProperty("contactPoint", out var point) && point.ValueKind == JsonValueKind.String && point.TryGetGuid(out var pointId))
+                {
+                    return new SnapshotAddress(null, false, pointId,
+                        root.TryGetProperty("verification", out var verification) && verification.ValueKind == JsonValueKind.True);
                 }
                 if (root.TryGetProperty("address", out var address) && address.ValueKind == JsonValueKind.String && address.GetString() is { Length: > 0 } value)
                 {
@@ -352,6 +429,7 @@ namespace Juice.Notifications.Delivering
         public static IServiceCollection AddDispatching(this IServiceCollection services, StageOptions options, bool runWorkers = true)
         {
             services.AddBuiltInChannels();
+            services.AddContactEncryption();
             services.AddSingleton<WebhookProvider>();
             services.AddSingleton<INotificationProvider>(sp => sp.GetRequiredService<WebhookProvider>());
             services.AddSingleton<INotificationProvider, SmtpProvider>();

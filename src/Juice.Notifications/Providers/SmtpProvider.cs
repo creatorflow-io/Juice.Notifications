@@ -20,7 +20,7 @@ namespace Juice.Notifications.Providers
     /// <item>the connection lost or timed out once the body started: <c>Unknown</c>, since the server may have queued it.</item>
     /// </list>
     /// </summary>
-    public sealed class SmtpProvider(IOptions<DeliveryOptions> options) : INotificationProvider
+    public sealed partial class SmtpProvider(IOptions<DeliveryOptions> options) : INotificationProvider
     {
         public string Channel => Channels.Email;
 
@@ -57,6 +57,14 @@ namespace Juice.Notifications.Providers
             }
             return s.FromName is { Length: > 200 } ? "settings.fromName is up to 200 characters." : null;
         }
+
+        /// <summary>
+        /// An enhanced status code (RFC 3463) opening the server's reply that says the mailbox itself is wrong: 5.1.1 (no such mailbox), 5.1.6
+        /// (moved, no forwarding) or 5.1.10 (the domain accepts no mail, RFC 7505). Not the rest of 5.1.x: 5.1.2 (bad destination system) and
+        /// 5.1.0 also come from DNS trouble or a misconfigured relay, which mustn't fail every person's address it touched.
+        /// </summary>
+        [System.Text.RegularExpressions.GeneratedRegex(@"^\s*5\.1\.(1|6|10)(\s|$)")]
+        internal static partial System.Text.RegularExpressions.Regex AddressStatus();
 
         private static bool Builds(string from)
         {
@@ -139,6 +147,10 @@ namespace Juice.Notifications.Providers
             {
                 return ex.ErrorCode switch
                 {
+                    // A mailbox that doesn't exist (see AddressStatus) says the address itself is wrong, not just this send: the
+                    // person's contact point is failed. Other refusals of the recipient (a full mailbox, a policy) aren't.
+                    SmtpErrorCode.RecipientNotAccepted when AddressStatus().IsMatch(ex.Message)
+                        => SendResult.Gone($"The server refused the recipient: {ex.Message}", (int)ex.StatusCode),
                     SmtpErrorCode.RecipientNotAccepted
                         => SendResult.Permanent(FailureCategory.Destination, $"The server refused the recipient: {ex.Message}", (int)ex.StatusCode),
                     // The sender is the integration's: another integration might be accepted.

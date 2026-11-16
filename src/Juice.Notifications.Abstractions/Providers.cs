@@ -14,6 +14,16 @@ namespace Juice.Notifications
     /// <summary>What one attempt did (design §9.3, §10.2).</summary>
     public sealed record SendResult(AttemptOutcome Outcome, FailureCategory? Category, string? ProviderMessageId, int? StatusCode, string? Error)
     {
+        /// <summary>
+        /// The provider says the address doesn't exist (SMTP 5.1.1, 5.1.6 or 5.1.10, a push token unregistered), not merely that this send failed: a person's
+        /// contact point is marked failed, so it isn't planned again until they verify it anew (phase-2-plan M13). Only with a permanent
+        /// <see cref="FailureCategory.Destination"/> failure.
+        /// </summary>
+        public bool AddressGone { get; init; }
+
+        public static SendResult Gone(string error, int? status = null)
+            => new(AttemptOutcome.PermanentFailure, FailureCategory.Destination, null, status, error) { AddressGone = true };
+
         public static SendResult Delivered(int? status = null, string? id = null) => new(AttemptOutcome.Delivered, null, id, status, null);
         public static SendResult Accepted(string? id = null) => new(AttemptOutcome.Accepted, null, id, null, null);
         public static SendResult Retry(FailureCategory category, string error, int? status = null) => new(AttemptOutcome.RetryableFailure, category, null, status, error);

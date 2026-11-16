@@ -47,6 +47,9 @@ namespace Juice.Notifications.Data
         public DbSet<RecipientResolverConfig> Resolvers => Set<RecipientResolverConfig>();
         public DbSet<Subscriber> Subscribers => Set<Subscriber>();
         public DbSet<SubscriberAlias> SubscriberAliases => Set<SubscriberAlias>();
+        public DbSet<ContactPoint> ContactPoints => Set<ContactPoint>();
+        public DbSet<ContactVerification> ContactVerifications => Set<ContactVerification>();
+        public DbSet<DeviceRegistration> Devices => Set<DeviceRegistration>();
         public DbSet<LocalGroup> LocalGroups => Set<LocalGroup>();
         public DbSet<LocalGroupMember> LocalGroupMembers => Set<LocalGroupMember>();
         public DbSet<Topic> Topics => Set<Topic>();
@@ -240,6 +243,55 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.TenantId, x.SubscriberId });
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
                     .HasConstraintName(Constraints.AliasSubscriber);
+            });
+
+            model.Entity<ContactPoint>(e =>
+            {
+                e.ToTable("contact_points");
+                TenantKey(e);
+                e.Property(x => x.Channel).HasMaxLength(20);
+                // An address of up to 2,000 characters, encrypted and base64: about 2,700.
+                e.Property(x => x.Address).HasMaxLength(4000);
+                e.Property(x => x.AddressHash).HasMaxLength(64);
+                e.Property(x => x.KeyId).HasMaxLength(20);
+                e.Property(x => x.Masked).HasMaxLength(400);
+                e.Property(x => x.VerifiedBy).HasMaxLength(63);
+                e.Property(x => x.Health).HasConversion<string>().HasMaxLength(20);
+                e.Property(x => x.HealthReason).HasMaxLength(500);
+                // One per person, channel and address, however it was added (by them or by a source): the upserts' conflict target.
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId, x.Channel, x.AddressHash }).IsUnique().HasDatabaseName(Constraints.ContactPointAddress);
+                // An address across the tenant's people, for bounces and complaints (phase 4).
+                e.HasIndex(x => new { x.TenantId, x.AddressHash });
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName(Constraints.ContactPointSubscriber);
+            });
+
+            model.Entity<ContactVerification>(e =>
+            {
+                e.ToTable("contact_verifications");
+                e.HasKey(x => new { x.TenantId, x.ContactPointId });
+                e.Property(x => x.CodeHash).HasMaxLength(64);
+                e.HasIndex(x => x.ExpiresAt);
+                e.HasOne<ContactPoint>().WithMany().HasForeignKey(x => new { x.TenantId, x.ContactPointId }).OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName(Constraints.VerificationContactPoint);
+            });
+
+            model.Entity<DeviceRegistration>(e =>
+            {
+                e.ToTable("device_registrations");
+                TenantKey(e);
+                e.Property(x => x.Platform).HasMaxLength(10);
+                e.Property(x => x.AppId).HasMaxLength(200);
+                // A token or Web Push subscription of up to 4,096 characters, encrypted and base64.
+                e.Property(x => x.Token).HasMaxLength(6000);
+                e.Property(x => x.TokenHash).HasMaxLength(64);
+                e.Property(x => x.KeyId).HasMaxLength(20);
+                e.Property(x => x.Locale).HasMaxLength(35);
+                // One registration per token: registering it again moves it (design §9.2).
+                e.HasIndex(x => new { x.TenantId, x.Platform, x.AppId, x.TokenHash }).IsUnique().HasDatabaseName(Constraints.DeviceToken);
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId });
+                e.HasIndex(x => x.LastSeenAt);
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade);
             });
 
             model.Entity<LocalGroup>(e =>

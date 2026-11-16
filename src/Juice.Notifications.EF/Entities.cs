@@ -251,6 +251,67 @@ namespace Juice.Notifications.Data
         /// </summary>
         public int Version { get; set; }
         public DateTimeOffset CreatedAt { get; init; }
+        /// <summary>
+        /// When the current hour of verification sends began, and how many went out in it: a person sends a few codes an hour at most, however
+        /// many contact points they add and remove (phase-2-plan M13). Written by one atomic update, never through the tracked row.
+        /// </summary>
+        public DateTimeOffset? VerificationWindowStart { get; set; }
+        public int VerificationsInWindow { get; set; }
+    }
+
+    /// <summary>
+    /// Where a person can be reached on a channel (design §9, §12, phase-2-plan I19): the address encrypted under the key <see cref="KeyId"/>, with
+    /// an HMAC of the normalized address (<see cref="AddressHash"/>) for uniqueness. Planned only once verified, and never once failed (§6.4).
+    /// </summary>
+    public sealed class ContactPoint : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid SubscriberId { get; init; }
+        public required string Channel { get; init; }
+        /// <summary>The normalized address, AES-GCM encrypted (<c>ContactCrypto</c>), base64.</summary>
+        public required string Address { get; init; }
+        public required string AddressHash { get; init; }
+        public required string KeyId { get; init; }
+        /// <summary>The address as history shows it (<c>j…@example.com</c>), kept so planning never decrypts.</summary>
+        public required string Masked { get; init; }
+        public DateTimeOffset? VerifiedAt { get; set; }
+        /// <summary><c>self</c> (the person entered a code), or the source that vouched for it (<c>oidc</c>).</summary>
+        public string? VerifiedBy { get; set; }
+        public ContactHealth Health { get; set; }
+        public string? HealthReason { get; set; }
+        public DateTimeOffset? HealthChangedAt { get; set; }
+        public DateTimeOffset CreatedAt { get; init; }
+    }
+
+    /// <summary>The code outstanding for a contact point (phase-2-plan I20): one at a time, hashed, a few tries, a short life.</summary>
+    public sealed class ContactVerification
+    {
+        public Guid TenantId { get; init; }
+        public Guid ContactPointId { get; init; }
+        public required string CodeHash { get; set; }
+        public DateTimeOffset SentAt { get; set; }
+        public DateTimeOffset ExpiresAt { get; set; }
+        public int Tries { get; set; }
+    }
+
+    /// <summary>
+    /// A device a person's app registered for push (design §9.2): the token (for Web Push, the subscription) encrypted like an address, with its
+    /// hash unique per tenant, platform and app, so registering it again moves it to whoever registered it last.
+    /// </summary>
+    public sealed class DeviceRegistration : ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid SubscriberId { get; set; }
+        public required string Platform { get; init; }
+        public required string AppId { get; init; }
+        public required string Token { get; set; }
+        public required string TokenHash { get; init; }
+        public required string KeyId { get; set; }
+        public string? Locale { get; set; }
+        public DateTimeOffset CreatedAt { get; init; }
+        public DateTimeOffset LastSeenAt { get; set; }
     }
 
     /// <summary>Another source's id for a subscriber, linked by a tenant admin (design D23, phase-2-plan p2-d2).</summary>

@@ -5,7 +5,7 @@ namespace Juice.Notifications
     /// <see cref="Invalid"/> is a malformed command (400); <see cref="Unprocessable"/> is a well-formed one the rules refuse, such as data that
     /// fails its type's schema (422); <see cref="Forbidden"/> is a caller acting outside what it owns (403).
     /// </summary>
-    public enum OutcomeKind { Ok, Created, NotFound, Conflict, Invalid, Unprocessable, Forbidden }
+    public enum OutcomeKind { Ok, Created, NotFound, Conflict, Invalid, Unprocessable, Forbidden, TooManyRequests }
 
     /// <summary>One problem with one field: a JSON pointer into what was sent, and a sentence.</summary>
     public sealed record FieldError(string Pointer, string Message);
@@ -21,5 +21,7 @@ namespace Juice.Notifications
         public static Outcome<T> Unprocessable(string code, string message, IReadOnlyList<FieldError>? errors = null)
             => new(OutcomeKind.Unprocessable, default, code, message, errors);
         public static Outcome<T> Forbidden(string code, string message) => new(OutcomeKind.Forbidden, default, code, message);
+        /// <summary>A limit on how often (429): <paramref name="message"/> says when to try again.</summary>
+        public static Outcome<T> TooManyRequests(string message) => new(OutcomeKind.TooManyRequests, default, ErrorCodes.TooManyRequests, message);
     }
 }

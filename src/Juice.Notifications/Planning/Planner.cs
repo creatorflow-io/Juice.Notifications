@@ -36,7 +36,16 @@ namespace Juice.Notifications.Planning
     /// A person a resolver produced, by its source and that source's id for them (design D23): <c>local</c> and a local user's key,
     /// <c>oidc</c> and the provider's subject. Name, locale and time zone refresh the subscriber when the source gives them.
     /// </summary>
-    public sealed record ResolvedPerson(string Source, string ExternalId, string? Name = null, string? Locale = null, string? TimeZone = null);
+    /// <remarks>
+    /// <see cref="Contacts"/> are addresses the source has for the person, each verified or not by the source (phase-2-plan I15): stored as their
+    /// contact points, a verified one marked verified by the source. A source never un-verifies one, and a person may remove one (it comes back
+    /// the next time the source returns it).
+    /// </remarks>
+    public sealed record ResolvedPerson(string Source, string ExternalId, string? Name = null, string? Locale = null, string? TimeZone = null,
+        IReadOnlyList<ResolvedContact>? Contacts = null);
+
+    /// <summary>An address a source has for a person, on a registered channel (<c>email</c>), and whether the source verified it.</summary>
+    public sealed record ResolvedContact(string Channel, string Address, bool Verified);
 
     /// <summary>
     /// What a name resolved to. <see cref="Truncated"/>: the source itself cut the list short (a remote directory's page limit), so the name is
@@ -134,6 +143,22 @@ namespace Juice.Notifications.Planning
     }
 
     /// <summary>
+    /// <c>contact-point</c>: the person's contact point the service's own request named (a verification code). The delivery planner reads the point;
+    /// its address is never in the request or the recipient.
+    /// </summary>
+    public sealed class StaticContactPointResolver : IRecipientResolver
+    {
+        public string Key => "contact-point";
+
+        public IReadOnlySet<string> Kinds { get; } = new HashSet<string> { RecipientKinds.ContactPoint };
+
+        public bool Configurable => false;
+
+        public ValueTask<ResolveResult> ResolveAsync(RecipientSpec spec, ResolveContext context, CancellationToken ct)
+            => ValueTask.FromResult(new ResolveResult([new ResolvedDestination(RecipientKind.ContactPoint, $"contact-point:{spec.Id}")]));
+    }
+
+    /// <summary>
     /// The planner (design §4.1 stage 2): claims a <c>Planning</c> notification, resolves what its request named into recipients (each due for the
     /// delivery planner), and marks it <c>Planned</c>, in one save; only the subscribers it maps people to are written before that, by an upsert
     /// that is safe to repeat (<see cref="SubscriberDirectory"/>). A request past its <c>expiresAt</c> becomes <c>Expired</c> with no
@@ -146,7 +171,8 @@ namespace Juice.Notifications.Planning
     /// <see cref="ResolverOptions.MaxRecipients"/> people keeps the first of them, by source and external id, so a retry keeps the same ones, and
     /// is recorded as <c>Truncated</c>. Both records name what the request named (<c>group:sre</c>), have no subscriber, and are never due.
     /// </remarks>
-    public sealed class PlannerStage(IEnumerable<IRecipientResolver> resolvers, IOptions<ResolverOptions> resolverOptions, ILogger<PlannerStage> logger)
+    public sealed class PlannerStage(IEnumerable<IRecipientResolver> resolvers, IOptions<ResolverOptions> resolverOptions, ILogger<PlannerStage> logger,
+        IChannelRegistry channels, People.ContactCrypto crypto)
         : IStage<Notification>
     {
         public const string StageName = "planner";
@@ -299,7 +325,8 @@ namespace Juice.Notifications.Planning
             var recipients = planned.Count;
             if (people.Count > 0)
             {
-                var subscribers = await SubscriberDirectory.MapAsync(db, row.TenantId, people.Values.Select(p => p.Person).ToList(), context.Now, ct);
+                var subscribers = await SubscriberDirectory.MapAsync(db, row.TenantId, people.Values.Select(p => p.Person).ToList(), context.Now,
+                    new SourceContacts(crypto, channels, logger), ct);
                 // Two identities can be one subscriber (an alias): their names join on the one recipient.
                 foreach (var group in people.Values.GroupBy(p => subscribers[(p.Person.Source, p.Person.ExternalId)]).OrderBy(g => g.Key))
                 {
@@ -391,6 +418,7 @@ namespace Juice.Notifications.Planning
         {
             services.AddSingleton<IRecipientResolver, RouteRecipientResolver>();
             services.AddSingleton<IRecipientResolver, StaticAddressResolver>();
+            services.AddSingleton<IRecipientResolver, StaticContactPointResolver>();
             services.AddSingleton<IRecipientResolver, LocalRecipientResolver>();
             services.AddSingleton<IRecipientResolver, TopicRecipientResolver>();
             services.AddOptions<ResolverOptions>()
@@ -400,6 +428,9 @@ namespace Juice.Notifications.Planning
                 .ValidateOnStart();
             services.TryAddSingleton(TimeProvider.System);
             services.AddSingleton<ResolverCache>();
+            // Contact points a source vouches for are stored encrypted, on registered channels.
+            services.AddBuiltInChannels();
+            People.ContactEncryptionRegistration.AddContactEncryption(services);
             return services.AddStage<Notification, PlannerStage>(options, runWorkers);
         }
     }

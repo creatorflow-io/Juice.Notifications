@@ -73,10 +73,18 @@ namespace Juice.Notifications.Applications
         : IRequestHandler<CreateApplication, Outcome<ApplicationView>>, IRequestHandler<UpdateApplication, Outcome<ApplicationView>>,
           IRequestHandler<LinkTenant, Outcome<ApplicationView>>, IRequestHandler<UnlinkTenant, Outcome<ApplicationView>>
     {
+        /// <summary>The service's own application (contact verification): provisioned at start, never changed through the API.</summary>
+        private static Outcome<ApplicationView> ServiceOwned()
+            => Outcome<ApplicationView>.Conflict(ErrorCodes.ManagedByService, $"The application '{People.ServiceTypes.ApplicationKey}' is the service's own.");
+
         public async ValueTask<Outcome<ApplicationView>> Handle(CreateApplication request, CancellationToken cancellationToken)
         {
             // "" is none, as on an update.
             request = request.BrokerUser == "" ? request with { BrokerUser = null } : request;
+            if (request.Key == People.ServiceTypes.ApplicationKey)
+            {
+                return ServiceOwned();
+            }
             if ((ApplicationRules.CheckKey(request.Key) ?? ApplicationRules.CheckName(request.Name) ?? ApplicationRules.CheckClientId(request.ClientId)
                 ?? (request.BrokerUser is null ? null : ApplicationRules.CheckBrokerUser(request.BrokerUser))) is { } invalid)
             {
@@ -113,6 +121,10 @@ namespace Juice.Notifications.Applications
             if (app is null)
             {
                 return Outcome<ApplicationView>.NotFound($"There is no application '{request.Key}'.");
+            }
+            if (app.Key == People.ServiceTypes.ApplicationKey)
+            {
+                return ServiceOwned();
             }
             if (request.Name is not null && ApplicationRules.CheckName(request.Name) is { } badName)
             {
@@ -183,6 +195,10 @@ namespace Juice.Notifications.Applications
             {
                 return Outcome<ApplicationView>.NotFound($"There is no application '{request.Key}'.");
             }
+            if (app.Key == People.ServiceTypes.ApplicationKey)
+            {
+                return ServiceOwned();
+            }
             // Two identical links at once both pass this check; the second commit hits the link's key, and the API answers it as the first (200,
             // read fresh). The write stays a tracked change, saved and committed by the transaction behavior.
             if (!await db.ApplicationTenants.AnyAsync(t => t.ApplicationId == app.Id && t.TenantId == request.NotificationTenantId, cancellationToken))
@@ -203,6 +219,10 @@ namespace Juice.Notifications.Applications
             if (app is null)
             {
                 return Outcome<ApplicationView>.NotFound($"There is no application '{request.Key}'.");
+            }
+            if (app.Key == People.ServiceTypes.ApplicationKey)
+            {
+                return ServiceOwned();
             }
             var link = await db.ApplicationTenants.SingleOrDefaultAsync(t => t.ApplicationId == app.Id && t.TenantId == request.NotificationTenantId, cancellationToken);
             if (link is not null)

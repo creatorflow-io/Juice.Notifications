@@ -99,6 +99,14 @@ namespace Juice.Notifications.Api
             services.AddScoped<Configuration.ConfigurationReader>();
             services.AddScoped<People.SubscriberReader>();
             services.AddScoped<People.DirectoryReader>();
+            // Contact points and devices (phase-2-plan M13): their encryption keys are checked at start, with the service's own types.
+            services.AddOptions<People.EncryptionOptions>().Bind(configuration.GetSection(People.EncryptionOptions.Section));
+            People.ContactEncryptionRegistration.AddContactEncryption(services);
+            services.AddScoped<People.ContactPointReader>();
+            services.AddScoped<People.ContactVerifier>();
+            services.AddScoped<People.DeviceRegistry>();
+            services.AddHostedService<People.ServiceTypesProvisioner>();
+            services.Configure<People.DeviceOptions>(configuration.GetSection(People.DeviceOptions.Section));
             services.AddScoped<History.DeliveryHistory>();
 
             // The pipeline stages (design §4.1). Their workers run unless Stages:Run is false (a host that only takes requests).
@@ -111,6 +119,10 @@ namespace Juice.Notifications.Api
             var dispatcher = new Stages.StageOptions { Lease = TimeSpan.FromSeconds(60) };
             configuration.GetSection("Stages:Dispatcher").Bind(dispatcher); // settings override the defaults one by one
             services.AddDispatching(dispatcher, runStages);
+            if (runStages)
+            {
+                services.AddHostedService<People.DeviceSweep>();
+            }
             services.AddSingleton<Stages.BacklogMonitor>();
             services.AddHostedService(sp => sp.GetRequiredService<Stages.BacklogMonitor>());
             services.ConfigureHttpJsonOptions(options =>
