@@ -4,7 +4,9 @@ using Juice.Notifications.Intake;
 using Juice.Notifications.Stages;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Juice.Notifications.Planning
 {
@@ -12,7 +14,16 @@ namespace Juice.Notifications.Planning
     /// What a resolver is resolving for: the request, in its tenant, with the scope's DbContext, and the tenant's configuration of the resolver
     /// (null for the built-in <c>route</c> and <c>address</c>).
     /// </summary>
-    public sealed record ResolveContext(NotificationsDbContext Db, NotificationRequest Request, DateTimeOffset Now, RecipientResolverConfig? Config = null);
+    /// <remarks>
+    /// <see cref="MaxPeople"/> is the most people one name may reach (design §6.1 bounds). A resolver may return one more than that, and needn't
+    /// read more: the planner then keeps the first <see cref="MaxPeople"/> and records the name as <c>Truncated</c>.
+    /// </remarks>
+    /// <remarks>
+    /// A resolver returns each person once. It may stop at one past <see cref="MaxPeople"/> when there are more; past that many, the name is
+    /// recorded as truncated.
+    /// </remarks>
+    public sealed record ResolveContext(NotificationsDbContext Db, NotificationRequest Request, DateTimeOffset Now, RecipientResolverConfig? Config,
+        int MaxPeople);
 
     /// <summary>
     /// A destination a resolver produced (design §6.1). <see cref="NamedAs"/> says what was named and is unique within a notification's step:
@@ -27,6 +38,10 @@ namespace Juice.Notifications.Planning
     /// </summary>
     public sealed record ResolvedPerson(string Source, string ExternalId, string? Name = null, string? Locale = null, string? TimeZone = null);
 
+    /// <summary>
+    /// What a name resolved to. <see cref="Truncated"/>: the source itself cut the list short (a remote directory's page limit), so the name is
+    /// recorded as <c>Truncated</c> even when fewer than the bound came back.
+    /// </summary>
     public sealed record ResolveResult(IReadOnlyList<ResolvedDestination> Destinations, bool Truncated = false)
     {
         public IReadOnlyList<ResolvedPerson> People { get; init; } = [];
@@ -124,7 +139,15 @@ namespace Juice.Notifications.Planning
     /// that is safe to repeat (<see cref="SubscriberDirectory"/>). A request past its <c>expiresAt</c> becomes <c>Expired</c> with no
     /// recipients. Recipients are unique per notification, step and <see cref="ResolvedDestination.NamedAs"/>, so a second plan can't add a second set.
     /// </summary>
-    public sealed class PlannerStage(IEnumerable<IRecipientResolver> resolvers, ILogger<PlannerStage> logger) : IStage<Notification>
+    /// <remarks>
+    /// A resolver that throws <see cref="ResolverUnavailableException"/> doesn't fail the step (phase-2-plan I22): the notification stays in
+    /// <c>Planning</c> with nothing written but when to try again, until <see cref="ResolverOptions.WaitLimit"/> after the first failure. Then it is
+    /// planned with what resolved, and each name that didn't is a recipient with outcome <c>ResolverUnavailable</c>. A name reaching more than
+    /// <see cref="ResolverOptions.MaxRecipients"/> people keeps the first of them, by source and external id, so a retry keeps the same ones, and
+    /// is recorded as <c>Truncated</c>. Both records name what the request named (<c>group:sre</c>), have no subscriber, and are never due.
+    /// </remarks>
+    public sealed class PlannerStage(IEnumerable<IRecipientResolver> resolvers, IOptions<ResolverOptions> resolverOptions, ILogger<PlannerStage> logger)
+        : IStage<Notification>
     {
         public const string StageName = "planner";
 
@@ -161,7 +184,11 @@ namespace Juice.Notifications.Planning
             var configs = specs.Any(s => s.Resolver is not null)
                 ? await db.Resolvers.AsNoTracking().Where(c => c.TenantId == row.TenantId && c.Enabled).ToListAsync(ct)
                 : [];
+            var bounds = resolverOptions.Value;
             var planned = new Dictionary<string, (ResolvedDestination Destination, string Resolver)>(StringComparer.Ordinal);
+            // Names that couldn't be resolved now, and names that reached more people than the bound, each with its resolver.
+            var unavailable = new Dictionary<string, string>(StringComparer.Ordinal);
+            var truncated = new Dictionary<string, string>(StringComparer.Ordinal);
             // A person reached through several names is one recipient: the names, and the first resolver that reached them, by person.
             var people = new Dictionary<(string Source, string ExternalId), (ResolvedPerson Person, SortedSet<string> Via, string Resolver)>();
             foreach (var spec in specs)
@@ -173,28 +200,92 @@ namespace Juice.Notifications.Planning
                         spec.Kind, spec.Resolver, row.TenantId, row.Id);
                     continue;
                 }
-                var result = await resolver.ResolveAsync(spec, new ResolveContext(db, request, context.Now, config), ct);
+                var resolverKey = config?.Key ?? resolver.Key;
+                var name = spec.Name;
+                ResolveResult result;
+                try
+                {
+                    result = await resolver.ResolveAsync(spec, new ResolveContext(db, request, context.Now, config, bounds.MaxRecipients), ct);
+                }
+                catch (ResolverUnavailableException ex) when (!ct.IsCancellationRequested)
+                {
+                    if (context.Now - (row.ResolverWaitSince ?? context.Now) < bounds.WaitLimit)
+                    {
+                        // Still waiting: nothing this try resolved will be kept, so the other names needn't be resolved either.
+                        Wait(context, row, bounds, resolverKey, name, ex);
+                        return;
+                    }
+                    logger.LogWarning(ex, "Resolver {Resolver} is still unavailable for {Name} in tenant {Tenant} after the wait limit; notification {Id} is planned without it",
+                        resolverKey, name, row.TenantId, row.Id);
+                    unavailable.TryAdd(name, resolverKey);
+                    continue;
+                }
                 foreach (var destination in result.Destinations)
                 {
-                    planned.TryAdd(destination.NamedAs, (destination, config?.Key ?? resolver.Key));
+                    planned.TryAdd(destination.NamedAs, (destination, resolverKey));
                 }
-                var name = spec.Name;
+                // People who can't be subscribers are dropped before the bound, so they don't take the places of people who can.
+                var returnedPeople = new List<ResolvedPerson>(result.People.Count);
+                string? firstProblem = null;
                 foreach (var returned in result.People)
                 {
                     if (SubscriberDirectory.Problem(returned) is { } problem)
                     {
-                        logger.LogWarning("Resolver {Resolver} returned a person who can't be a subscriber ({Problem}) for {Name} in tenant {Tenant}; notification {Id} skips them",
-                            config?.Key ?? resolver.Key, problem, name, row.TenantId, row.Id);
+                        firstProblem ??= problem;
                         continue;
                     }
+                    returnedPeople.Add(returned);
+                }
+                if (firstProblem is not null)
+                {
+                    logger.LogWarning("Resolver {Resolver} returned {Count} people who can't be subscribers (the first: {Problem}) for {Name} in tenant {Tenant}; notification {Id} skips them",
+                        resolverKey, result.People.Count - returnedPeople.Count, firstProblem, name, row.TenantId, row.Id);
+                }
+                // Past the bound by what the resolver returned, before any were dropped: it may have stopped at one past the bound, so a person
+                // dropped above doesn't show there were no more.
+                if (result.Truncated || result.People.Count > bounds.MaxRecipients)
+                {
+                    // The first in code point order (the byte order of COLLATE "C"): the same people on a retry, whatever order the source gave.
+                    returnedPeople = returnedPeople.DistinctBy(p => (p.Source, p.ExternalId)).Order(CodePointOrder.People).Take(bounds.MaxRecipients).ToList();
+                    truncated.TryAdd(name, resolverKey);
+                }
+                foreach (var returned in returnedPeople)
+                {
                     var person = SubscriberDirectory.Fit(returned);
                     if (!people.TryGetValue((person.Source, person.ExternalId), out var entry))
                     {
-                        entry = (person, new SortedSet<string>(StringComparer.Ordinal), config?.Key ?? resolver.Key);
+                        entry = (person, new SortedSet<string>(StringComparer.Ordinal), resolverKey);
                         people[(person.Source, person.ExternalId)] = entry;
                     }
                     entry.Via.Add(name);
                 }
+            }
+            foreach (var (named, resolverKey) in unavailable)
+            {
+                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.ResolverUnavailable, context.Now));
+                // One record per name: one named twice, through a resolver that failed and another that truncated, reads as unavailable.
+                truncated.Remove(named);
+            }
+            foreach (var (named, resolverKey) in truncated)
+            {
+                logger.LogWarning("{Name} reached more than {Max} people in tenant {Tenant}; notification {Id} keeps the first of them",
+                    named, bounds.MaxRecipients, row.TenantId, row.Id);
+                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Truncated, context.Now));
+            }
+            if (unavailable.Count > 0 || truncated.Count > 0)
+            {
+                var (unresolvedCount, truncatedCount) = (unavailable.Count, truncated.Count);
+                context.AfterCommit.Add(() =>
+                {
+                    if (unresolvedCount > 0)
+                    {
+                        Telemetry.RecipientsUnresolved.Add(unresolvedCount);
+                    }
+                    if (truncatedCount > 0)
+                    {
+                        Telemetry.RecipientsTruncated.Add(truncatedCount);
+                    }
+                });
             }
             foreach (var (d, resolverKey) in planned.Values)
             {
@@ -223,12 +314,49 @@ namespace Juice.Notifications.Planning
                 }
             }
             row.State = NotificationState.Planned;
+            // The wait belonged to this plan: a later one (an escalation step) waits afresh. The markers keep what it left out.
+            row.ResolverWaitSince = null;
             context.Done(row, null);
             if (recipients > 0)
             {
                 context.Wakes.Add(DeliveryStageNames.DeliveryPlanner);
             }
         }
+
+        /// <summary>
+        /// Puts the notification off until the resolver may be back, writing nothing else: the next try resolves every name again, in one step,
+        /// so a partial plan is never stored. Each wait is as long as the wait so far (so it doubles), within the bounds, and the last try falls on
+        /// the limit itself. The step's failure count is kept, so a fault elsewhere still adds up toward giving the row up.
+        /// </summary>
+        private void Wait(StageContext context, Notification row, ResolverOptions bounds, string resolver, string name, Exception ex)
+        {
+            if (row.ResolverWaitSince is null)
+            {
+                logger.LogWarning(ex, "Resolver {Resolver} is unavailable for {Name} in tenant {Tenant}; notification {Id} waits for it up to {Limit}",
+                    resolver, name, row.TenantId, row.Id, bounds.WaitLimit);
+            }
+            else
+            {
+                logger.LogInformation("Resolver {Resolver} is still unavailable for {Name} in tenant {Tenant}; notification {Id} waits: {Error}",
+                    resolver, name, row.TenantId, row.Id, ex.Message);
+            }
+            var since = row.ResolverWaitSince ??= context.Now;
+            var waited = context.Now - since;
+            var next = context.Now + TimeSpan.FromTicks(Math.Clamp(waited.Ticks, bounds.RetryMin.Ticks, bounds.RetryMax.Ticks));
+            var failures = row.StepFailures;
+            context.Done(row, next < since + bounds.WaitLimit ? next : since + bounds.WaitLimit);
+            row.StepFailures = failures;
+        }
+
+        /// <summary>
+        /// A record of a name that reached no one, or not everyone it named: it names what the request named, has no subscriber, and is never
+        /// due, so the delivery planner never takes it.
+        /// </summary>
+        private static NotificationRecipient Unreached(Notification row, string named, string resolver, RecipientOutcome outcome, DateTimeOffset now) => new()
+        {
+            TenantId = row.TenantId, NotificationId = row.Id, Kind = RecipientKind.Name, Resolver = resolver, NamedAs = named, Via = [named],
+            Outcome = outcome, NextAt = null, CreatedAt = now,
+        };
 
         /// <summary>
         /// The resolver for a recipient: a built-in one for its kind, or the tenant's configuration intake chose (<see cref="RecipientSpec.Resolver"/>),
@@ -265,6 +393,13 @@ namespace Juice.Notifications.Planning
             services.AddSingleton<IRecipientResolver, StaticAddressResolver>();
             services.AddSingleton<IRecipientResolver, LocalRecipientResolver>();
             services.AddSingleton<IRecipientResolver, TopicRecipientResolver>();
+            services.AddOptions<ResolverOptions>()
+                .Validate(o => o.MaxRecipients is > 0 and <= 1_000_000 && o.WaitLimit >= TimeSpan.Zero && o.RetryMin > TimeSpan.Zero
+                    && o.RetryMax >= o.RetryMin && o.CacheSeconds >= 0,
+                    "Resolvers: MaxRecipients is 1–1,000,000, WaitLimit and CacheSeconds aren't negative, and 0 < RetryMin ≤ RetryMax.")
+                .ValidateOnStart();
+            services.TryAddSingleton(TimeProvider.System);
+            services.AddSingleton<ResolverCache>();
             return services.AddStage<Notification, PlannerStage>(options, runWorkers);
         }
     }

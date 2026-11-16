@@ -23,16 +23,20 @@ namespace Juice.Notifications.Planning
             => person.Source is null || !Configuration.ConfigurationRules.Key().IsMatch(person.Source)
                 ? "its source is 1–63 lowercase letters, digits or hyphens, starting with a letter"
                 : !Intake.RequestRules.IsRecipientId(person.ExternalId)
-                    ? $"its external id is 1–{Intake.RequestRules.MaxRecipientIdLength} characters, no control characters"
+                    ? $"its external id is 1–{Intake.RequestRules.MaxRecipientIdLength} characters, no control characters or lone surrogates"
                     : null;
 
-        /// <summary>The person without a name, locale or time zone the columns can't hold (the subscriber keeps what it has).</summary>
+        /// <summary>
+        /// The person without a name, locale or time zone the columns can't hold, too long or not well-formed text (the subscriber keeps what it has).
+        /// </summary>
         public static ResolvedPerson Fit(ResolvedPerson person) => person with
         {
-            Name = person.Name is { Length: > MaxName } ? null : person.Name,
-            Locale = person.Locale is { Length: > MaxLocale } ? null : person.Locale,
-            TimeZone = person.TimeZone is { Length: > MaxTimeZone } ? null : person.TimeZone,
+            Name = Holds(person.Name, MaxName),
+            Locale = Holds(person.Locale, MaxLocale),
+            TimeZone = Holds(person.TimeZone, MaxTimeZone),
         };
+
+        private static string? Holds(string? value, int max) => value is null || value.Length > max || !Intake.RequestRules.IsWellFormed(value) ? null : value;
 
         // The subscribers table's column lengths (NotificationsDbContext).
         internal const int MaxName = 200;

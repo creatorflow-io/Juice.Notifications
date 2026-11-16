@@ -46,6 +46,11 @@ namespace Juice.Notifications
         Route,
         /// <summary>An address the type allows (<c>externalRecipients</c>).</summary>
         External,
+        /// <summary>
+        /// A record, never delivered: a name the request gave (<c>group:sre</c>) that reached no one because its resolver stayed unavailable
+        /// (<see cref="RecipientOutcome.ResolverUnavailable"/>), or not everyone because it reached past the bound (<see cref="RecipientOutcome.Truncated"/>).
+        /// </summary>
+        Name,
     }
 
     /// <summary>What happened to a recipient, so "why didn't I get it?" has an answer.</summary>

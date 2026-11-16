@@ -16,6 +16,10 @@ namespace Juice.Notifications
 
         public static readonly Counter<long> Requests = Meter.CreateCounter<long>("notifications.requests", description: "Requests by type and outcome.");
         public static readonly Counter<long> Recipients = Meter.CreateCounter<long>("notifications.recipients", description: "Recipients by outcome.");
+        public static readonly Counter<long> RecipientsUnresolved = Meter.CreateCounter<long>("notifications.recipients_unresolved",
+            description: "Names planned without their people because the resolver stayed unavailable past the wait limit.");
+        public static readonly Counter<long> RecipientsTruncated = Meter.CreateCounter<long>("notifications.recipients_truncated",
+            description: "Names that reached more people than the bound and kept the first of them.");
         public static readonly Counter<long> Deliveries = Meter.CreateCounter<long>("notifications.deliveries", description: "Deliveries finished, by channel and status.");
         public static readonly Counter<long> Attempts = Meter.CreateCounter<long>("notifications.attempts", description: "Attempts by outcome and category.");
         public static readonly Counter<long> UnknownOutcomes = Meter.CreateCounter<long>("notifications.unknown_outcomes", description: "Sends with no answer, by channel.");

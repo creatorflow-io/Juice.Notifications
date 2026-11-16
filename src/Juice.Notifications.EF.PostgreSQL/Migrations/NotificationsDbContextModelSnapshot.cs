@@ -797,6 +797,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("request_id");
 
+                    b.Property<DateTimeOffset?>("ResolverWaitSince")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("resolver_wait_since");
+
                     b.Property<string>("State")
                         .IsRequired()
                         .HasMaxLength(20)

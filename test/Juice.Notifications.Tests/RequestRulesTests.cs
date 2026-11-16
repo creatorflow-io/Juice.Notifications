@@ -17,6 +17,19 @@ namespace Juice.Notifications.Tests
             Workflow = "[]", DeclarationHash = "d", ExternalRecipients = external,
         };
 
+        [Fact]
+        public void A_recipient_id_with_half_a_surrogate_pair_is_refused()
+        {
+            // Such text has no UTF-8 form: PostgreSQL would refuse the whole save holding it (M12 review, round 3). Built here, not as theory
+            // data, which xUnit serializes as UTF-8 and so turns into U+FFFD.
+            (string Id, bool Allowed)[] cases = [("ab\uD800", false), ("\uDC00ab", false), ("a\uDC00\uD800b", false), ("a\U0001F600b", true), ("Ａ", true)];
+            Assert.All(cases, c =>
+            {
+                Assert.Equal(c.Allowed, RequestRules.IsRecipientId(c.Id));
+                Assert.Equal(c.Allowed, RequestRules.IsWellFormed(c.Id));
+            });
+        }
+
         private static (IReadOnlyList<RecipientSpec>? Result, List<FieldError> Invalid, List<FieldError> Refused) Recipients(
             IReadOnlyList<RecipientSpec>? sent, bool external = true, IReadOnlySet<string>? templated = null, IReadOnlyList<RecipientResolverConfig>? resolvers = null)
         {

@@ -73,7 +73,27 @@ namespace Juice.Notifications.Intake
 
         /// <summary>A person's id or key, as a request names it or a source gives it: 1–200 characters, no control characters.</summary>
         public static bool IsRecipientId([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? value)
-            => !string.IsNullOrEmpty(value) && value.Length <= MaxRecipientIdLength && !value.Any(char.IsControl);
+            => !string.IsNullOrEmpty(value) && value.Length <= MaxRecipientIdLength && !value.Any(char.IsControl) && IsWellFormed(value);
+
+        /// <summary>
+        /// No half of a surrogate pair on its own: such text has no UTF-8 form, so PostgreSQL can't store it and the save holding it would fail
+        /// (a remote directory's id or name is not ours to trust).
+        /// </summary>
+        public static bool IsWellFormed(string value)
+        {
+            for (var i = 0; i < value.Length; i++)
+            {
+                if (char.IsHighSurrogate(value[i]) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+                {
+                    i++;
+                }
+                else if (char.IsSurrogate(value[i]))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
 
         /// <summary>
         /// A person recipient (<c>user</c>, <c>group</c>, <c>role</c> by <c>id</c>; <c>topic</c> by <c>key</c>) with the tenant resolver that
@@ -270,7 +290,7 @@ namespace Juice.Notifications.Intake
                 invalid.Add(new FieldError("/actor/kind", "The actor's kind is user, system or service."));
                 return null;
             }
-            if (actor.Id is not { Length: > 0 and <= 200 } || actor.Id.Any(char.IsControl))
+            if (actor.Id is not { Length: > 0 and <= 200 } || actor.Id.Any(char.IsControl) || !IsWellFormed(actor.Id))
             {
                 invalid.Add(new FieldError("/actor/id", "The actor's id is 1–200 characters."));
                 return null;

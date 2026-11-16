@@ -313,6 +313,11 @@ namespace Juice.Notifications.Data
         public NotificationState State { get; set; }
         public int WorkflowStep { get; set; }
         public string? Error { get; set; }
+        /// <summary>
+        /// When planning first found a resolver unavailable; it waits for it until the wait limit after this (phase-2-plan I22). Null when no
+        /// resolver has failed for the plan under way, and cleared when it is planned.
+        /// </summary>
+        public DateTimeOffset? ResolverWaitSince { get; set; }
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset UpdatedAt { get; set; }
     }

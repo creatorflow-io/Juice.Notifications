@@ -104,6 +104,7 @@ namespace Juice.Notifications.Api
             // The pipeline stages (design §4.1). Their workers run unless Stages:Run is false (a host that only takes requests).
             var runStages = configuration.GetValue("Stages:Run", true);
             services.AddPlanning(configuration.GetSection("Stages:Planner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages);
+            services.Configure<Planning.ResolverOptions>(configuration.GetSection(Planning.ResolverOptions.Section));
             services.AddDeliveryPlanning(configuration.GetSection("Stages:DeliveryPlanner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages);
             services.Configure<Providers.DeliveryOptions>(configuration.GetSection(Providers.DeliveryOptions.Section));
             // A dispatcher lease covers connect + request timeouts with room to spare (design §11).

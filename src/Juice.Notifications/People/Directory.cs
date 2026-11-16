@@ -57,7 +57,7 @@ namespace Juice.Notifications.People
 
         internal static readonly FieldError NameError = new("/name", $"A name is 1–{MaxName} characters, no control characters.");
 
-        internal static bool IsName(string? name) => name is { Length: > 0 and <= MaxName } && !name.Any(char.IsControl);
+        internal static bool IsName(string? name) => name is { Length: > 0 and <= MaxName } && !name.Any(char.IsControl) && Intake.RequestRules.IsWellFormed(name);
 
         internal static bool IsLocale(string locale) => locale.Length <= SubscriberDirectory.MaxLocale && Locale().IsMatch(locale);
 

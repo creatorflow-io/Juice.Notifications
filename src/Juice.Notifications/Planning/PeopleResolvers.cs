@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Juice.Notifications.Planning
 {
+    using Ef = Microsoft.EntityFrameworkCore.EF;
+
     /// <summary>
     /// <c>local</c> (design §6.1): people and groups kept in this service, for tenants or embedded hosts with no identity service. A user is the
     /// local user of that id (a subscriber of source <c>local</c>, or a <c>local</c> identity linked as an alias of another subscriber); a group is
@@ -31,8 +33,9 @@ namespace Juice.Notifications.Planning
                          join m in db.LocalGroupMembers on new { g.TenantId, GroupId = g.Id } equals new { m.TenantId, m.GroupId }
                          join s in db.Subscribers on new { m.TenantId, Id = m.SubscriberId } equals new { s.TenantId, s.Id }
                          where g.TenantId == tenant && g.Key == spec.Id
-                         orderby s.Source, s.ExternalId
-                         select new ResolvedPerson(s.Source, s.ExternalId, null, null, null)).AsNoTracking().ToListAsync(ct);
+                         // Byte order, as the planner keeps the first of an oversized group: one past the bound is all it needs to see.
+                         orderby Ef.Functions.Collate(s.Source, "C"), Ef.Functions.Collate(s.ExternalId, "C")
+                         select new ResolvedPerson(s.Source, s.ExternalId, null, null, null)).Take(context.MaxPeople + 1).AsNoTracking().ToListAsync(ct);
             return new ResolveResult([]) { People = people };
         }
     }
@@ -52,8 +55,8 @@ namespace Juice.Notifications.Planning
                                 join sub in db.TopicSubscriptions on new { t.TenantId, TopicId = t.Id } equals new { sub.TenantId, sub.TopicId }
                                 join s in db.Subscribers on new { sub.TenantId, Id = sub.SubscriberId } equals new { s.TenantId, s.Id }
                                 where t.TenantId == tenant && t.Key == spec.Key
-                                orderby s.Source, s.ExternalId
-                                select new ResolvedPerson(s.Source, s.ExternalId, null, null, null)).AsNoTracking().ToListAsync(ct);
+                                orderby Ef.Functions.Collate(s.Source, "C"), Ef.Functions.Collate(s.ExternalId, "C")
+                                select new ResolvedPerson(s.Source, s.ExternalId, null, null, null)).Take(context.MaxPeople + 1).AsNoTracking().ToListAsync(ct);
             return new ResolveResult([]) { People = people };
         }
     }
