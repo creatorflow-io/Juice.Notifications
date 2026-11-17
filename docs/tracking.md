@@ -95,3 +95,4 @@ Newest first. One line per change to copy to the board.
 | 2026-11-12 | p1-17 note: Dockerfile added and smoke-run healthy. |
 | 2026-11-12 | p1-15, p1-16 → done (history API, dead-letter retry); p1-g6 → doing (proof 6 test green); M8 note updated. |
 | 2026-11-12 | Tracking file created from the repository state (commits up to 0e7d238 and the M5 working tree). |
+| 2026-11-17 | M15 committed (0b12463): the inbox as a core channel (an item per person, idempotent per delivery), the display group catalog (built-ins seeded lazily, tenant groups, type moves re-home open items under the tenant catalog lock), type actions, the /me/inbox API and the /hubs/inbox SignalR hub over a Redis backplane; me routes take person tokens only (#27). Reviews: rounds 1-2 auto-fixed, round 3 fixed with go-ahead, confirmation clean. 617 unit, 286 integration pass. Deferred #40-#42. |
