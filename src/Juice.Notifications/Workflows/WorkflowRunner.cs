@@ -55,7 +55,7 @@ namespace Juice.Notifications.Workflows
                         row.StepEnteredAt = null;
                         break;
                     case ConditionStep condition:
-                        if (!condition.When.Holds(request.Labels, CorrelationState(request)))
+                        if (!condition.When.Holds(request.Labels, await CorrelationStateAsync(db, request, ct)))
                         {
                             logger.LogDebug("Notification {Id} in tenant {Tenant}: condition at step {Step} doesn't hold", row.Id, row.TenantId, row.WorkflowStep);
                             await EndAsync(context, row, NotificationState.ConditionNotMet, ct);
@@ -76,11 +76,12 @@ namespace Juice.Notifications.Workflows
             context.Done(row, null);
         }
 
-        /// <summary>
-        /// The correlation's state as conditions read it. Until correlations have a lifecycle (phase-3-plan M20) a request with a key is
-        /// <c>open</c>; one without has none.
-        /// </summary>
-        private static string? CorrelationState(NotificationRequest request) => request.CorrelationKey is null ? null : CorrelationStates.Open;
+        /// <summary>The correlation's state as conditions read it (<c>open</c> …), now; none for a request without a key.</summary>
+        private static async Task<string?> CorrelationStateAsync(NotificationsDbContext db, NotificationRequest request, CancellationToken ct)
+            => request.CorrelationId is { } id
+                ? Correlations.CorrelationLimits.Name(await db.Correlations.AsNoTracking().Where(c => c.TenantId == request.TenantId && c.Id == id)
+                    .Select(c => c.State).SingleAsync(ct))
+                : null;
 
         /// <summary>
         /// The waiting recipients become due for the delivery planner, past the tenant's mutes and the people's preferences as at planning

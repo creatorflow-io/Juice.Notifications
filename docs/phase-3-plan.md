@@ -109,6 +109,19 @@ tests, a commit and a build-board update.
 
 - I32, I35: intake creates and reopens correlations; acknowledge, resolve, cancel; cancellation of everything still due; inbox items follow.
 - Tests: proof point 1; acknowledge keeps deliveries going; a request on a resolved correlation reopens it; another application's key is not found.
+- *As built:* `correlations` (unique per tenant, application and key; PostgreSQL's `xmin` as the row version), `requests.correlation_id`,
+  `inbox_items.correlation_id` (set by the inbox provider from the item's request). Intake upserts the correlation (committed on its own,
+  as subscribers are), reopens it if closed, and touches it either way, so the request's save carries the row version: a resolve committed
+  meanwhile fails the save, and the request is answered 409 `concurrent_change` (HTTP) or comes back (RabbitMQ). `CorrelationLifecycle`
+  (not a mediator command: bulk statements in one transaction with the state change): acknowledge (open only; again is a no-op),
+  resolve (`outcome`, `by`), cancel; closed ones answer 409 `correlation_closed`. Resolve and cancel cancel notifications still `Planning`
+  or `Running`, recipients `Pending`, `Deferred` or `Planned` and not yet taken (`next_at` set), and deliveries `Pending` or `Retrying` no
+  dispatcher holds, moving each row's version on so a worker mid-step loses its save; the dispatcher also cancels, rather than sends, a
+  delivery whose correlation is closed (it may have been held as the resolve ran). Every person with an item of the correlation is told
+  (`changed`). Items carry `correlation` (`state`, `outcome`, `acknowledgedBy`, `resolvedAt`); "actionable and open" (filter and count)
+  needs the correlation open or acknowledged. `GET …/correlations/{key}` shows the state, the latest 100 notifications and the recipients'
+  and deliveries' counts. A key with `/` is sent encoded. A disabled application may still acknowledge, resolve and cancel. Conditions
+  read the correlation's state when their step runs. The tenant admin's read-only view (§7) waits for a need.
 
 ### M21: digests (`p3-02`)
 

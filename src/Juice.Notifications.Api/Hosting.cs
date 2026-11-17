@@ -116,6 +116,8 @@ namespace Juice.Notifications.Api
             services.AddScoped<Inbox.PersonInboxReader>();
             services.AddScoped<Inbox.PersonInboxEditor>();
             services.AddScoped<Inbox.DisplayGroupEditor>();
+            // Correlations (phase-3-plan M20).
+            services.AddScoped<Correlations.CorrelationLifecycle>();
 
             // The pipeline stages (design §4.1). Their workers run unless Stages:Run is false (a host that only takes requests).
             var runStages = configuration.GetValue("Stages:Run", true);
@@ -270,6 +272,7 @@ namespace Juice.Notifications.Api
             app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
             app.MapApplicationEndpoints();
             app.MapProducerEndpoints();
+            app.MapCorrelationEndpoints();
             app.MapConfigurationEndpoints();
             app.MapPeopleEndpoints();
             app.MapMeEndpoints();

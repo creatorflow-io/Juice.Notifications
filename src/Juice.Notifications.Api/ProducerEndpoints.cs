@@ -134,7 +134,8 @@ namespace Juice.Notifications.Api
                     // The link was removed while the request was accepted.
                     { Kind: ConflictKind.ForeignKey, Constraint: Constraints.RequestApplicationTenant }
                         => ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.TenantNotLinked, "The application isn't linked to this tenant."),
-                    { Kind: ConflictKind.Aborted } => ApiResults.ConcurrentChange(),
+                    // Aborted, or its correlation changed meanwhile (resolved as it was accepted): sending it again answers it.
+                    { Kind: ConflictKind.Aborted or ConflictKind.RowGone } => ApiResults.ConcurrentChange(),
                     _ => null,
                 }, ct);
         }

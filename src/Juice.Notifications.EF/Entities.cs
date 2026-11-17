@@ -189,6 +189,8 @@ namespace Juice.Notifications.Data
         public int TypeVersion { get; init; }
         public required string SchemaHash { get; init; }
         public string? CorrelationKey { get; init; }
+        /// <summary>The correlation the key names, for the request's application (phase-3-plan I32).</summary>
+        public Guid? CorrelationId { get; init; }
         public NotificationPriority Priority { get; init; }
         public Dictionary<string, string> Labels { get; init; } = [];
         /// <summary>The request's data, as JSON. Paths the type redacts are masked after rendering.</summary>
@@ -406,6 +408,8 @@ namespace Juice.Notifications.Data
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset? ReadAt { get; set; }
         public DateTimeOffset? ArchivedAt { get; set; }
+        /// <summary>The correlation of the item's request: the item shows its state and outcome (phase-3-plan I35).</summary>
+        public Guid? CorrelationId { get; init; }
     }
 
     /// <summary>Another source's id for a subscriber, linked by a tenant admin (design D23, phase-2-plan p2-d2).</summary>
@@ -477,6 +481,33 @@ namespace Juice.Notifications.Data
         public DateTimeOffset? StepEnteredAt { get; set; }
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    /// <summary>
+    /// Requests of one application that share a correlation key (design §5.3, §12; phase-3-plan I32). Created by the first request (an upsert,
+    /// committed on its own); each accepted request touches it, so its row version stands between a request and a resolve at the same moment.
+    /// </summary>
+    public sealed class Correlation : ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid ApplicationId { get; init; }
+        public required string Key { get; init; }
+        public CorrelationState State { get; set; }
+        /// <summary>Who acknowledged it, as the producer said ("adam"), and when.</summary>
+        public string? AcknowledgedBy { get; set; }
+        public DateTimeOffset? AcknowledgedAt { get; set; }
+        public DateTimeOffset? ResolvedAt { get; set; }
+        /// <summary>What the resolution was, shown on every recipient's item ("approved by adam"); none for a cancel.</summary>
+        public string? Outcome { get; set; }
+        public string? ResolvedBy { get; set; }
+        /// <summary>When a request reopened it after it was resolved or cancelled.</summary>
+        public DateTimeOffset? ReopenedAt { get; set; }
+        public DateTimeOffset CreatedAt { get; init; }
+        public DateTimeOffset LastRequestAt { get; set; }
+        public DateTimeOffset UpdatedAt { get; set; }
+        /// <summary>PostgreSQL's <c>xmin</c>: a concurrency token, so a request and a resolve at once can't both pass.</summary>
+        public uint Version { get; set; }
     }
 
     /// <summary>

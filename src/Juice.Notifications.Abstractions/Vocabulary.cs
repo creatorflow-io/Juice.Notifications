@@ -30,6 +30,13 @@ namespace Juice.Notifications
         Cancelled,
     }
 
+    /// <summary>
+    /// Where a correlation stands (design §5.3): requests sharing a key are one thing, opened by the first, acknowledged, then resolved or
+    /// cancelled by the producer. A request on a closed one reopens it (design §19 decision 14).
+    /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter<CorrelationState>))]
+    public enum CorrelationState { Open, Acknowledged, Resolved, Cancelled }
+
     /// <summary>The <c>kind</c> of a recipient in a request (design §5.2). <c>route</c> and <c>address</c> are built in; the people kinds go
     /// through a resolver the tenant configures (phase-2-plan M10).</summary>
     public static class RecipientKinds

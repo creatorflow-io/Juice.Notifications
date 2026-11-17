@@ -86,6 +86,10 @@ namespace Juice.Notifications
         /// <summary>As many mutes are in force or to come as allowed (a person 100, a tenant 500); cancel one first.</summary>
         public const string MuteLimit = "mute_limit";
 
+        // Correlations (phase-3-plan M20)
+        /// <summary>The correlation is resolved or cancelled: it can't be acknowledged or acted on (a new request reopens it).</summary>
+        public const string CorrelationClosed = "correlation_closed";
+
         // Display groups and the inbox (phase-2-plan M15)
 
         /// <summary>The tenant has as many display groups as allowed (50).</summary>

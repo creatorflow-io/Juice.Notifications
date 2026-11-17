@@ -59,6 +59,7 @@ namespace Juice.Notifications.Data
         public DbSet<DisplayGroup> DisplayGroups => Set<DisplayGroup>();
         public DbSet<TypeDisplayGroup> TypeDisplayGroups => Set<TypeDisplayGroup>();
         public DbSet<ThrottleEntry> ThrottleEntries => Set<ThrottleEntry>();
+        public DbSet<Correlation> Correlations => Set<Correlation>();
         public DbSet<InboxItem> InboxItems => Set<InboxItem>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
         public DbSet<Notification> Notifications => Set<Notification>();
@@ -410,6 +411,9 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.TenantId, x.GroupKey }).HasFilter("archived_at IS NULL").HasDatabaseName("ix_inbox_items_group");
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade);
                 e.HasOne<Delivery>().WithMany().HasForeignKey(x => new { x.TenantId, x.DeliveryId }).OnDelete(DeleteBehavior.Cascade);
+                // A correlation's items, to tell their people when it changes.
+                e.HasIndex(x => new { x.TenantId, x.CorrelationId }).HasFilter("correlation_id IS NOT NULL").HasDatabaseName("ix_inbox_items_correlation");
+                e.HasOne<Correlation>().WithMany().HasForeignKey(x => new { x.TenantId, x.CorrelationId }).OnDelete(DeleteBehavior.Restrict);
             });
 
             model.Entity<NotificationRequest>(e =>
@@ -429,6 +433,8 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.TraceParent).HasMaxLength(55);
                 e.HasIndex(x => new { x.TenantId, x.ApplicationId, x.IdempotencyKey }).IsUnique().HasDatabaseName(Constraints.RequestIdempotencyKey);
                 e.HasIndex(x => new { x.TenantId, x.ApplicationId, x.CorrelationKey });
+                e.HasIndex(x => new { x.TenantId, x.CorrelationId }).HasFilter("correlation_id IS NOT NULL");
+                e.HasOne<Correlation>().WithMany().HasForeignKey(x => new { x.TenantId, x.CorrelationId }).OnDelete(DeleteBehavior.Restrict);
                 e.HasIndex(x => new { x.TenantId, x.AcceptedAt });
                 // The application must be linked to the tenant (application_tenants), not merely exist.
                 e.HasOne<ApplicationTenant>().WithMany().HasForeignKey(x => new { x.ApplicationId, x.TenantId }).OnDelete(DeleteBehavior.Restrict)
@@ -445,6 +451,20 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Error).HasMaxLength(2000);
                 e.HasIndex(x => new { x.TenantId, x.RequestId }).IsUnique();
                 e.HasOne<NotificationRequest>().WithMany().HasForeignKey(x => new { x.TenantId, x.RequestId }).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            model.Entity<Correlation>(e =>
+            {
+                e.ToTable("correlations");
+                TenantKey(e);
+                e.Property(x => x.Key).HasMaxLength(200);
+                e.Property(x => x.State).HasConversion<string>().HasMaxLength(20);
+                e.Property(x => x.AcknowledgedBy).HasMaxLength(200);
+                e.Property(x => x.ResolvedBy).HasMaxLength(200);
+                e.Property(x => x.Outcome).HasMaxLength(500);
+                e.Property(x => x.Version).IsRowVersion();
+                e.HasIndex(x => new { x.TenantId, x.ApplicationId, x.Key }).IsUnique().HasDatabaseName(Constraints.CorrelationKey);
+                e.HasOne<ApplicationTenant>().WithMany().HasForeignKey(x => new { x.ApplicationId, x.TenantId }).OnDelete(DeleteBehavior.Restrict);
             });
 
             model.Entity<ThrottleEntry>(e =>

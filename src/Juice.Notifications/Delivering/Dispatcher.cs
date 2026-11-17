@@ -75,13 +75,21 @@ namespace Juice.Notifications.Delivering
                 from item in db.DeliveryItems.Where(i => i.TenantId == row.TenantId && i.DeliveryId == row.Id)
                 join request in db.Requests on new { item.TenantId, Id = item.RequestId } equals new { request.TenantId, request.Id }
                 orderby request.Id
-                select new { request.ExpiresAt, request.AcceptedAt, request.TraceParent }).ToListAsync(ct);
+                select new { request.ExpiresAt, request.AcceptedAt, request.TraceParent, request.CorrelationId }).ToListAsync(ct);
             // The earliest expiry of the requests it carries (several only for a digest), as a dead-letter retry checks it; the first request's trace.
             var expiresAt = requests.Where(r => r.ExpiresAt != null).Min(r => r.ExpiresAt);
             var origin = requests.FirstOrDefault();
             if (expiresAt is { } at && at <= context.Now)
             {
                 Finish(context, row, DeliveryStatus.Expired, null, "The request expired before the delivery was sent.", context.Now);
+                return;
+            }
+            // Resolved or cancelled while this one was held (retrying, or claimed as the resolve ran): it isn't sent now (phase-3-plan I32).
+            if (requests.Select(r => r.CorrelationId).OfType<Guid>().Distinct().ToList() is { Count: > 0 } correlations
+                && await db.Correlations.AsNoTracking().AnyAsync(c => c.TenantId == row.TenantId && correlations.Contains(c.Id)
+                    && (c.State == CorrelationState.Resolved || c.State == CorrelationState.Cancelled), ct))
+            {
+                Finish(context, row, DeliveryStatus.Cancelled, null, "The correlation was resolved or cancelled before it was sent.", context.Now);
                 return;
             }
             if (provider is null || !integration.Enabled)

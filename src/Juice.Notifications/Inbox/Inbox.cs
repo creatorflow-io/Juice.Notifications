@@ -187,10 +187,13 @@ namespace Juice.Notifications.Inbox
                 await DisplayGroupCatalog.LockAsync(db, delivery.TenantId, shared: true, ct);
                 var written = await db.Database.ExecuteSqlAsync($"""
                     INSERT INTO notifications.inbox_items (tenant_id, id, subscriber_id, delivery_id, type_key, group_key, title, body, url, actions, actionable,
-                        priority, created_at, read_at, archived_at)
+                        priority, created_at, read_at, archived_at, correlation_id)
                     VALUES ({delivery.TenantId}, {itemId}, {subscriberId}, {delivery.DeliveryId}, {content.Type},
                         notifications.inbox_group({delivery.TenantId}, {content.Type}),
-                        {content.Title}, {content.Body ?? ""}, {content.Url}, {actions}::jsonb, {actions != null}, {priority}, {now}, NULL, NULL)
+                        {content.Title}, {content.Body ?? ""}, {content.Url}, {actions}::jsonb, {actions != null}, {priority}, {now}, NULL, NULL,
+                        (SELECT r.correlation_id FROM notifications.delivery_items i
+                         JOIN notifications.requests r ON r.tenant_id = i.tenant_id AND r.id = i.request_id
+                         WHERE i.tenant_id = {delivery.TenantId} AND i.delivery_id = {delivery.DeliveryId} LIMIT 1))
                     ON CONFLICT (tenant_id, delivery_id) DO NOTHING
                     """, ct);
                 await transaction.CommitAsync(ct);

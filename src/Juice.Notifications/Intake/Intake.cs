@@ -445,9 +445,14 @@ namespace Juice.Notifications.Intake
                 return Outcome<AcceptedView>.Unprocessable(ErrorCodes.InvalidData, $"The data doesn't match version {type.Version} of {type.Key}.", dataErrors);
             }
 
+            // The correlation, created or reopened, and touched: its row version makes a resolve committed meanwhile fail this save (I32).
+            var correlation = s.CorrelationKey is { } correlationKey
+                ? await Correlations.CorrelationBook.ForRequestAsync(db, tenant, request.ApplicationId, correlationKey, now, cancellationToken)
+                : null;
             // Two requests with one key at once both get here; the second commit hits the key, and the API answers it with the original.
             var stored = new NotificationRequest
             {
+                CorrelationId = correlation?.Id,
                 TenantId = tenant, ApplicationId = request.ApplicationId, IdempotencyKey = s.IdempotencyKey!, TypeId = type.Id, TypeKey = type.Key,
                 TypeVersion = type.Version, SchemaHash = type.SchemaHash, CorrelationKey = s.CorrelationKey, Priority = priority,
                 Labels = s.Labels is null ? [] : new Dictionary<string, string>(s.Labels), Data = data.GetRawText(),

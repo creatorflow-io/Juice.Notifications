@@ -407,6 +407,90 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.ToTable("contact_verifications", "notifications");
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.Correlation", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset?>("AcknowledgedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("acknowledged_at");
+
+                    b.Property<string>("AcknowledgedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("acknowledged_by");
+
+                    b.Property<Guid>("ApplicationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("application_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("key");
+
+                    b.Property<DateTimeOffset>("LastRequestAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_request_at");
+
+                    b.Property<string>("Outcome")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("outcome");
+
+                    b.Property<DateTimeOffset?>("ReopenedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reopened_at");
+
+                    b.Property<DateTimeOffset?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("resolved_at");
+
+                    b.Property<string>("ResolvedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("resolved_by");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("state");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_correlations");
+
+                    b.HasIndex("ApplicationId", "TenantId")
+                        .HasDatabaseName("ix_correlations_application_id_tenant_id");
+
+                    b.HasIndex("TenantId", "ApplicationId", "Key")
+                        .IsUnique()
+                        .HasDatabaseName("ix_correlations_key");
+
+                    b.ToTable("correlations", "notifications");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.Delivery", b =>
                 {
                     b.Property<Guid>("TenantId")
@@ -823,6 +907,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("character varying(4000)")
                         .HasColumnName("body");
 
+                    b.Property<Guid?>("CorrelationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("correlation_id");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -870,6 +958,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasKey("TenantId", "Id")
                         .HasName("pk_inbox_items");
+
+                    b.HasIndex("TenantId", "CorrelationId")
+                        .HasDatabaseName("ix_inbox_items_correlation")
+                        .HasFilter("correlation_id IS NOT NULL");
 
                     b.HasIndex("TenantId", "DeliveryId")
                         .IsUnique()
@@ -1380,6 +1472,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("application_id");
 
+                    b.Property<Guid?>("CorrelationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("correlation_id");
+
                     b.Property<string>("CorrelationKey")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
@@ -1457,6 +1553,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasIndex("TenantId", "AcceptedAt")
                         .HasDatabaseName("ix_requests_tenant_id_accepted_at");
+
+                    b.HasIndex("TenantId", "CorrelationId")
+                        .HasDatabaseName("ix_requests_tenant_id_correlation_id")
+                        .HasFilter("correlation_id IS NOT NULL");
 
                     b.HasIndex("TenantId", "ApplicationId", "CorrelationKey")
                         .HasDatabaseName("ix_requests_tenant_id_application_id_correlation_key");
@@ -2165,6 +2265,16 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasConstraintName("fk_contact_verifications_contact_points");
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.Correlation", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.ApplicationTenant", null)
+                        .WithMany()
+                        .HasForeignKey("ApplicationId", "TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_correlations_application_tenants_application_id_tenant_id");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.Delivery", b =>
                 {
                     b.HasOne("Juice.Notifications.Data.Integration", null)
@@ -2228,6 +2338,12 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
             modelBuilder.Entity("Juice.Notifications.Data.InboxItem", b =>
                 {
+                    b.HasOne("Juice.Notifications.Data.Correlation", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CorrelationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_inbox_items_correlations_tenant_id_correlation_id");
+
                     b.HasOne("Juice.Notifications.Data.Delivery", null)
                         .WithMany()
                         .HasForeignKey("TenantId", "DeliveryId")
@@ -2320,6 +2436,12 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_requests_application_tenants_application_id_tenant_id");
+
+                    b.HasOne("Juice.Notifications.Data.Correlation", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CorrelationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_requests_correlations_tenant_id_correlation_id");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.NotificationType", b =>

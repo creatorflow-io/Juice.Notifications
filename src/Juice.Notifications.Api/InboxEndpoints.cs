@@ -108,7 +108,8 @@ namespace Juice.Notifications.Api
         }
 
         internal static InboxItemResponse ToResponse(InboxItemView i)
-            => new(i.Id, i.Type, i.Group, i.Title, i.Body, i.Url, i.Actions, i.Actionable, i.Priority, i.CreatedAt, i.ReadAt, i.ArchivedAt);
+            => new(i.Id, i.Type, i.Group, i.Title, i.Body, i.Url, i.Actions, i.Actionable, i.Priority, i.CreatedAt, i.ReadAt, i.ArchivedAt,
+                i.Correlation is { } c ? new InboxCorrelationResponse(c.State, c.Outcome, c.AcknowledgedBy, c.ResolvedAt) : null);
 
         private static InboxCountsResponse ToResponse(InboxCounts c)
             => new(c.Groups.Select(g => new InboxGroupCountResponse(g.Key, g.Name, g.Position, g.Open, g.Unread)).ToList(), c.Unread, c.ActionableOpen);

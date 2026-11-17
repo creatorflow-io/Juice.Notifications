@@ -206,6 +206,43 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(ids.Order(), entries.Select(e => e.NotificationId).Order());
         }
 
+        /// <summary>A condition reads the correlation as it is when the step runs: resolved meanwhile, the reminder isn't sent.</summary>
+        [Fact]
+        public async Task A_condition_reads_the_correlations_state_when_its_step_runs()
+        {
+            LocalStack.RequireAvailable();
+            var type = await TypeAsync("""[{"step":"delay","seconds":60},{"step":"condition","when":{"correlation":["open","acknowledged"]}},{"step":"send"}]""");
+            var (open, resolved) = (await NotificationAsync(type), await NotificationAsync(type));
+            await using (var db = _database.Context())
+            {
+                foreach (var (id, state) in new[] { (open, CorrelationState.Open), (resolved, CorrelationState.Open) })
+                {
+                    var correlation = new Correlation
+                    {
+                        TenantId = Tenant, ApplicationId = _app, Key = "c" + Guid.NewGuid().ToString("N"), State = state, CreatedAt = Seed.Now,
+                        LastRequestAt = Seed.Now, UpdatedAt = Seed.Now,
+                    };
+                    db.Correlations.Add(correlation);
+                    var request = await db.Requests.SingleAsync(r => db.Notifications.Any(n => n.Id == id && n.RequestId == r.Id), Ct);
+                    db.Entry(request).Property(r => r.CorrelationId).CurrentValue = correlation.Id;
+                }
+                await db.SaveChangesAsync(Ct);
+            }
+            await DrainAsync();
+            await using (var db = _database.Context())
+            {
+                // Resolved during the delay.
+                var request = await db.Requests.AsNoTracking().SingleAsync(r => db.Notifications.Any(n => n.Id == resolved && n.RequestId == r.Id), Ct);
+                await db.Correlations.Where(c => c.Id == request.CorrelationId).ExecuteUpdateAsync(c => c.SetProperty(x => x.State, CorrelationState.Resolved), Ct);
+            }
+            _clock.Advance(TimeSpan.FromSeconds(60));
+            await DrainAsync();
+            Assert.Equal(NotificationState.Planned, (await ReadAsync(open)).Row.State);
+            var (row, recipients) = await ReadAsync(resolved);
+            Assert.Equal(NotificationState.ConditionNotMet, row.State);
+            Assert.All(recipients, r => Assert.Equal(RecipientOutcome.Cancelled, r.Outcome));
+        }
+
         [Fact]
         public async Task A_request_that_expires_while_its_workflow_waits_sends_nothing()
         {

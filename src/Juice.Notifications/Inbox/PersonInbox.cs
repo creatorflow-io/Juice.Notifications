@@ -9,7 +9,13 @@ namespace Juice.Notifications.Inbox
     // unread, read all and archive. Every change is the person's own items only.
 
     public sealed record InboxItemView(Guid Id, string Type, string Group, string Title, string Body, string? Url, JsonElement? Actions, bool Actionable,
-        NotificationPriority Priority, DateTimeOffset CreatedAt, DateTimeOffset? ReadAt, DateTimeOffset? ArchivedAt);
+        NotificationPriority Priority, DateTimeOffset CreatedAt, DateTimeOffset? ReadAt, DateTimeOffset? ArchivedAt, InboxCorrelationView? Correlation = null);
+
+    /// <summary>
+    /// The item's correlation as every recipient sees it (design §7.3, phase-3-plan I35): open items wait for someone; a resolved one shows its
+    /// outcome wherever the decision was made.
+    /// </summary>
+    public sealed record InboxCorrelationView(CorrelationState State, string? Outcome, string? AcknowledgedBy, DateTimeOffset? ResolvedAt);
 
     /// <summary>A group with the person's open (not archived) and unread items in it.</summary>
     public sealed record InboxGroupCount(string Key, string Name, int Position, int Open, int Unread);
@@ -85,14 +91,28 @@ namespace Juice.Notifications.Inbox
         }
 
         private async Task<Outcome<InboxItemView>> ViewAsync(Guid tenantId, Guid itemId, CancellationToken ct)
-            => Outcome<InboxItemView>.Ok(PersonInboxReader.View(await db.InboxItems.AsNoTracking().SingleAsync(i => i.TenantId == tenantId && i.Id == itemId, ct)));
+            => Outcome<InboxItemView>.Ok((await PersonInboxReader.ViewsAsync(db, db.InboxItems.Where(i => i.TenantId == tenantId && i.Id == itemId), ct)).Single());
     }
 
     public sealed class PersonInboxReader(NotificationsDbContext db, DisplayGroupCatalog catalog, TimeProvider clock)
     {
-        internal static InboxItemView View(InboxItem i)
+        internal static InboxItemView View(InboxItem i, Correlation? c)
             => new(i.Id, i.TypeKey, i.GroupKey, i.Title, i.Body, i.Url, i.Actions is null ? null : JsonElement.Parse(i.Actions), i.Actionable, i.Priority,
-                i.CreatedAt, i.ReadAt, i.ArchivedAt);
+                i.CreatedAt, i.ReadAt, i.ArchivedAt, c is null ? null : new InboxCorrelationView(c.State, c.Outcome, c.AcknowledgedBy, c.ResolvedAt));
+
+        /// <summary>The items, with their correlations, newest first.</summary>
+        internal static async Task<List<InboxItemView>> ViewsAsync(NotificationsDbContext db, IQueryable<InboxItem> items, CancellationToken ct)
+            => (await (from i in items
+                       join c in db.Correlations on new { i.TenantId, Id = i.CorrelationId } equals new { c.TenantId, Id = (Guid?)c.Id } into correlations
+                       from c in correlations.DefaultIfEmpty()
+                       orderby i.Id descending
+                       select new { Item = i, Correlation = c }).AsNoTracking().ToListAsync(ct))
+                .Select(x => View(x.Item, x.Correlation)).ToList();
+
+        /// <summary>Actionable and open (design §7.3): actionable, and its correlation (if any) still open or acknowledged.</summary>
+        private IQueryable<InboxItem> ActionableOpen(IQueryable<InboxItem> items)
+            => items.Where(i => i.Actionable && (i.CorrelationId == null || db.Correlations.Any(c => c.TenantId == i.TenantId && c.Id == i.CorrelationId
+                && (c.State == CorrelationState.Open || c.State == CorrelationState.Acknowledged))));
 
         /// <summary>
         /// The person's items, newest first: open ones (or archived ones), in one group or all, only unread or only actionable if asked; a page of
@@ -114,21 +134,19 @@ namespace Juice.Notifications.Inbox
             }
             if (actionableOnly)
             {
-                items = items.Where(i => i.Actionable);
+                items = ActionableOpen(items);
             }
             if (before is { } id)
             {
                 items = items.Where(i => i.Id < id);
             }
-            var page = await items.OrderByDescending(i => i.Id).Take(Math.Clamp(limit, 1, InboxRules.MaxPage)).ToListAsync(ct);
-            return page.Select(View).ToList();
+            return await ViewsAsync(db, items.OrderByDescending(i => i.Id).Take(Math.Clamp(limit, 1, InboxRules.MaxPage)), ct);
         }
 
         public async Task<InboxItemView?> GetAsync(Guid tenantId, Guid subscriberId, Guid itemId, CancellationToken ct)
         {
             var self = await People.DirectoryReader.SelfAsync(db, tenantId, subscriberId, ct);
-            return await db.InboxItems.AsNoTracking().SingleOrDefaultAsync(i => i.TenantId == tenantId && self.Contains(i.SubscriberId) && i.Id == itemId, ct)
-                is { } item ? View(item) : null;
+            return (await ViewsAsync(db, db.InboxItems.Where(i => i.TenantId == tenantId && self.Contains(i.SubscriberId) && i.Id == itemId), ct)).SingleOrDefault();
         }
 
         public async Task<InboxCounts> CountsAsync(Guid tenantId, Guid subscriberId, CancellationToken ct)
@@ -139,13 +157,15 @@ namespace Juice.Notifications.Inbox
             var self = await People.DirectoryReader.SelfAsync(db, tenantId, subscriberId, ct);
             var counts = await db.InboxItems.AsNoTracking().Where(i => i.TenantId == tenantId && self.Contains(i.SubscriberId) && i.ArchivedAt == null)
                 .GroupBy(i => i.GroupKey)
-                .Select(g => new { Key = g.Key, Open = g.Count(), Unread = g.Count(i => i.ReadAt == null), Actionable = g.Count(i => i.Actionable) })
+                .Select(g => new { Key = g.Key, Open = g.Count(), Unread = g.Count(i => i.ReadAt == null) })
                 .ToListAsync(ct);
+            var actionableOpen = await ActionableOpen(db.InboxItems.AsNoTracking().Where(i => i.TenantId == tenantId && self.Contains(i.SubscriberId) && i.ArchivedAt == null))
+                .CountAsync(ct);
             var byKey = counts.ToDictionary(c => c.Key, StringComparer.Ordinal);
             return new InboxCounts(
                 groups.Select(g => byKey.TryGetValue(g.Key, out var c) ? new InboxGroupCount(g.Key, g.Name, g.Position, c.Open, c.Unread)
                     : new InboxGroupCount(g.Key, g.Name, g.Position, 0, 0)).ToList(),
-                counts.Sum(c => c.Unread), counts.Sum(c => c.Actionable));
+                counts.Sum(c => c.Unread), actionableOpen);
         }
     }
 }
