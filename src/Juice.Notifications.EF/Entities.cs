@@ -517,6 +517,25 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>
+    /// A provider's callback event, once (phase-4-plan I40): its id is unique per tenant and provider, so a repeat is ignored. The delivery it was
+    /// about, when we have it.
+    /// </summary>
+    public sealed class ProviderEvent : ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public required string Provider { get; init; }
+        public required string ProviderEventId { get; init; }
+        public Guid IntegrationId { get; init; }
+        public Guid? DeliveryId { get; init; }
+        /// <summary><see cref="CallbackKind"/>: <c>Delivered</c>, <c>Bounced</c>, …</summary>
+        public required string Kind { get; init; }
+        /// <summary>When the provider says it happened.</summary>
+        public DateTimeOffset At { get; init; }
+        public DateTimeOffset ReceivedAt { get; init; }
+    }
+
+    /// <summary>
     /// An event for a producer, raised and saved with the change it reports (phase-3-plan I37), until the relay moves it into the outbox.
     /// <c>Payload</c> is the event as JSON.
     /// </summary>
@@ -668,7 +687,8 @@ namespace Juice.Notifications.Data
         /// <summary>The digest it carries, one item per member (phase-3-plan I31); null for a single notification's delivery.</summary>
         public Guid? DigestId { get; init; }
         public required string Channel { get; init; }
-        public Guid IntegrationId { get; init; }
+        /// <summary>The integration it goes through; changed only by a failover (D8, phase-4-plan I38), which keeps the id and the content.</summary>
+        public Guid IntegrationId { get; set; }
         /// <summary><c>cp:…</c>, <c>it:…</c>, <c>ext:…</c> or <c>inbox:…</c> (design §3).</summary>
         public required string DestinationKey { get; init; }
         /// <summary>The address when it was planned, for history. A secret address is masked.</summary>
@@ -694,6 +714,10 @@ namespace Juice.Notifications.Data
         public int AttemptsAtReplay { get; set; }
         /// <summary>When the latest retry was made: a failure from a send that started before it (a stale worker's) doesn't answer the retry.</summary>
         public DateTimeOffset? ReplayedAt { get; set; }
+        /// <summary>How often it moved to the tenant's next integration for its channel (phase-4-plan I38).</summary>
+        public int Failovers { get; set; }
+        /// <summary>The attempts made before the latest failover: the new integration's budget and backoff count from here.</summary>
+        public int AttemptsAtFailover { get; set; }
     }
 
     /// <summary>Links a delivery to a recipient it carries: one normally, several for a digest (design D19).</summary>

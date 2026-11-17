@@ -19,7 +19,12 @@ namespace Juice.Notifications.Delivering
     /// <list type="bullet">
     /// <item><c>Delivered</c>/<c>Accepted</c>: done;</item>
     /// <item>retryable: again after exponential backoff with jitter, until the attempts run out (then <c>Failed</c>);</item>
-    /// <item>permanent: <c>Failed</c> with its category, no retry (no failover in phase 1);</item>
+    /// <item>permanent: <c>Failed</c> with its category, no retry;</item>
+    /// <item>failover (D8, §10.3, phase-4-plan I38): a <c>Provider</c> failure that is permanent, retryable <c>Provider</c> failures past the
+    /// attempts, or an integration that is disabled or has no provider, move a delivery whose address isn't the integration's own (a contact point,
+    /// an external address) to the tenant's next enabled integration for the channel, keeping its id and content, with a fresh budget there.
+    /// Never for <c>Destination</c>, <c>Content</c>, <c>Policy</c> or <c>RateLimited</c>, and never after an unknown outcome: another provider
+    /// can't deduplicate on the first one's key;</item>
     /// <item>unknown (§10.3): retried when that is safe (a channel whose receivers deduplicate, as webhook's do on <c>webhook-id</c>; an
     /// idempotent provider; a mandatory type once), otherwise <c>Failed {Provider}</c> with <c>unknown_outcome</c>, visible and replayable.</item>
     /// </list>
@@ -138,9 +143,13 @@ namespace Juice.Notifications.Delivering
             }
             if (provider is null || !integration.Enabled)
             {
-                Finish(context, row, DeliveryStatus.Failed, FailureCategory.Provider,
-                    provider is null ? $"No provider sends {row.Channel} through '{integration.Kind}'." : $"The integration {integration.Key} is disabled.",
-                    context.Now);
+                var why = provider is null ? $"No provider sends {row.Channel} through '{integration.Kind}'." : $"The integration {integration.Key} is disabled.";
+                if (await NextIntegrationAsync(db, row, integration, ct) is { } next)
+                {
+                    FailOver(context, row, integration, next, why, context.Now);
+                    return;
+                }
+                Finish(context, row, DeliveryStatus.Failed, FailureCategory.Provider, why, context.Now);
                 return;
             }
             var attempt = row.Attempts + 1;
@@ -291,6 +300,17 @@ namespace Juice.Notifications.Delivering
             // A failure from a send that started before the latest dead-letter retry (a stale worker's, recorded after the retry) doesn't answer
             // it: numbered past, but not applied, so the retry still sends. One that went through still finishes the delivery.
             var count = unapplied[^1].Number;
+            // After a failover, a failure through an earlier integration (a stale worker's, recorded late) doesn't answer the new one: numbered
+            // past, not applied, so the new integration still sends. One that went through still finishes the delivery.
+            if (row.Failovers > 0)
+            {
+                unapplied = unapplied.Where(a => a.IntegrationId == row.IntegrationId || a.Outcome is AttemptOutcome.Delivered or AttemptOutcome.Accepted).ToList();
+                if (unapplied.Count == 0)
+                {
+                    row.Attempts = count;
+                    return false;
+                }
+            }
             if (row.ReplayedAt is { } replayed)
             {
                 var answers = unapplied.Where(a => a.Outcome is AttemptOutcome.Delivered or AttemptOutcome.Accepted
@@ -314,9 +334,22 @@ namespace Juice.Notifications.Delivering
             row.FirstAttemptAt ??= unapplied[0].At;
             // The budget, the backoff step and the mandatory types' one repeat after an unknown outcome count the attempts since the latest
             // dead-letter retry, and only sends that began after it: a stale worker's send recorded after the retry is numbered past, not counted.
+            var budgetFrom = BudgetFrom(row);
             var sinceReplay = (await context.Db.Attempts.AsNoTracking().Where(a => a.TenantId == row.TenantId && a.DeliveryId == row.Id
-                && a.Number > row.AttemptsAtReplay).Select(a => new { a.At, a.DurationMs, a.Outcome }).ToListAsync(CancellationToken.None))
+                && a.Number > budgetFrom).Select(a => new { a.At, a.DurationMs, a.Outcome }).ToListAsync(CancellationToken.None))
                 .Where(a => row.ReplayedAt is not { } replayed || a.At - TimeSpan.FromMilliseconds(a.DurationMs) >= replayed).ToList();
+            if (FailsOver(row, chosen, sinceReplay.Count))
+            {
+                var current = await context.Db.Integrations.AsNoTracking().SingleAsync(i => i.TenantId == row.TenantId && i.Id == row.IntegrationId, CancellationToken.None);
+                if (await NextIntegrationAsync(context.Db, row, current, CancellationToken.None) is { } next)
+                {
+                    row.Attempts = Math.Max(row.Attempts, count);
+                    row.FirstAttemptAt ??= unapplied[0].At;
+                    row.ProviderMessageId = null;
+                    FailOver(context, row, current, next, chosen.Error, chosen.At);
+                    return true;
+                }
+            }
             Apply(context, row, chosen, count, provider, sinceReplay.Count(a => a.Outcome == AttemptOutcome.Unknown), sinceReplay.Count);
             return true;
         }
@@ -371,8 +404,8 @@ namespace Juice.Notifications.Delivering
             row.FirstAttemptAt ??= at;
             row.ProviderMessageId = chosen.ProviderMessageId ?? row.ProviderMessageId;
             var max = Math.Max(1, options.Value.MaxAttempts);
-            // Counted from the latest dead-letter retry, which gives a fresh budget; attempt numbers go on from the total.
-            var attempts = made ?? row.Attempts - row.AttemptsAtReplay;
+            // Counted from the latest dead-letter retry or failover, each of which gives a fresh budget; attempt numbers go on from the total.
+            var attempts = made ?? row.Attempts - BudgetFrom(row);
             switch (chosen.Outcome)
             {
                 case AttemptOutcome.Delivered:
@@ -397,6 +430,54 @@ namespace Juice.Notifications.Delivering
                     Finish(context, row, DeliveryStatus.Failed, chosen.Category, error, at);
                     break;
             }
+        }
+
+        /// <summary>The attempts before the latest dead-letter retry or failover: the current budget counts those after.</summary>
+        private static int BudgetFrom(Delivery row) => Math.Max(row.AttemptsAtReplay, row.AttemptsAtFailover);
+
+        /// <summary>
+        /// Whether this outcome moves the delivery to another integration (§10.3): a <c>Provider</c> failure that is permanent, or retryable ones
+        /// past the attempts. A <c>RateLimited</c> one waits on the same integration; an unknown outcome never fails over.
+        /// </summary>
+        private bool FailsOver(Delivery row, DeliveryAttempt chosen, int made)
+            => chosen.Category == FailureCategory.Provider && CanFailOver(row.DestinationKey)
+            && (chosen.Outcome == AttemptOutcome.PermanentFailure
+                || (chosen.Outcome == AttemptOutcome.RetryableFailure && made >= Math.Max(1, options.Value.MaxAttempts)));
+
+        /// <summary>
+        /// A contact point or an external address is the same whichever integration sends to it. A shared target (a webhook URL, a Slack
+        /// channel) belongs to its integration, and a person's inbox has only the built-in one.
+        /// </summary>
+        public static bool CanFailOver(string destinationKey)
+            => destinationKey.StartsWith("cp:", StringComparison.Ordinal) || destinationKey.StartsWith("ext:", StringComparison.Ordinal);
+
+        /// <summary>
+        /// The tenant's next enabled integration for the delivery's channel after <paramref name="current"/>, by priority then key (the order the
+        /// planner chose the first by), so failover never comes back round; null when there is none or the destination can't fail over.
+        /// </summary>
+        private static Task<Integration?> NextIntegrationAsync(NotificationsDbContext db, Delivery row, Integration current, CancellationToken ct)
+            => !CanFailOver(row.DestinationKey) ? Task.FromResult<Integration?>(null)
+            : db.Integrations.AsNoTracking()
+                .Where(i => i.TenantId == row.TenantId && i.Channel == row.Channel && i.Enabled && i.Id != current.Id
+                    && (i.Priority > current.Priority || (i.Priority == current.Priority && string.Compare(i.Key, current.Key) > 0)))
+                .OrderBy(i => i.Priority).ThenBy(i => i.Key).FirstOrDefaultAsync(ct);
+
+        /// <summary>Moves the delivery to <paramref name="next"/>: same id, same content, due now, its attempts there counted afresh.</summary>
+        private void FailOver(StageContext context, Delivery row, Integration from, Integration next, string? error, DateTimeOffset at)
+        {
+            row.IntegrationId = next.Id;
+            row.Failovers++;
+            row.AttemptsAtFailover = row.Attempts;
+            row.Status = DeliveryStatus.Retrying;
+            row.FailureCategory = FailureCategory.Provider;
+            row.LastError = Truncate($"Failed over from {from.Key} to {next.Key}: {error}");
+            context.Done(row, at);
+            var (id, channel) = (row.Id, row.Channel);
+            context.AfterCommit.Add(() =>
+            {
+                Telemetry.Failovers.Add(1, new KeyValuePair<string, object?>("channel", channel));
+                logger.LogInformation("Delivery {Delivery} failed over from {From} to {To}: {Error}", id, from.Key, next.Key, error);
+            });
         }
 
         /// <summary>Repeating a send whose outcome is unknown (§10.3).</summary>

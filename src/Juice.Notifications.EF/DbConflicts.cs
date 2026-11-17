@@ -51,6 +51,7 @@ namespace Juice.Notifications.Data
         public const string CorrelationKey = "ix_correlations_key";
         public const string EscalationPolicyKey = "ix_escalation_policies_key";
         public const string InteractionOnce = "ix_interactions_once";
+        public const string ProviderEventOnce = "ix_provider_events_once";
     }
 
     public enum ConflictKind

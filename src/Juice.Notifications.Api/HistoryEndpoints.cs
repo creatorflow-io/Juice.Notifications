@@ -98,6 +98,6 @@ namespace Juice.Notifications.Api
                 conflict => Task.FromResult(conflict.Kind is ConflictKind.RowGone or ConflictKind.Aborted ? ApiResults.ConcurrentChange() : null), ct);
 
         private static DeliveryHistoryResponse ToResponse(DeliveryRow d) => new(d.Id, d.RequestId, d.Type, d.Channel, d.Integration, d.DestinationKey, d.Status,
-            d.Attempts, d.FailureCategory, d.LastError, d.CreatedAt, d.FirstAttemptAt, d.CompletedAt);
+            d.Attempts, d.FailureCategory, d.LastError, d.CreatedAt, d.FirstAttemptAt, d.CompletedAt, d.Failovers);
     }
 }

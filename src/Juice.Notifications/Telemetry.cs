@@ -24,6 +24,10 @@ namespace Juice.Notifications
             description: "Contact points marked failed because a provider said the address doesn't exist.");
         public static readonly Counter<long> Deliveries = Meter.CreateCounter<long>("notifications.deliveries", description: "Deliveries finished, by channel and status.");
         public static readonly Counter<long> Attempts = Meter.CreateCounter<long>("notifications.attempts", description: "Attempts by outcome and category.");
+        public static readonly Counter<long> Callbacks = Meter.CreateCounter<long>("notifications.callbacks",
+            description: "Provider callbacks, by provider and outcome (accepted, refused).");
+        public static readonly Counter<long> Failovers = Meter.CreateCounter<long>("notifications.failovers",
+            description: "Deliveries moved to the tenant's next integration for their channel after a provider failure, by channel.");
         public static readonly Counter<long> UnknownOutcomes = Meter.CreateCounter<long>("notifications.unknown_outcomes", description: "Sends with no answer, by channel.");
         public static readonly Counter<long> LeaseLost = Meter.CreateCounter<long>("notifications.lease_lost", description: "Steps whose claim had passed to another worker, by stage.");
 

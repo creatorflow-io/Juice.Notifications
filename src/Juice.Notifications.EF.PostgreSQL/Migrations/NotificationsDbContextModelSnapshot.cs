@@ -505,6 +505,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("attempts");
 
+                    b.Property<int>("AttemptsAtFailover")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts_at_failover");
+
                     b.Property<int>("AttemptsAtReplay")
                         .HasColumnType("integer")
                         .HasColumnName("attempts_at_replay");
@@ -547,6 +551,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.Property<Guid?>("DigestId")
                         .HasColumnType("uuid")
                         .HasColumnName("digest_id");
+
+                    b.Property<int>("Failovers")
+                        .HasColumnType("integer")
+                        .HasColumnName("failovers");
 
                     b.Property<string>("FailureCategory")
                         .HasMaxLength(20)
@@ -644,6 +652,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasIndex("TenantId", "IntegrationId")
                         .HasDatabaseName("ix_deliveries_tenant_id_integration_id");
+
+                    b.HasIndex("TenantId", "ProviderMessageId")
+                        .HasDatabaseName("ix_deliveries_provider_message")
+                        .HasFilter("provider_message_id IS NOT NULL");
 
                     b.HasIndex("TenantId", "Status", "CreatedAt")
                         .HasDatabaseName("ix_deliveries_tenant_id_status_created_at");
@@ -2064,6 +2076,64 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_producer_events_order");
 
                     b.ToTable("producer_events", "notifications");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.ProviderEvent", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("At")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("at");
+
+                    b.Property<Guid?>("DeliveryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("delivery_id");
+
+                    b.Property<Guid>("IntegrationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("integration_id");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("provider");
+
+                    b.Property<string>("ProviderEventId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("provider_event_id");
+
+                    b.Property<DateTimeOffset>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_provider_events");
+
+                    b.HasIndex("TenantId", "DeliveryId")
+                        .HasDatabaseName("ix_provider_events_delivery")
+                        .HasFilter("delivery_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "Provider", "ProviderEventId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_provider_events_once");
+
+                    b.ToTable("provider_events", "notifications");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.RecipientResolverConfig", b =>

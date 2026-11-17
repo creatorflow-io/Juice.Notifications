@@ -79,7 +79,8 @@ All six recommendations were accepted on 17 November 2026.
 | `storms` | route, started, ended, deliveries counted |
 | `tenant_settings` | retention days (requests, content), storm threshold override |
 
-Changed: `delivery_attempts` gains `IntegrationId` per attempt already, plus `FailedOver`; `contact_points` gains channels `slack`, `telegram`,
+Changed: `deliveries` gains `Failovers` and `AttemptsAtFailover` (M25; each attempt already names its integration), and an index on the provider's
+message id; `contact_points` gains channels `slack`, `telegram`,
 `sms`; `device_registrations` gains `LastSeenAt` use for expiry.
 
 ---
@@ -90,6 +91,30 @@ Owner decision (17 Nov 2026): no per-milestone review until phase 4 ends; one re
 tests, a commit and a build-board update.
 
 - **M25 Failover and callbacks** (`p4-05`): I38, I40 foundation, provider contract test kit.
+  - *As built (failover):* only deliveries whose address isn't the integration's own fail over: a person's contact point (`cp:`) or an
+    external address (`ext:`). A shared target (`it:`: a webhook URL, a Slack channel) belongs to its integration and an inbox has only
+    the built-in one. The next integration is the tenant's next enabled one for the channel after the current one by (priority, key), the order
+    the planner picks the first by, so failover never comes back round. Triggers: a permanent `Provider` failure, retryable `Provider`
+    failures past the attempts, a disabled integration or one no provider sends through. Never `RateLimited`, and never after an unknown
+    outcome, even on an idempotent provider: the next provider can't deduplicate on the first one's key. The delivery records `Failovers` and
+    `AttemptsAtFailover` (the new integration's budget counts from there) instead of a flag on the attempt; each attempt already names its
+    integration, so history shows the switch. A stale worker's failure through the old integration, recorded late, doesn't answer the new one.
+    A dead-letter retry stays on the integration the delivery is on. Counter `notifications.failovers`. Tests: `FailoverTests` (proof points 1
+    and 2, plus retry budgets, rate limits, unknown outcomes, disabled integrations, targets, the end of the order, stale failures).
+  - *As built (callbacks):* `ICallbackHandler` (Abstractions) per provider: `Provider` (the path segment), `Handles(kind)`, and
+    `ReadAsync`, which verifies before reading and returns events or a refusal (plus a reply for providers that want one). `ProviderCallbacks`
+    records each event once in `provider_events` (unique per tenant, provider, event id) and applies it in the same transaction. A receipt makes a
+    delivery `Delivered` from `Accepted`, `Sending`, `Retrying` or a failed unknown outcome (it went out, so it isn't sent again; the version moves on, so a
+    dispatcher holding it loses its save). A hard bounce makes it `Bounced` (`Destination`) and fails the contact point; a soft bounce marks a working point
+    `Bouncing`; a complaint fails it. Interactions are recorded, and applied from M27. Contact points are marked with an update statement, as
+    the dispatcher does, so the audit doesn't record the provider's report as someone's change; the endpoint is excluded from access records.
+    Answers: `200` (or the handler's reply), `401` refused, `404` unknown integration or a provider it doesn't use, `503` its secret unset,
+    `413` over 1 MB, `429` past `Callbacks:PerMinute` (1,200) per integration. `Callbacks:PublicUrl` gives providers their URL. Tests:
+    `CallbackTests`.
+  - *As built (contract kit):* `ProviderContract` and `FakeHttpApi` in the unit tests: eight cases (accepted, server error, rate limited, credentials
+    refused, address refused, content refused, no connection, no answer) each with the outcome and category it must give, plus the idempotency
+    key on every attempt. A provider's suite scripts its fake per case in its API's words. `ReferenceProviderTests` runs it over a minimal JSON
+    provider, the template for M26; misclassifying a case fails the suite (checked by hand).
 - **M26 Email: SES and SendGrid** (`p4-04`): providers, bounce and complaint callbacks.
 - **M27 Chat: Slack and Teams** (`p4-01`): Slack webhook and app (channels, DMs to linked people, buttons → interactions), Teams workflow
   webhook (Adaptive Card); Slack linking (I41).

@@ -118,6 +118,10 @@ namespace Juice.Notifications.Api
             services.AddScoped<Inbox.DisplayGroupEditor>();
             // Correlations (phase-3-plan M20).
             services.AddScoped<Correlations.CorrelationLifecycle>();
+            // Provider callbacks (phase-4-plan I40): anonymous, verified per provider, limited per integration.
+            services.Configure<Callbacks.CallbackOptions>(configuration.GetSection(Callbacks.CallbackOptions.Section));
+            services.AddScoped<Callbacks.ProviderCallbacks>();
+            services.AddCallbackLimits(configuration);
 
             // The pipeline stages (design §4.1). Their workers run unless Stages:Run is false (a host that only takes requests).
             var runStages = configuration.GetValue("Stages:Run", true);
@@ -279,6 +283,7 @@ namespace Juice.Notifications.Api
             // After authentication, so a record names its user; before authorization, so refused changes are recorded too.
             app.UseNotificationsAudit();
             app.UseAuthorization();
+            app.UseRateLimiter();
             return app;
         }
 
@@ -295,6 +300,7 @@ namespace Juice.Notifications.Api
             app.MapMeEndpoints();
             app.MapHistoryEndpoints();
             app.MapDisplayGroupEndpoints();
+            app.MapCallbackEndpoints();
             // A session ends when its token does (a person removed from the tenant gets no new one), and reconnects with a fresh one.
             app.MapHub<InboxHub>(InboxHub.Path, options => options.CloseOnAuthenticationExpiration = true);
             return app;

@@ -12,7 +12,8 @@ namespace Juice.Notifications.History
         Guid? Request = null, DateTimeOffset? From = null, DateTimeOffset? To = null, Guid? Before = null, int Limit = DeliveryHistory.DefaultLimit);
 
     public sealed record DeliveryRow(Guid Id, Guid? RequestId, string? Type, string Channel, string Integration, string DestinationKey, DeliveryStatus Status,
-        int Attempts, FailureCategory? FailureCategory, string? LastError, DateTimeOffset CreatedAt, DateTimeOffset? FirstAttemptAt, DateTimeOffset? CompletedAt);
+        int Attempts, FailureCategory? FailureCategory, string? LastError, DateTimeOffset CreatedAt, DateTimeOffset? FirstAttemptAt, DateTimeOffset? CompletedAt,
+        int Failovers = 0);
 
     public sealed record DeliveryPage(IReadOnlyList<DeliveryRow> Items, Guid? Next);
 
@@ -173,6 +174,6 @@ namespace Juice.Notifications.History
                    select new { r.Id, r.TypeKey }).FirstOrDefault()
                orderby d.Id descending
                select new DeliveryRow(d.Id, request == null ? null : request.Id, request == null ? null : request.TypeKey, d.Channel, integration.Key,
-                   d.DestinationKey, d.Status, d.Attempts, d.FailureCategory, d.LastError, d.CreatedAt, d.FirstAttemptAt, d.CompletedAt);
+                   d.DestinationKey, d.Status, d.Attempts, d.FailureCategory, d.LastError, d.CreatedAt, d.FirstAttemptAt, d.CompletedAt, d.Failovers);
     }
 }

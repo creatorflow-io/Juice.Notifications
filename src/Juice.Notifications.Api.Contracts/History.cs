@@ -1,9 +1,12 @@
 namespace Juice.Notifications.Api.Contracts
 {
-    /// <summary>One delivery in a history list, newest first (phase-1-plan M8).</summary>
+    /// <summary>
+    /// One delivery in a history list, newest first (phase-1-plan M8). <c>Integration</c> is the one it goes through now; <c>Failovers</c> counts
+    /// its moves to the next one (phase 4), and each attempt names the integration it was made through.
+    /// </summary>
     public sealed record DeliveryHistoryResponse(Guid Id, Guid? RequestId, string? Type, string Channel, string Integration, string DestinationKey,
         DeliveryStatus Status, int Attempts, FailureCategory? FailureCategory, string? LastError, DateTimeOffset CreatedAt, DateTimeOffset? FirstAttemptAt,
-        DateTimeOffset? CompletedAt);
+        DateTimeOffset? CompletedAt, int Failovers = 0);
 
     /// <summary>A page of history. <c>Next</c> is the cursor for the following page (<c>?before=</c>), null on the last page.</summary>
     public sealed record DeliveryPageResponse(IReadOnlyList<DeliveryHistoryResponse> Items, Guid? Next);

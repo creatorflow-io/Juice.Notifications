@@ -70,7 +70,9 @@ namespace Juice.Notifications.Api
                 // Later rules win: a producer's request is traffic, not a change.
                 .Exclude("/api/v1/tenants/{tenantId}/notifications", "POST")
                 // Nor is a person reading or archiving their own inbox (phase-2-plan M15): their own items, many times a day.
-                .Exclude("/api/v1/tenants/{tenantId}/me/inbox/#", "POST", "DELETE"));
+                .Exclude("/api/v1/tenants/{tenantId}/me/inbox/#", "POST", "DELETE")
+                // Nor are providers' callbacks (phase-4-plan I40): delivery receipts and bounces, recorded in provider_events.
+                .Exclude("/api/v1/callbacks/#", "POST"));
             app.Use(async (http, next) =>
             {
                 if (http.RequestServices.GetService<IAuditContextAccessor>() is { IsInitialized: true } accessor)

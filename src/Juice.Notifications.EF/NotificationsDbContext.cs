@@ -64,6 +64,7 @@ namespace Juice.Notifications.Data
         public DbSet<EscalationPolicy> EscalationPolicies => Set<EscalationPolicy>();
         public DbSet<ProducerEvent> ProducerEvents => Set<ProducerEvent>();
         public DbSet<Interaction> Interactions => Set<Interaction>();
+        public DbSet<ProviderEvent> ProviderEvents => Set<ProviderEvent>();
         public DbSet<Escalation> Escalations => Set<Escalation>();
         public DbSet<InboxItem> InboxItems => Set<InboxItem>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
@@ -482,6 +483,17 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.CreatedAt, x.Id }).HasDatabaseName("ix_producer_events_order");
             });
 
+            model.Entity<ProviderEvent>(e =>
+            {
+                e.ToTable("provider_events");
+                TenantKey(e);
+                e.Property(x => x.Provider).HasMaxLength(40);
+                e.Property(x => x.ProviderEventId).HasMaxLength(200);
+                e.Property(x => x.Kind).HasMaxLength(20);
+                e.HasIndex(x => new { x.TenantId, x.Provider, x.ProviderEventId }).IsUnique().HasDatabaseName(Constraints.ProviderEventOnce);
+                e.HasIndex(x => new { x.TenantId, x.DeliveryId }).HasFilter("delivery_id IS NOT NULL").HasDatabaseName("ix_provider_events_delivery");
+            });
+
             model.Entity<Interaction>(e =>
             {
                 e.ToTable("interactions");
@@ -567,6 +579,8 @@ namespace Juice.Notifications.Data
                 TenantKey(e);
                 Claim(e);
                 e.HasIndex(x => new { x.TenantId, x.DigestId }).HasFilter("digest_id IS NOT NULL").HasDatabaseName("ix_deliveries_digest");
+                // Callbacks name a send by the provider's id (phase-4-plan I40).
+                e.HasIndex(x => new { x.TenantId, x.ProviderMessageId }).HasFilter("provider_message_id IS NOT NULL").HasDatabaseName("ix_deliveries_provider_message");
                 e.Property(x => x.Channel).HasMaxLength(20);
                 e.Property(x => x.DestinationKey).HasMaxLength(2100);
                 // text: an address of up to 2,000 characters plus its target and secret reference, as JSON (M5 review).
