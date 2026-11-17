@@ -25,6 +25,9 @@ namespace Juice.Notifications.People
         public const string ClientId = "urn:juice-notifications:service";
         public const string VerifyType = "notifications.contact.verify";
 
+        /// <summary>Whether a type is the service's own (under its application's key).</summary>
+        public static bool IsServiceType(string typeKey) => typeKey.StartsWith(ApplicationKey + ".", StringComparison.Ordinal);
+
         public static TypeDeclaration VerifyDeclaration { get; } = new(
             VerifyType, "Contact verification", "account", DisplayGroups.System, "high", Mandatory: true, ExternalRecipients: true,
             JsonElement.Parse("""

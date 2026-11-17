@@ -172,7 +172,7 @@ namespace Juice.Notifications.Planning
     /// is recorded as <c>Truncated</c>. Both records name what the request named (<c>group:sre</c>), have no subscriber, and are never due.
     /// </remarks>
     public sealed class PlannerStage(IEnumerable<IRecipientResolver> resolvers, IOptions<ResolverOptions> resolverOptions, ILogger<PlannerStage> logger,
-        IChannelRegistry channels, People.ContactCrypto crypto)
+        IChannelRegistry channels, People.ContactCrypto crypto, People.MuteMatches mutes)
         : IStage<Notification>
     {
         public const string StageName = "planner";
@@ -313,16 +313,17 @@ namespace Juice.Notifications.Planning
                     }
                 });
             }
+            // Who is to hear: mutes and preferences decide among these (design §6.1 step 4) once all are known.
+            var due = new List<NotificationRecipient>();
             foreach (var (d, resolverKey) in planned.Values)
             {
-                db.Recipients.Add(new NotificationRecipient
+                due.Add(new NotificationRecipient
                 {
                     TenantId = row.TenantId, NotificationId = row.Id, Kind = d.Kind, RouteId = d.RouteId, RouteKey = d.RouteKey, Channel = d.Channel,
                     Address = d.Address, Resolver = resolverKey, NamedAs = d.NamedAs, Outcome = RecipientOutcome.Planned, NextAt = context.Now,
                     CreatedAt = context.Now, // was left unset: every recipient read as created in year 1 (found by the M9 load check)
                 });
             }
-            var recipients = planned.Count;
             if (people.Count > 0)
             {
                 var subscribers = await SubscriberDirectory.MapAsync(db, row.TenantId, people.Values.Select(p => p.Person).ToList(), context.Now,
@@ -331,20 +332,37 @@ namespace Juice.Notifications.Planning
                 foreach (var group in people.Values.GroupBy(p => subscribers[(p.Person.Source, p.Person.ExternalId)]).OrderBy(g => g.Key))
                 {
                     var via = group.SelectMany(p => p.Via).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-                    db.Recipients.Add(new NotificationRecipient
+                    due.Add(new NotificationRecipient
                     {
                         TenantId = row.TenantId, NotificationId = row.Id, Kind = RecipientKind.Subscriber, SubscriberId = group.Key, Via = via,
                         Resolver = group.First().Resolver, NamedAs = "subscriber:" + group.Key, Outcome = RecipientOutcome.Planned, NextAt = context.Now,
                         CreatedAt = context.Now,
                     });
-                    recipients++;
+                }
+            }
+            if (due.Count > 0)
+            {
+                var type = await db.Types.AsNoTracking().SingleAsync(t => t.Id == request.TypeId, ct);
+                await People.PreferencePolicy.ApplyAsync(db, request, type, due, mutes, context.Now, ct);
+                db.Recipients.AddRange(due);
+                // Those that won't hear are done here; the delivery planner counts the rest when it is through with them.
+                var held = due.Where(r => r.Outcome != RecipientOutcome.Planned).GroupBy(r => r.Outcome).Select(g => (Outcome: g.Key.ToString(), Count: g.Count())).ToList();
+                if (held.Count > 0)
+                {
+                    context.AfterCommit.Add(() =>
+                    {
+                        foreach (var (outcome, count) in held)
+                        {
+                            Telemetry.Recipients.Add(count, new KeyValuePair<string, object?>("outcome", outcome));
+                        }
+                    });
                 }
             }
             row.State = NotificationState.Planned;
             // The wait belonged to this plan: a later one (an escalation step) waits afresh. The markers keep what it left out.
             row.ResolverWaitSince = null;
             context.Done(row, null);
-            if (recipients > 0)
+            if (due.Any(r => r.Outcome == RecipientOutcome.Planned))
             {
                 context.Wakes.Add(DeliveryStageNames.DeliveryPlanner);
             }
@@ -428,6 +446,7 @@ namespace Juice.Notifications.Planning
                 .ValidateOnStart();
             services.TryAddSingleton(TimeProvider.System);
             services.AddSingleton<ResolverCache>();
+            services.TryAddSingleton<People.MuteMatches>();
             // Contact points a source vouches for are stored encrypted, on registered channels.
             services.AddBuiltInChannels();
             People.ContactEncryptionRegistration.AddContactEncryption(services);

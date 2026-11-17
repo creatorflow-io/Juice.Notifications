@@ -98,6 +98,65 @@ namespace Juice.Notifications
         }
 
         /// <summary>
+        /// The first string or property name PostgreSQL can't store (half a surrogate pair on its own, then a NUL), as a field error, or null.
+        /// Run before anything else reads the strings: reading half a pair as a string throws.
+        /// </summary>
+        public static FieldError? Unstorable(JsonElement element, string at)
+            => FirstMalformed(element, at) is { } malformed ? new FieldError(malformed, Intake.RequestRules.MalformedMessage)
+                : FirstNul(element, at) is { } nul ? new FieldError(nul, Intake.RequestRules.NulMessage)
+                : null;
+
+        /// <summary>
+        /// The JSON pointer of the first string or property name holding half a surrogate pair on its own (<c>\ud800</c>), or null. Such text
+        /// has no UTF-8 form, so jsonb refuses it: refused as a field error instead of failing the insert.
+        /// </summary>
+        public static string? FirstMalformed(JsonElement element, string at)
+        {
+            static bool Bad(Func<string> read)
+            {
+                try
+                {
+                    return !Intake.RequestRules.IsWellFormed(read());
+                }
+                catch (InvalidOperationException)
+                {
+                    return true; // the reader refuses to make a string of it
+                }
+            }
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.String:
+                    return Bad(() => element.GetString()!) ? at : null;
+                case JsonValueKind.Object:
+                    foreach (var property in element.EnumerateObject())
+                    {
+                        if (Bad(() => property.Name))
+                        {
+                            return at;
+                        }
+                        var here = at + "/" + property.Name.Replace("~", "~0").Replace("/", "~1");
+                        if (FirstMalformed(property.Value, here) is { } inner)
+                        {
+                            return inner;
+                        }
+                    }
+                    return null;
+                case JsonValueKind.Array:
+                    var i = 0;
+                    foreach (var item in element.EnumerateArray())
+                    {
+                        if (FirstMalformed(item, $"{at}/{i++}") is { } inner)
+                        {
+                            return inner;
+                        }
+                    }
+                    return null;
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
         /// The JSON pointer of the first object that repeats a property name, or null. Such JSON means different things to different readers (jsonb
         /// keeps the last; JsonNode refuses it), so it is refused wherever its meaning matters.
         /// </summary>

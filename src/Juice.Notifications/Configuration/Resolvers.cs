@@ -82,13 +82,15 @@ namespace Juice.Notifications.Configuration
                 }
             }
             handles = handles.Where(h => h is not null).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
-            if (r.Settings is { } settings && settings.ValueKind != JsonValueKind.Object)
+            // Unstorable first, whatever the kind: everything after reads the strings, and reading half a surrogate pair throws.
+            var unstorable = r.Settings is { } sentSettings ? CanonicalJson.Unstorable(sentSettings, "/settings") : null;
+            if (unstorable is not null)
+            {
+                errors.Add(unstorable);
+            }
+            else if (r.Settings is { } settings && settings.ValueKind != JsonValueKind.Object)
             {
                 errors.Add(new FieldError("/settings", "Settings are a JSON object."));
-            }
-            else if (r.Settings is { } withNul && CanonicalJson.FirstNul(withNul, "/settings") is { } nul)
-            {
-                errors.Add(new FieldError(nul, RequestRules.NulMessage));
             }
             else if (r.Settings is { } withDuplicate && CanonicalJson.FirstDuplicate(withDuplicate, "/settings") is { } duplicate)
             {
@@ -98,7 +100,7 @@ namespace Juice.Notifications.Configuration
             var sentSecret = !r.Provisioned && existing is not null && r.SecretRef == existing.SecretRef ? null : r.SecretRef;
             var secretRef = r.Provisioned ? r.SecretRef : sentSecret ?? existing?.SecretRef;
             var enabled = r.Enabled ?? existing?.Enabled ?? true;
-            var settingsJson = r.Settings is { ValueKind: JsonValueKind.Object } s ? CanonicalJson.Write(s) : existing?.Settings ?? "{}";
+            var settingsJson = r.Settings is { ValueKind: JsonValueKind.Object } s && unstorable is null ? CanonicalJson.Write(s) : existing?.Settings ?? "{}";
             var sameSettings = existing is not null && ConfigurationRules.Canonical(settingsJson) == ConfigurationRules.Canonical(existing.Settings);
             var disablesOnly = !r.Provisioned && existing is not null && !enabled && sameSettings && secretRef == existing.SecretRef
                 && handles.SequenceEqual(existing.Handles);

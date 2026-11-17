@@ -52,11 +52,23 @@ namespace Juice.Notifications.Delivering
 
         public void GiveUp(StageContext context, NotificationRecipient row, string error)
         {
-            // The runner logged the error; the outcome answers "why didn't I get it?".
-            row.Outcome = RecipientOutcome.Failed;
+            // The runner logged the error; the outcome answers "why didn't I get it?". One deferred by quiet hours may already have a delivery
+            // (its inbox item) from an earlier step: it stays planned, and history shows how that went. Only a recipient still being planned
+            // is changed: one held or finished keeps its outcome. Synchronous because the runner's hook is; it runs once per row given up.
+            if (row.Outcome is RecipientOutcome.Planned or RecipientOutcome.Deferred)
+            {
+                row.Outcome = Deliveries(context.Db, row).Any() ? RecipientOutcome.Planned : RecipientOutcome.Failed;
+            }
             context.Done(row, null);
             Counted(context, row);
         }
+
+        /// <summary>
+        /// The recipient's deliveries on record, however each ended. A recipient with any is <c>Planned</c> (as in phase 1): history, not the
+        /// outcome, says whether each went out, failed or expired, and a retried one changes only its own row.
+        /// </summary>
+        private static IQueryable<DeliveryItem> Deliveries(NotificationsDbContext db, NotificationRecipient row)
+            => db.DeliveryItems.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.RecipientId == row.Id);
 
         /// <summary>A recipient's outcome once delivery planning is through with it (Planned: it has deliveries).</summary>
         private static void Counted(StageContext context, NotificationRecipient row)
@@ -65,7 +77,8 @@ namespace Juice.Notifications.Delivering
         public async Task ExecuteAsync(StageContext context, NotificationRecipient row, CancellationToken ct)
         {
             var db = context.Db;
-            if (row.Outcome != RecipientOutcome.Planned)
+            // Deferred: a person's personal channels held by quiet hours, due again when they end (phase-2-plan I21).
+            if (row.Outcome is not (RecipientOutcome.Planned or RecipientOutcome.Deferred))
             {
                 context.Done(row, null);
                 return;
@@ -76,7 +89,8 @@ namespace Juice.Notifications.Delivering
             activity?.SetTag("notifications.recipient_id", row.Id);
             if (request.ExpiresAt is { } expires && expires <= context.Now)
             {
-                row.Outcome = RecipientOutcome.Cancelled;
+                // A deferred one already has its inbox item, if any: it stays planned and history shows how that went. Its held channels won't go now.
+                row.Outcome = row.Outcome == RecipientOutcome.Deferred && await Deliveries(db, row).AnyAsync(ct) ? RecipientOutcome.Planned : RecipientOutcome.Cancelled;
                 context.Done(row, null);
                 Counted(context, row);
                 return;
@@ -89,7 +103,13 @@ namespace Juice.Notifications.Delivering
             var existing = (await db.DeliveryItems.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.RecipientId == row.Id)
                 .Select(i => new { i.DestinationKey, i.Channel }).ToListAsync(ct)).Select(i => (i.DestinationKey, i.Channel)).ToHashSet();
             var rendered = new Dictionary<string, Rendered>(StringComparer.Ordinal);
-            foreach (var destination in await DestinationsAsync(db, row, type, ct))
+            var destinations = await DestinationsAsync(db, row, type, ct);
+            var (turnedOff, deferUntil) = (false, (DateTimeOffset?)null);
+            if (row.Kind == RecipientKind.Subscriber && row.SubscriberId is { } person)
+            {
+                (destinations, turnedOff, deferUntil) = await PersonalRulesAsync(db, row, person, type, destinations, context.Now, ct);
+            }
+            foreach (var destination in destinations)
             {
                 if (existing.Contains((destination.Key, destination.Channel)))
                 {
@@ -137,11 +157,27 @@ namespace Juice.Notifications.Delivering
                 });
                 created++;
             }
+            if (deferUntil is { } until)
+            {
+                // Quiet hours: what could go now has gone (the inbox); the person's channels are planned when they end. Counted then.
+                row.Outcome = RecipientOutcome.Deferred;
+                context.Done(row, until);
+                if (created > 0)
+                {
+                    context.Wakes.Add(DeliveryStageNames.Dispatcher);
+                }
+                return;
+            }
             if (created == 0 && existing.Count == 0)
             {
-                // Nothing reaches it, now or from an earlier try: no integration, or a route whose targets are gone, disabled or none, or the
-                // route itself deleted. "Why didn't they get it?" is answered here, and in the log.
-                row.Outcome = RecipientOutcome.Failed;
+                // Nothing on record, now or from an earlier try: the person turned off every channel they could be reached on, or no
+                // integration, or a route whose targets are gone, disabled or none, or the route itself deleted. "Why didn't they get it?" is
+                // answered here, and in the log. A delivery failed as it was planned (no template, a render failure) is on record: history lists it.
+                row.Outcome = turnedOff ? RecipientOutcome.OptedOut : RecipientOutcome.Failed;
+            }
+            else
+            {
+                row.Outcome = RecipientOutcome.Planned; // a deferred one, now planned
             }
             context.Done(row, null);
             Counted(context, row);
@@ -192,6 +228,48 @@ namespace Juice.Notifications.Delivering
                 return [PointDestination(named, await FirstIntegrationAsync(db, row.TenantId, named.Channel, ct), verification: true)];
             }
             return [];
+        }
+
+        /// <summary>
+        /// How a person hears (design §6.4, phase-2-plan I21): without the channels they turned off for the type's category (never the inbox of a
+        /// mandatory type), and during their quiet hours with only the inbox now, the rest when the hours end (<c>deferUntil</c>). A mandatory
+        /// type goes past quiet hours, recorded on the recipient. <c>allOff</c>: the person turned off every channel that would have reached them.
+        /// </summary>
+        private static async Task<(List<Destination> Destinations, bool AllOff, DateTimeOffset? DeferUntil)> PersonalRulesAsync(NotificationsDbContext db,
+            NotificationRecipient row, Guid subscriberId, NotificationType type, List<Destination> destinations, DateTimeOffset now, CancellationToken ct)
+        {
+            if (destinations.Count == 0)
+            {
+                return (destinations, false, null);
+            }
+            // One read: the person's quiet hours and their preferences for the category.
+            var person = await db.Subscribers.AsNoTracking().Where(s => s.TenantId == row.TenantId && s.Id == subscriberId)
+                .Select(s => new
+                {
+                    s.QuietHours, s.TimeZone,
+                    Preferences = db.Preferences.Where(p => p.TenantId == s.TenantId && p.SubscriberId == s.Id
+                        && (p.Category == type.Category || p.Category == PreferenceRules.Any)).ToList(),
+                })
+                .SingleOrDefaultAsync(ct);
+            var preferences = person?.Preferences ?? [];
+            // A normal type that reached here wasn't opted out: each channel takes its most specific choice. A mandatory one went past the
+            // category's choice for every channel, so only choices naming the channel count, and never against its inbox.
+            var kept = destinations.Where(d => (type.Mandatory && d.Channel == Channels.Inbox)
+                || PreferencePolicy.Mode(preferences, type.Category, d.Channel, channelOnly: type.Mandatory) != PreferenceModes.Off).ToList();
+            if (kept.Count == 0)
+            {
+                return (kept, true, null);
+            }
+            if (QuietHours.Parse(person?.QuietHours)?.EndIfQuiet(now, person!.TimeZone) is not { } end || !kept.Any(d => d.Channel != Channels.Inbox))
+            {
+                return (kept, false, null);
+            }
+            if (type.Mandatory)
+            {
+                PreferencePolicy.Bypass(row, BypassedRules.QuietHours);
+                return (kept, false, null);
+            }
+            return (kept.Where(d => d.Channel == Channels.Inbox).ToList(), false, end);
         }
 
         /// <summary>The tenant's integration a destination on <paramref name="channel"/> goes through: its first enabled one, by priority then key.</summary>

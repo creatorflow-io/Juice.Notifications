@@ -29,6 +29,12 @@ namespace Juice.Notifications.Planning
 
         public NotificationPriority? MinPriority { get; }
 
+        /// <summary>
+        /// The type keys the match names exactly (its type patterns without a wildcard), or null when there are none. A tenant mute holds a mandatory
+        /// type only by naming it so (design §6.4).
+        /// </summary>
+        public IReadOnlySet<string>? ExactTypes { get; private init; }
+
         private RouteMatch(Regex[] types, (string, Func<string?, bool>)[] labels, NotificationPriority? minPriority)
             => (_types, _labels, MinPriority) = (types, labels, minPriority);
 
@@ -55,6 +61,12 @@ namespace Juice.Notifications.Planning
             var types = new List<Regex>();
             var labels = new List<(string, Func<string?, bool>)>();
             NotificationPriority? min = null;
+            HashSet<string>? exact = null;
+            // jsonb keeps only the last of a repeated name, so a match that repeats one would be checked as one thing and stored as another.
+            if (Repeated(match) is { } repeated)
+            {
+                return (null, [new FieldError(repeated, "A name appears twice; give each once.")]);
+            }
             foreach (var property in match.EnumerateObject())
             {
                 switch (property.Name)
@@ -72,6 +84,7 @@ namespace Juice.Notifications.Planning
                             errors.Add(new FieldError("/match/type", "The type is a pattern or a list of up to 20: lowercase type keys, * for any run of characters."));
                             break;
                         }
+                        exact = patterns.Where(p => !p.Contains('*')).ToHashSet(StringComparer.Ordinal) is { Count: > 0 } named ? named : null;
                         types.AddRange(patterns.Select(p => new Regex("^" + string.Join(".*", p.Split('*').Select(Regex.Escape)) + @"\z", Engine)));
                         break;
                     case "labels":
@@ -121,7 +134,32 @@ namespace Juice.Notifications.Planning
                         break;
                 }
             }
-            return errors.Count > 0 ? (null, errors) : (new RouteMatch([.. types], [.. labels], min), []);
+            return errors.Count > 0 ? (null, errors) : (new RouteMatch([.. types], [.. labels], min) { ExactTypes = exact }, []);
+        }
+
+        /// <summary>The pointer to the first name an object (or its <c>labels</c> object) repeats, or null.</summary>
+        private static string? Repeated(JsonElement match)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in match.EnumerateObject())
+            {
+                if (!seen.Add(property.Name))
+                {
+                    return "/match/" + Types.TypeRules.Pointer(property.Name);
+                }
+                if (property.NameEquals("labels") && property.Value.ValueKind == JsonValueKind.Object)
+                {
+                    var labels = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var label in property.Value.EnumerateObject())
+                    {
+                        if (!labels.Add(label.Name))
+                        {
+                            return "/match/labels/" + Types.TypeRules.Pointer(label.Name);
+                        }
+                    }
+                }
+            }
+            return null;
         }
 
         /// <summary>A label value test, or null when a regular expression doesn't compile on the non-backtracking engine.</summary>

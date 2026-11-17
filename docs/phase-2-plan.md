@@ -145,6 +145,18 @@ Each milestone ends with its review loop (code-review rounds, then a confirmatio
   flagged in the mute's response.
 - Tests: proof point 1 (a mandatory type reaches a person who opted out of its category, at least in the inbox); one test per §6.4 row; quiet hours
   across a time zone's DST change.
+- *As built:* `me` (`GET`: the person, with their quiet hours), `me/preferences` (`GET`, `PUT` replaces all, up to 200), `me/quiet-hours`
+  (`PUT`, `DELETE`) and `me/mutes` (`GET`, `POST`, `DELETE` cancels; up to 100 in force or to come), and the tenant's `mutes` (the same, up to
+  500, `?all=true` lists ended and cancelled ones). §7's `PATCH me` became `me/quiet-hours`: name, locale and time zone come from the source
+  and its next resolution would overwrite them, so quiet hours carry their own time zone (else the person's, else UTC). A preference names a
+  type's category or `*` and a channel (`inbox`, one reaching people, or `*`); the category's choice wins over `*`. A mute's match is a
+  route's (type patterns, labels, minimum priority; `{}` is everything, a snooze when it has an end); it is cancelled, never deleted. The
+  planner applies tenant mutes (to every kind of recipient), then category opt-out (`channel = *`), then personal mutes; a mandatory type is
+  held only by a tenant mute naming it exactly (`RouteMatch.ExactTypes`, flagged as `appliesToMandatory`) and records each other rule it
+  passed in `Bypassed` (`tenant-mute`, `opt-out`, `personal-mute`, `quiet-hours`). The delivery planner drops channels turned off (a person
+  left with none is `OptedOut`) and, in quiet hours, plans the inbox now and defers the rest (`Deferred`, due at the end, computed in wall-clock
+  time: an end the clocks skip is when they jump, one shown twice is the first still to come). Schema: `preferences`, `mutes`,
+  `subscribers.quiet_hours`, `notification_recipients.bypassed`. A recipient is `Planned` once it has any delivery on record, as in phase 1 (history says how each ended); one deferred whose request expired or that is given up stays `Planned` if its inbox item is on record, else `Cancelled` or `Failed`. Half a surrogate pair on its own (`D800`) in stored JSON (data, a schema, templates, a match, settings) is now a field error, not a 500 (`CanonicalJson.Unstorable`). Deferred #36–#38.
 
 ### M15: display groups and the inbox (`p2-09`, `p2-10`)
 
@@ -191,7 +203,7 @@ Each milestone ends with its review loop (code-review rounds, then a confirmatio
 | Who | Endpoint |
 |---|---|
 | Tenant admin | `GET/PUT/DELETE /api/v1/tenants/{tenantId}/resolvers`, `…/subscribers` (list, view, `…/aliases`), `…/groups` and `…/groups/{key}/members`, `…/topics`, `…/mutes`, `…/display-groups`, `PUT …/types/{key}/display-group` |
-| Signed-in person | `GET/PATCH …/me` (name, locale, time zone, quiet hours), `…/me/contact-points` (+ `/{id}/verify`), `…/me/devices`, `…/me/preferences`, `…/me/topics`, `…/me/mutes`, `…/me/inbox` (+ `/{id}/read`, `/read-all`, `/{id}/archive`, `/counts`) |
+| Signed-in person | `GET …/me`, `…/me/quiet-hours` (M14), `…/me/contact-points` (+ `/{id}/verify`), `…/me/devices`, `…/me/preferences`, `…/me/topics`, `…/me/mutes`, `…/me/inbox` (+ `/{id}/read`, `/read-all`, `/{id}/archive`, `/counts`) |
 | Signed-in person | SignalR hub `/hubs/inbox` (events `itemAdded`, `itemChanged`, `countsChanged`) |
 
 ---

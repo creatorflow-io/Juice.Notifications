@@ -272,20 +272,22 @@ namespace Juice.Notifications.Configuration
                 var kinds = providers.Where(p => p.Channel == channel).Select(p => p.Kind).Order().ToList();
                 errors.Add(new FieldError("/kind", kinds.Count > 0 ? $"The {channel} channel's providers are: {string.Join(", ", kinds)}." : $"No provider sends {channel}."));
             }
-            if (r.Settings is { } settings && settings.ValueKind != JsonValueKind.Object)
+            // Unstorable first, whatever the kind: everything after reads the strings, and reading half a surrogate pair throws.
+            var unstorable = r.Settings is { } sent ? CanonicalJson.Unstorable(sent, "/settings") : null;
+            if (unstorable is not null)
+            {
+                errors.Add(unstorable);
+            }
+            else if (r.Settings is { } settings && settings.ValueKind != JsonValueKind.Object)
             {
                 errors.Add(new FieldError("/settings", "Settings are a JSON object."));
-            }
-            else if (r.Settings is { } sent && CanonicalJson.FirstNul(sent, "/settings") is { } nul)
-            {
-                errors.Add(new FieldError(nul, RequestRules.NulMessage));
             }
             else if (r.Settings is { } sent2 && CanonicalJson.FirstDuplicate(sent2, "/settings") is { } duplicate)
             {
                 // jsonb keeps the last of repeated names: what's stored would differ from what was checked.
                 errors.Add(new FieldError(duplicate, "This object repeats a property name; each name appears once."));
             }
-            var settingsJson = r.Settings is { } s ? CanonicalJson.Write(s) : existing?.Settings ?? "{}";
+            var settingsJson = r.Settings is { } s && unstorable is null ? CanonicalJson.Write(s) : existing?.Settings ?? "{}";
             var sameSettings = existing is not null && (r.Settings is null
                 || r.Settings.Value.ValueKind == JsonValueKind.Object && ConfigurationRules.Canonical(settingsJson) == ConfigurationRules.Canonical(existing.Settings));
             var (priority, enabled) = (r.Priority ?? existing?.Priority ?? 0, r.Enabled ?? existing?.Enabled ?? true);
@@ -504,9 +506,9 @@ namespace Juice.Notifications.Configuration
             }
             var errors = new List<FieldError>();
             string? match = null;
-            if (r.Match is { } m && CanonicalJson.FirstNul(m, "/match") is { } nul)
+            if (r.Match is { } m && CanonicalJson.Unstorable(m, "/match") is { } unstorable)
             {
-                errors.Add(new FieldError(nul, RequestRules.NulMessage));
+                errors.Add(unstorable);
             }
             else if (r.Match is { } m1 && CanonicalJson.FirstDuplicate(m1, "/match") is { } duplicate)
             {

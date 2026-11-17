@@ -40,7 +40,33 @@ namespace Juice.Notifications.Api
                 return await next(context);
             });
 
-            me.MapGet("/topics", async (Guid tenantId, HttpContext http, DirectoryReader reader, CancellationToken ct)
+            me.MapGet("", async (Guid tenantId, HttpContext http, SubscriberReader reader, CancellationToken ct)
+                => await reader.GetAsync(tenantId, Me(http), ct) is { } s
+                    ? Results.Ok(new MeResponse(s.Id, s.Source, s.ExternalId, s.Name, s.Locale, s.TimeZone, ToResponse(QuietHours.Shown(s.QuietHours))))
+                    : ApiResults.NotFound("No such subscriber."));
+
+            // Preferences, quiet hours and the person's own mutes (phase-2-plan M14, design §6.4).
+            me.MapGet("/preferences", async (Guid tenantId, HttpContext http, PreferenceReader reader, CancellationToken ct)
+                => Results.Ok((await reader.PreferencesAsync(tenantId, Me(http), ct)).Select(ToResponse)));
+            me.MapPut("/preferences", (Guid tenantId, PutPreferencesBody body, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => ApiResults.SendAsync(mediator, db, new PutPreferences(tenantId, Me(http),
+                        body.Preferences?.Select(p => p is null ? null! : new PreferenceEntry(p.Category, p.Channel, p.Mode)).ToList()),
+                    o => Results.Ok(o.Value!.Select(ToResponse)), PeopleEndpoints.PreferenceConflict, ct));
+            me.MapPut("/quiet-hours", (Guid tenantId, QuietHoursBody body, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => ApiResults.SendAsync(mediator, db, new SetQuietHours(tenantId, Me(http), new QuietHoursSpec(body.Days, body.Start, body.End, body.TimeZone)),
+                    o => Results.Ok(ToResponse(o.Value)), PeopleEndpoints.PreferenceConflict, ct));
+            me.MapDelete("/quiet-hours", (Guid tenantId, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => ApiResults.SendAsync(mediator, db, new SetQuietHours(tenantId, Me(http), null), _ => Results.NoContent(), PeopleEndpoints.PreferenceConflict, ct));
+            me.MapGet("/mutes", async (Guid tenantId, bool? all, Guid? before, int? limit, HttpContext http, PreferenceReader reader, CancellationToken ct)
+                => Results.Ok((await reader.MutesAsync(tenantId, Me(http), all ?? false, before, limit ?? 50, ct)).Select(PeopleEndpoints.ToResponse)));
+            me.MapPost("/mutes", (Guid tenantId, AddMuteBody body, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => ApiResults.SendAsync(mediator, db, new AddMute(tenantId, Me(http), body.Match, body.StartsAt, body.EndsAt, body.Reason, ContactRules.Self),
+                    o => Results.Created($"/api/v1/tenants/{tenantId}/me/mutes/{o.Value!.Id}", PeopleEndpoints.ToResponse(o.Value)),
+                    PeopleEndpoints.PreferenceConflict, ct));
+            me.MapDelete("/mutes/{id:guid}", (Guid tenantId, Guid id, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => ApiResults.SendAsync(mediator, db, new CancelMute(tenantId, Me(http), id), _ => Results.NoContent(), PeopleEndpoints.PreferenceConflict, ct));
+
+            me.MapGet("/topics",async (Guid tenantId, HttpContext http, DirectoryReader reader, CancellationToken ct)
                 => Results.Ok((await reader.TopicsForAsync(tenantId, Me(http), ct))
                     .Select(t => new MyTopicResponse(t.Topic.Key, t.Topic.Name, t.Topic.SelfService, t.Subscribed))));
             me.MapPut("/topics/{key}", (Guid tenantId, string key, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
@@ -100,6 +126,10 @@ namespace Juice.Notifications.Api
 
         private static ContactPointResponse ToResponse(ContactPointView v)
             => new(v.Id, v.Channel, v.Address, v.VerifiedAt is not null, v.VerifiedAt, v.VerifiedBy, v.Health, v.HealthReason, v.CreatedAt);
+
+        private static PreferenceResponse ToResponse(PreferenceView v) => new(v.Category, v.Channel, v.Mode, v.UpdatedAt);
+
+        private static QuietHoursResponse? ToResponse(QuietHoursSpec? q) => q is null ? null : new(q.Days, q.Start!, q.End!, q.TimeZone);
 
         private static DeviceResponse ToResponse(DeviceView v) => new(v.Id, v.Platform, v.AppId, v.Locale, v.CreatedAt, v.LastSeenAt);
 

@@ -54,6 +54,8 @@ namespace Juice.Notifications.Data
         public DbSet<LocalGroupMember> LocalGroupMembers => Set<LocalGroupMember>();
         public DbSet<Topic> Topics => Set<Topic>();
         public DbSet<TopicSubscription> TopicSubscriptions => Set<TopicSubscription>();
+        public DbSet<Preference> Preferences => Set<Preference>();
+        public DbSet<Mute> Mutes => Set<Mute>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
         public DbSet<Notification> Notifications => Set<Notification>();
         public DbSet<NotificationRecipient> Recipients => Set<NotificationRecipient>();
@@ -226,6 +228,7 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Locale).HasMaxLength(35);
                 e.Property(x => x.TimeZone).HasMaxLength(64);
                 e.Property(x => x.Version).IsConcurrencyToken();
+                e.Property(x => x.QuietHours).HasColumnType("jsonb");
                 // One subscriber per source and id: two planners resolving the same new person at once make one (phase-2-plan I15).
                 e.HasIndex(x => new { x.TenantId, x.Source, x.ExternalId }).IsUnique().HasDatabaseName(Constraints.SubscriberIdentity);
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.MergedInto }).OnDelete(DeleteBehavior.Restrict);
@@ -330,6 +333,32 @@ namespace Juice.Notifications.Data
                 e.HasOne<Topic>().WithMany().HasForeignKey(x => new { x.TenantId, x.TopicId }).OnDelete(DeleteBehavior.Cascade)
                     .HasConstraintName(Constraints.TopicSubscriptionTopic);
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            model.Entity<Preference>(e =>
+            {
+                e.ToTable("preferences");
+                TenantKey(e);
+                e.Property(x => x.Category).HasMaxLength(63);
+                e.Property(x => x.Channel).HasMaxLength(20);
+                e.Property(x => x.Mode).HasMaxLength(10);
+                // One mode per person, category and channel.
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId, x.Category, x.Channel }).IsUnique().HasDatabaseName(Constraints.PreferenceKey);
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName(Constraints.PreferenceSubscriber);
+            });
+
+            model.Entity<Mute>(e =>
+            {
+                e.ToTable("mutes");
+                TenantKey(e);
+                e.Property(x => x.Match).HasColumnType("jsonb");
+                e.Property(x => x.Reason).HasMaxLength(500);
+                e.Property(x => x.CreatedBy).HasMaxLength(200);
+                // The planner reads the tenant's and its people's mutes that haven't been cancelled.
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId }).HasFilter("cancelled_at IS NULL");
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName(Constraints.MuteSubscriber);
             });
 
             model.Entity<NotificationRequest>(e =>

@@ -64,6 +64,26 @@ namespace Juice.Notifications
     [JsonConverter(typeof(JsonStringEnumConverter<RecipientOutcome>))]
     public enum RecipientOutcome { Pending, Planned, Muted, OptedOut, Deferred, Cancelled, Truncated, ResolverUnavailable, Failed }
 
+    /// <summary>The rules a mandatory type goes past, as a recipient's <c>Bypassed</c> records them (design §6.4).</summary>
+    public static class BypassedRules
+    {
+        /// <summary>A tenant mute that matched through a wildcard: only one naming the type exactly holds a mandatory type.</summary>
+        public const string TenantMute = "tenant-mute";
+        public const string OptOut = "opt-out";
+        public const string PersonalMute = "personal-mute";
+        public const string QuietHours = "quiet-hours";
+    }
+
+    /// <summary>A preference's mode (design §12). <c>digest</c> acts as <c>on</c> until digests arrive (phase 3).</summary>
+    public static class PreferenceModes
+    {
+        public const string On = "on";
+        public const string Off = "off";
+        public const string Digest = "digest";
+
+        public static readonly IReadOnlyList<string> All = [On, Off, Digest];
+    }
+
     /// <summary>Whether a contact point still works (design §9): a failed one isn't planned until the person verifies it again.</summary>
     [JsonConverter(typeof(JsonStringEnumConverter<ContactHealth>))]
     public enum ContactHealth

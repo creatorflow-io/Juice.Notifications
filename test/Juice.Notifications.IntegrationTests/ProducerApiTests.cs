@@ -207,6 +207,32 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains(pointer, await PointersAsync(response));
         }
 
+        /// <summary>
+        /// Half a surrogate pair on its own (<c>\ud800</c>) can't be stored, and reading it as a string throws: refused at the field, not a 500.
+        /// Sent as written, since a serializer may refuse to write it.
+        /// </summary>
+        [Theory]
+        [InlineData("""{ "workflow": [ { "step": "HALF" } ] }""", "/workflow/0/step")]
+        [InlineData("""{ "templates": { "email": "HALF" } }""", "/templates/email")]
+        [InlineData("""{ "schema": { "type": "object", "description": "HALF" } }""", "/schema/description")]
+        public async Task Half_a_surrogate_pair_in_a_declaration_is_refused_at_the_field(string change, string pointer)
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            var good = JsonSerializer.SerializeToNode(Type(NewType()), new JsonSerializerOptions(JsonSerializerDefaults.Web))!.AsObject();
+            foreach (var (name, value) in System.Text.Json.Nodes.JsonNode.Parse(change)!.AsObject())
+            {
+                good[name] = value?.DeepClone();
+            }
+            var body = good.ToJsonString().Replace("HALF", "a\\ud800b", StringComparison.Ordinal);
+
+            var response = await client.PutAsync(TypesUrl, new StringContent(body, System.Text.Encoding.UTF8, "application/json"), Ct);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal(ErrorCodes.InvalidType, await CodeAsync(response));
+            Assert.Contains(pointer, await PointersAsync(response));
+        }
+
         [Fact]
         public async Task Only_the_application_itself_declares_its_types()
         {
@@ -305,6 +331,12 @@ namespace Juice.Notifications.IntegrationTests
             var inData = await client.PostAsJsonAsync(SendUrl, Send(type, data: """{ "subject": "a\u0000b" }"""), Ct);
             Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidRequest), (inData.StatusCode, await CodeAsync(inData)));
             Assert.Contains("/data/subject", await PointersAsync(inData));
+            // Nor half a surrogate pair: sent as written (a serializer may refuse to write it).
+            var surrogate = System.Text.Json.JsonSerializer.Serialize(Send(type, data: """{ "subject": "HALF" }"""), System.Text.Json.JsonSerializerOptions.Web)
+                .Replace("HALF", "a\\ud800b", StringComparison.Ordinal);
+            var halfInData = await client.PostAsync(SendUrl, new StringContent(surrogate, System.Text.Encoding.UTF8, "application/json"), Ct);
+            Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidRequest), (halfInData.StatusCode, await CodeAsync(halfInData)));
+            Assert.Contains("/data/subject", await PointersAsync(halfInData));
 
             var body = Send(type) with { Labels = new Dictionary<string, string> { ["env"] = "a\0b" } };
             var inLabel = await client.PostAsJsonAsync(SendUrl, body, Ct);

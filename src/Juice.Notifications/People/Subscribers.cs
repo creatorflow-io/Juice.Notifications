@@ -12,7 +12,11 @@ namespace Juice.Notifications.People
     public sealed record AliasView(string Source, string ExternalId, string? LinkedBy, DateTimeOffset LinkedAt);
 
     public sealed record SubscriberView(Guid Id, string Source, string ExternalId, string? Name, string? Locale, string? TimeZone, Guid? MergedInto,
-        IReadOnlyList<AliasView> Aliases, DateTimeOffset CreatedAt);
+        IReadOnlyList<AliasView> Aliases, DateTimeOffset CreatedAt)
+    {
+        /// <summary>The person's quiet hours as stored (JSON), or null.</summary>
+        public string? QuietHours { get; init; }
+    }
 
     /// <summary>
     /// Links another source's identity to a subscriber. If that identity is already a subscriber of its own, it is linked into this one
@@ -124,7 +128,7 @@ namespace Juice.Notifications.People
         internal static SubscriberView View(Subscriber s, IEnumerable<SubscriberAlias> aliases)
             => new(s.Id, s.Source, s.ExternalId, s.Name, s.Locale, s.TimeZone, s.MergedInto,
                 aliases.OrderBy(a => a.Source, StringComparer.Ordinal).ThenBy(a => a.ExternalId, StringComparer.Ordinal)
-                    .Select(a => new AliasView(a.Source, a.ExternalId, a.LinkedBy, a.LinkedAt)).ToList(), s.CreatedAt);
+                    .Select(a => new AliasView(a.Source, a.ExternalId, a.LinkedBy, a.LinkedAt)).ToList(), s.CreatedAt) { QuietHours = s.QuietHours };
     }
 
     /// <summary>Reads a tenant's subscribers, outside any command.</summary>

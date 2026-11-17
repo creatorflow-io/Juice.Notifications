@@ -60,6 +60,8 @@ namespace Juice.Notifications.Tests
         [InlineData("""{ "definitions": { "x": { "type": "string" } }, "$ref": "#/definitions/x" }""", "/schema/$ref")]
         // PostgreSQL can't store a NUL character.
         [InlineData("""{ "type": "object", "description": "a\u0000b" }""", "/schema/description")]
+        // Nor half a surrogate pair (reading it as a string throws).
+        [InlineData("""{ "type": "object", "description": "a\ud800b" }""", "/schema/description")]
         public void Other_schemas_are_refused_at_the_field(string schema, string pointer)
             => Assert.Contains(Check(schema), e => e.Pointer.StartsWith(pointer, StringComparison.Ordinal));
 

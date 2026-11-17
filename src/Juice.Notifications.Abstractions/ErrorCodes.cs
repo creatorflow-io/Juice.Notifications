@@ -81,5 +81,7 @@ namespace Juice.Notifications
         public const string ChannelUnavailable = "channel_unavailable";
         /// <summary>The service's own application or types, which the API doesn't change.</summary>
         public const string ManagedByService = "managed_by_service";
+        /// <summary>As many mutes are in force or to come as allowed (a person 100, a tenant 500); cancel one first.</summary>
+        public const string MuteLimit = "mute_limit";
     }
 }

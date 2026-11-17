@@ -49,5 +49,24 @@ namespace Juice.Notifications.Tests
         [Fact]
         public void Write_keeps_numbers_as_written()
             => Assert.Equal("""{"a":1e2}""", CanonicalJson.Write(JsonElement.Parse("""{ "a": 1e2 }""")));
+
+        [Theory]
+        [InlineData("""{ "type": "\ud800" }""", "/m/type")]
+        [InlineData("""{ "labels": { "\udc00": "x" } }""", "/m/labels")]
+        [InlineData("""{ "type": ["ok", "a\ud800b"] }""", "/m/type/1")]
+        [InlineData("""{ "type": "😀" }""", null)]
+        [InlineData("""{ "type": "app.alert" }""", null)]
+        public void FirstMalformed_finds_half_a_surrogate_pair(string json, string? at)
+            => Assert.Equal(at, CanonicalJson.FirstMalformed(JsonElement.Parse(json), "/m"));
+
+        [Theory]
+        [InlineData("""{ "a": "x\ud800", "b": "\u0000" }""", "/m/a", Intake.RequestRules.MalformedMessage)]
+        [InlineData("""{ "a": "x", "b": "\u0000" }""", "/m/b", Intake.RequestRules.NulMessage)]
+        [InlineData("""{ "a": "x" }""", null, null)]
+        public void Unstorable_finds_half_a_pair_then_a_nul(string json, string? at, string? message)
+        {
+            var error = CanonicalJson.Unstorable(JsonElement.Parse(json), "/m");
+            Assert.Equal((at, message), (error?.Pointer, error?.Message));
+        }
     }
 }

@@ -99,6 +99,7 @@ namespace Juice.Notifications.Api
             services.AddScoped<Configuration.ConfigurationReader>();
             services.AddScoped<People.SubscriberReader>();
             services.AddScoped<People.DirectoryReader>();
+            services.AddScoped<People.PreferenceReader>();
             // Contact points and devices (phase-2-plan M13): their encryption keys are checked at start, with the service's own types.
             services.AddOptions<People.EncryptionOptions>().Bind(configuration.GetSection(People.EncryptionOptions.Section));
             People.ContactEncryptionRegistration.AddContactEncryption(services);

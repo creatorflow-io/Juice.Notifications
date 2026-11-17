@@ -163,6 +163,19 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(HttpStatusCode.BadRequest, nulSettings.StatusCode);
             var nulMatch = await admin.PutAsJsonAsync($"{Tenant}/routes/r2", new PutRouteBody(Json("""{ "labels": { "env": "a\u0000" } }"""), ["t1"], null), Ct);
             Assert.Equal(HttpStatusCode.BadRequest, nulMatch.StatusCode);
+            // Nor half a surrogate pair: sent as written (a serializer may refuse to write it).
+            var halfMatch = await admin.PutAsync($"{Tenant}/routes/r2", new StringContent("""{ "match": { "labels": { "env": "a\ud800" } }, "targets": ["t1"] }""",
+                System.Text.Encoding.UTF8, "application/json"), Ct);
+            Assert.Equal(HttpStatusCode.BadRequest, halfMatch.StatusCode);
+            foreach (var settings in new[] { """{ "a": "b\ud800" }""", """{ "\ud800": 1 }""", "\"\\ud800\"" })
+            {
+                var halfSettings = await admin.PutAsync($"{Tenant}/integrations/x", new StringContent(
+                    $$"""{ "channel": "webhook", "kind": "webhook", "settings": {{settings}} }""", System.Text.Encoding.UTF8, "application/json"), Ct);
+                Assert.Equal(HttpStatusCode.BadRequest, halfSettings.StatusCode);
+                var halfResolver = await admin.PutAsync($"{Tenant}/resolvers/x", new StringContent(
+                    $$"""{ "kind": "local", "settings": {{settings}} }""", System.Text.Encoding.UTF8, "application/json"), Ct);
+                Assert.Equal(HttpStatusCode.BadRequest, halfResolver.StatusCode);
+            }
 
             var integrations = await admin.GetFromJsonAsync<List<IntegrationResponse>>($"{Tenant}/integrations", Ct);
             Assert.Contains(integrations!, i => i.Key == "hooks" && i.Targets.Any(t => t.Key == "t1" && t.Address == "https://hooks.example.com/x"));

@@ -257,6 +257,11 @@ namespace Juice.Notifications.Data
         /// </summary>
         public DateTimeOffset? VerificationWindowStart { get; set; }
         public int VerificationsInWindow { get; set; }
+        /// <summary>
+        /// When personal channels hold their notifications (design §6.4, phase-2-plan I21), as JSON: <c>{ "days": ["mon", …], "start": "22:00",
+        /// "end": "07:00", "timeZone": "Europe/Berlin" }</c>. Null when the person has none. The person sets it; no source does.
+        /// </summary>
+        public string? QuietHours { get; set; }
     }
 
     /// <summary>
@@ -312,6 +317,42 @@ namespace Juice.Notifications.Data
         public string? Locale { get; set; }
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset LastSeenAt { get; set; }
+    }
+
+    /// <summary>
+    /// How a person hears about a category on a channel (design §6.4, §12): <c>on</c>, <c>off</c> or <c>digest</c> (on until phase 3).
+    /// <see cref="Category"/> or <see cref="Channel"/> is <c>*</c> for all of them. A category off on every channel (<c>channel = *</c>) opts the
+    /// person out of it; a channel off keeps the category but not that channel.
+    /// </summary>
+    public sealed class Preference : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid SubscriberId { get; init; }
+        public required string Category { get; init; }
+        public required string Channel { get; init; }
+        public required string Mode { get; set; }
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    /// <summary>
+    /// A mute (design §6.1 step 4, §6.4, §12): the tenant's (<see cref="SubscriberId"/> null), or one person's own, which a snooze is. It silences
+    /// what <see cref="Match"/> matches between <see cref="StartsAt"/> and <see cref="EndsAt"/> (none: until cancelled). Never deleted: cancelling
+    /// sets <see cref="CancelledAt"/>, so "why didn't I get it?" can still be answered.
+    /// </summary>
+    public sealed class Mute : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid? SubscriberId { get; init; }
+        /// <summary>A route's match (type patterns, labels, minimum priority), as JSON; <c>{}</c> matches everything.</summary>
+        public required string Match { get; init; }
+        public DateTimeOffset StartsAt { get; init; }
+        public DateTimeOffset? EndsAt { get; init; }
+        public string? Reason { get; init; }
+        public string? CreatedBy { get; init; }
+        public DateTimeOffset CreatedAt { get; init; }
+        public DateTimeOffset? CancelledAt { get; set; }
     }
 
     /// <summary>Another source's id for a subscriber, linked by a tenant admin (design D23, phase-2-plan p2-d2).</summary>
@@ -411,6 +452,11 @@ namespace Juice.Notifications.Data
         public required string NamedAs { get; init; }
         public int EscalationStep { get; init; }
         public RecipientOutcome Outcome { get; set; }
+        /// <summary>
+        /// The rules a mandatory type went past to reach this person (design §6.4, phase-2-plan I21): <c>tenant-mute</c> (one with a wildcard),
+        /// <c>opt-out</c>, <c>personal-mute</c>, <c>quiet-hours</c> (<see cref="BypassedRules"/>). Empty for a normal type.
+        /// </summary>
+        public string[] Bypassed { get; set; } = [];
         public DateTimeOffset CreatedAt { get; init; }
     }
 

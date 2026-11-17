@@ -69,6 +69,8 @@ namespace Juice.Notifications.Intake
         /// <summary>Text can't hold a NUL character: PostgreSQL stores it in neither text nor jsonb.</summary>
         public const string NulMessage = "This text holds a NUL character (\\u0000), which can't be stored.";
 
+        public const string MalformedMessage = "This text holds half a surrogate pair on its own, which can't be stored.";
+
         public const int MaxRecipientIdLength = 200;
 
         /// <summary>A person's id or key, as a request names it or a source gives it: 1–200 characters, no control characters.</summary>
@@ -413,13 +415,13 @@ namespace Juice.Notifications.Intake
             {
                 invalid.Add(new FieldError("/data", "The data is a JSON object."));
             }
+            else if (CanonicalJson.Unstorable(data, "/data") is { } unstorable)
+            {
+                invalid.Add(unstorable);
+            }
             else if (CanonicalJson.FirstDuplicate(data, "/data") is { } duplicate)
             {
                 invalid.Add(new FieldError(duplicate, "This object repeats a property name; each name appears once."));
-            }
-            else if (CanonicalJson.FirstNul(data, "/data") is { } nul)
-            {
-                invalid.Add(new FieldError(nul, RequestRules.NulMessage));
             }
             else if (System.Text.Encoding.UTF8.GetByteCount(data.GetRawText()) > RequestRules.MaxDataBytes)
             {

@@ -123,5 +123,16 @@ namespace Juice.Notifications.Tests
             Assert.True(Matches("""{ "labels": { "env": "in(dev, prod)" } }"""));
             Assert.False(Matches("""{ "labels": { "env": "in(dev, prod" } }"""));
         }
+
+        /// <summary>jsonb keeps the last of a repeated name, so a match repeating one is refused rather than stored as something else.</summary>
+        [Theory]
+        [InlineData("""{ "type": "a.b", "type": "c.*" }""", "/match/type")]
+        [InlineData("""{ "labels": { "env": "prod", "env": "dev" } }""", "/match/labels/env")]
+        public void A_repeated_name_is_refused(string match, string pointer)
+        {
+            var (parsed, errors) = RouteMatch.Parse(JsonElement.Parse(match));
+            Assert.Null(parsed);
+            Assert.Equal(pointer, Assert.Single(errors).Pointer);
+        }
     }
 }

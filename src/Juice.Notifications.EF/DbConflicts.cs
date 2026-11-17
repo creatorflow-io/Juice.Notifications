@@ -38,6 +38,10 @@ namespace Juice.Notifications.Data
         public const string ContactPointSubscriber = "fk_contact_points_subscribers";
         /// <summary>A code sent for a contact point removed at the same moment.</summary>
         public const string VerificationContactPoint = "fk_contact_verifications_contact_points";
+        public const string PreferenceKey = "ix_preferences_key";
+        /// <summary>A preference or mute saved for a subscriber deleted at the same moment.</summary>
+        public const string PreferenceSubscriber = "fk_preferences_subscribers";
+        public const string MuteSubscriber = "fk_mutes_subscribers";
         public const string DeviceToken = "ix_device_registrations_token";
     }
 

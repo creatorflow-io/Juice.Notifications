@@ -35,6 +35,10 @@ namespace Juice.Notifications.Types
             {
                 return [new FieldError(pointer, $"The schema is larger than {MaxSchemaBytes / 1024} KB.")];
             }
+            if (CanonicalJson.Unstorable(schema, pointer) is { } unstorable)
+            {
+                return [unstorable];
+            }
             if (CanonicalJson.FirstDuplicate(schema, pointer) is { } duplicate)
             {
                 return [new FieldError(duplicate, "This object repeats a property name; each name appears once.")];
@@ -47,10 +51,6 @@ namespace Juice.Notifications.Types
             if (!meta.IsValid)
             {
                 return Errors(meta, pointer);
-            }
-            if (CanonicalJson.FirstNul(schema, pointer) is { } nul)
-            {
-                return [new FieldError(nul, Intake.RequestRules.NulMessage)];
             }
             var references = CheckReferences(schema, pointer);
             if (references.Count > 0)

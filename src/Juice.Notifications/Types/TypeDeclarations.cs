@@ -93,6 +93,9 @@ namespace Juice.Notifications.Types
         [GeneratedRegex(@"^[a-z][a-z0-9-]{0,62}\z")]
         private static partial Regex Slug();
 
+        /// <summary>A type's category: 1–63 lowercase letters, digits or hyphens, starting with a letter.</summary>
+        public static bool IsCategory(string category) => Slug().IsMatch(category);
+
         [GeneratedRegex(@"^[a-z0-9][a-z0-9_-]{0,62}\z")]
         private static partial Regex KeySegment();
 
@@ -164,7 +167,11 @@ namespace Juice.Notifications.Types
             {
                 errors.AddRange(DataSchemas.Check(schema, "/schema"));
             }
-            if (d.Workflow is { } workflow && CanonicalJson.Write(workflow) != SendOnlyWorkflow)
+            if (d.Workflow is { } unreadable && CanonicalJson.Unstorable(unreadable, "/workflow") is { } unstorable)
+            {
+                Fail(unstorable.Pointer, unstorable.Message);
+            }
+            else if (d.Workflow is { } workflow && CanonicalJson.Write(workflow) != SendOnlyWorkflow)
             {
                 Fail("/workflow", """Phase 1 runs one workflow: [{"step":"send"}]. Omit it or send exactly that.""");
             }
@@ -196,6 +203,11 @@ namespace Juice.Notifications.Types
             if (templates.ValueKind != JsonValueKind.Object)
             {
                 fail("/templates", "Templates map a channel to a template, or to an object of locale → template.");
+                return result;
+            }
+            if (CanonicalJson.Unstorable(templates, "/templates") is { } unstorable)
+            {
+                fail(unstorable.Pointer, unstorable.Message);
                 return result;
             }
             if (CanonicalJson.FirstDuplicate(templates, "/templates") is { } duplicate)

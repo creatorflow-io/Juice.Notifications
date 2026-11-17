@@ -83,4 +83,42 @@ namespace Juice.Notifications.Api.Contracts
 
     /// <summary>A registration; its token is never returned.</summary>
     public sealed record DeviceResponse(Guid Id, string Platform, string AppId, string? Locale, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt);
+
+    /// <summary>
+    /// How the person hears about a category (a type's, or <c>*</c>) on a channel (<c>inbox</c>, <c>email</c>…, or <c>*</c>): <c>on</c>, <c>off</c>
+    /// or <c>digest</c> (on until digests arrive). The most specific choice wins: the category's over <c>*</c>. A category off on <c>*</c> opts
+    /// out of it; a mandatory type still reaches the person, and its inbox can't be turned off (design §6.4).
+    /// </summary>
+    public sealed record PreferenceBody(string? Category, string? Channel, string? Mode);
+
+    /// <summary><c>PUT …/me/preferences</c>: replaces all of the person's preferences (an empty list: everything on).</summary>
+    public sealed record PutPreferencesBody(List<PreferenceBody>? Preferences);
+
+    public sealed record PreferenceResponse(string Category, string Channel, string Mode, DateTimeOffset UpdatedAt);
+
+    /// <summary>
+    /// <c>PUT …/me/quiet-hours</c>: a quiet period starting on each of <c>days</c> (<c>mon</c> … <c>sun</c>; left out: every day) at <c>start</c>
+    /// and ending at <c>end</c> (<c>HH:mm</c>, local; an end before the start is the next day), in <c>timeZone</c> (an IANA id; left out: the
+    /// person's, else UTC). Personal channels wait until it ends; the inbox doesn't, and a mandatory type doesn't wait.
+    /// </summary>
+    public sealed record QuietHoursBody(List<string>? Days, string? Start, string? End, string? TimeZone);
+
+    public sealed record QuietHoursResponse(IReadOnlyList<string>? Days, string Start, string End, string? TimeZone);
+
+    /// <summary>The signed-in person as the service knows them. Name, locale and time zone come from their identity's source.</summary>
+    public sealed record MeResponse(Guid Id, string Source, string ExternalId, string? Name, string? Locale, string? TimeZone, QuietHoursResponse? QuietHours);
+
+    /// <summary>
+    /// <c>POST …/mutes</c> (the tenant's) or <c>…/me/mutes</c> (the person's own; a snooze is one with no match and an end): silences what
+    /// <c>match</c> matches (a route's match: type patterns, labels, minPriority; left out: everything) from <c>startsAt</c> (left out: now) until
+    /// <c>endsAt</c> (left out: until cancelled).
+    /// </summary>
+    public sealed record AddMuteBody(JsonElement? Match, DateTimeOffset? StartsAt, DateTimeOffset? EndsAt, string? Reason);
+
+    /// <summary>
+    /// A mute. <c>appliesToMandatory</c>: a tenant mute that names a mandatory type exactly, so it silences that type too; a wildcard never does,
+    /// and a personal mute never does (design §6.4).
+    /// </summary>
+    public sealed record MuteResponse(Guid Id, JsonElement Match, DateTimeOffset StartsAt, DateTimeOffset? EndsAt, string? Reason, string? CreatedBy,
+        DateTimeOffset CreatedAt, DateTimeOffset? CancelledAt, bool AppliesToMandatory);
 }
