@@ -180,7 +180,7 @@ namespace Juice.Notifications.Planning
     /// is recorded as <c>Truncated</c>. Both records name what the request named (<c>group:sre</c>), have no subscriber, and are never due.
     /// </remarks>
     public sealed class PlannerStage(IEnumerable<IRecipientResolver> resolvers, IOptions<ResolverOptions> resolverOptions, ILogger<PlannerStage> logger,
-        IChannelRegistry channels, People.ContactCrypto crypto, People.MuteMatches mutes, Workflows.WorkflowRunner workflows)
+        IChannelRegistry channels, People.ContactCrypto crypto, People.MuteMatches mutes, Workflows.WorkflowRunner workflows, Events.ProducerEvents events)
         : IStage<Notification>
     {
         public const string StageName = "planner";
@@ -309,6 +309,17 @@ namespace Juice.Notifications.Planning
                 db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.ResolverUnavailable, context.Now));
                 // One record per name: one named twice, through a resolver that failed and another that truncated, reads as unavailable.
                 truncated.Remove(named);
+            }
+            if (unavailable.Count > 0)
+            {
+                // The producer hears who wasn't reached (design §5.4, phase-3-plan I37), saved with this plan.
+                var names = unavailable.Keys.Order(StringComparer.Ordinal).ToList();
+                await events.RaiseAsync(db, row.TenantId, request.ApplicationId, app => new Events.NotificationEvent
+                {
+                    Event = Events.ProducerEventNames.RecipientUnresolved, Application = app, NotificationTenantId = row.TenantId,
+                    CorrelationKey = request.CorrelationKey, NotificationId = row.Id, RequestId = request.Id, Type = request.TypeKey, Names = names,
+                    Resolver = string.Join(",", unavailable.Values.Distinct().Order(StringComparer.Ordinal)), OccurredAt = context.Now,
+                }, ct);
             }
             foreach (var (named, resolverKey) in truncated)
             {
@@ -506,6 +517,9 @@ namespace Juice.Notifications.Planning
             services.TryAddSingleton(TimeProvider.System);
             services.AddSingleton<ResolverCache>();
             services.AddSingleton<Workflows.WorkflowRunner>();
+            // Events to producers (phase-3-plan I37): off unless Events:Enabled; the relay is the host's to run.
+            services.AddOptions<Events.EventsOptions>();
+            services.TryAddSingleton<Events.ProducerEvents>();
             // Escalations run on their own claims (phase-3-plan I34), and hand their steps to this stage.
             services.AddStage<Escalation, Workflows.EscalationStage>(options, runWorkers);
             services.TryAddSingleton<People.MuteMatches>();

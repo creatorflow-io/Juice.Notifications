@@ -517,6 +517,39 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>
+    /// An event for a producer, raised and saved with the change it reports (phase-3-plan I37), until the relay moves it into the outbox.
+    /// <c>Payload</c> is the event as JSON.
+    /// </summary>
+    public sealed class ProducerEvent : ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid ApplicationId { get; init; }
+        public required string Event { get; init; }
+        public required string Payload { get; init; }
+        public DateTimeOffset CreatedAt { get; init; }
+    }
+
+    /// <summary>
+    /// What a person did with an inbox item (design §5.4, §7.3, §12; phase-3-plan I36): read it, acknowledged it, or chose one of its actions.
+    /// Once each per item, kind and action, so a double click is one interaction and one event.
+    /// </summary>
+    public sealed class Interaction : ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid InboxItemId { get; init; }
+        public Guid DeliveryId { get; init; }
+        public Guid? CorrelationId { get; init; }
+        public Guid SubscriberId { get; init; }
+        /// <summary><c>read</c>, <c>acknowledged</c> or <c>action</c>.</summary>
+        public required string Kind { get; init; }
+        /// <summary>The action's id for an action; empty otherwise.</summary>
+        public string ActionId { get; init; } = "";
+        public DateTimeOffset At { get; init; }
+    }
+
+    /// <summary>
     /// A tenant's escalation policy (design §7.1, §12; phase-3-plan I34): steps that, while a correlation stays open, add recipients after a
     /// wait. <c>Steps</c> is JSON: <c>[{ "afterMinutes": 15, "recipients": [recipient specs] }]</c>.
     /// </summary>

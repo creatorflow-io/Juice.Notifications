@@ -129,6 +129,8 @@ services:
       NOTIFICATIONS_DIRECTORY_CLIENT_SECRET: ${NOTIFICATIONS_DIRECTORY_CLIENT_SECRET:?run scripts/init.sh}
       # NotificationRequested over RabbitMQ (phase-1-plan I5); producers publish as their own broker user (README: RabbitMQ intake).
       Intake__RabbitMQ__Enabled: "true"
+      # Events to producers over the same broker (phase-3-plan I37): topic exchange juice.notifications.events.
+      Events__Enabled: "true"
       Intake__RabbitMQ__Host: rabbitmq
       Intake__RabbitMQ__UserName: notifications
       Intake__RabbitMQ__Password: ${RABBITMQ_PASSWORD}

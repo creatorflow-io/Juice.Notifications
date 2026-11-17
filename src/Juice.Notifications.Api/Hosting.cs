@@ -85,7 +85,7 @@ namespace Juice.Notifications.Api
 
             services.AddMediatR(mediator => mediator.RegisterServicesFromAssemblyContaining<CreateApplication>(includeNonPublicTypes: true));
             services.AddScoped(typeof(IPipelineBehavior<,>), typeof(NotificationsTransactionBehavior<,>));
-            services.AddNotificationsMessaging();
+            services.AddNotificationsMessaging(configuration);
 
             services.AddScoped<ApplicationReader>();
             services.AddScoped<ApplicationEndpoints.Sender>();
@@ -154,15 +154,22 @@ namespace Juice.Notifications.Api
         /// delivered from the outbox, with retries, if that fails or the process stops first. Stage hand-offs don't use it (phase-1-plan I3); messages
         /// that leave the service will (events to producers, phase 3).
         /// </summary>
-        public static IServiceCollection AddNotificationsMessaging(this IServiceCollection services)
+        public static IServiceCollection AddNotificationsMessaging(this IServiceCollection services, IConfiguration? configuration = null)
         {
+            // Events to producers (phase-3-plan I37): raised as rows, moved into the outbox by the relay, published on the events route.
+            var events = configuration?.GetSection(Events.EventsOptions.Section).Get<Events.EventsOptions>() ?? new Events.EventsOptions();
+            if (configuration is not null)
+            {
+                services.Configure<Events.EventsOptions>(configuration.GetSection(Events.EventsOptions.Section));
+            }
+            Events.ProducerEventsRegistration.AddProducerEvents(services, runRelay: events.Enabled && configuration?.GetValue("Stages:Run", true) != false);
             var messaging = services.AddMessaging();
             messaging.AddOutbox();
             messaging.AddLocalChannel();
             messaging.AddLocalPublisher();
             messaging.AddIdempotencyInMemory();
             messaging.AddMessageService<NotificationsDbContext>();
-            messaging.AddPublishingPolicies<LocalRoute>();
+            messaging.AddPublishingPolicies<NotificationsRoutes>();
             messaging.AddDelivery(delivery =>
             {
                 delivery.AddDeliveryPolicies(options => options.DefaultPolicy = new PolicyConfiguration
@@ -170,18 +177,28 @@ namespace Juice.Notifications.Api
                     Interval = TimeSpan.FromSeconds(2), BatchSize = 50, Timeout = TimeSpan.FromMinutes(1),
                     InitialRetryDelay = TimeSpan.FromSeconds(5), RetryDelayMultiplier = 2, MaxRetryAttempts = 10,
                 });
-                delivery.AddDeliveryProcessor<NotificationsDbContext>(LocalRoute.Publisher);
+                delivery.AddDeliveryProcessor<NotificationsDbContext>(NotificationsRoutes.Local);
+                if (events.Enabled)
+                {
+                    delivery.AddDeliveryProcessor<NotificationsDbContext>(Events.EventsRouting.Publisher);
+                }
             });
             return services;
         }
 
-        /// <summary>Every message takes the <c>local</c> route until messages leave the service.</summary>
-        private sealed class LocalRoute : IMessagePublishingPolicy
+        /// <summary>
+        /// Events to producers go to RabbitMQ (the <c>events</c> producer, its topic exchange; the routing key is the event's name,
+        /// <c>{app}.notification.{event}</c>); everything else takes the <c>local</c> route.
+        /// </summary>
+        private sealed class NotificationsRoutes(Microsoft.Extensions.Options.IOptions<Events.EventsOptions> events) : IMessagePublishingPolicy
         {
-            public const string Publisher = "local";
-            private static readonly IReadOnlyCollection<PublishRoute> Routes = [new PublishRoute(Publisher, string.Empty)];
+            public const string Local = "local";
+            private static readonly IReadOnlyCollection<PublishRoute> LocalRoutes = [new PublishRoute(Local, string.Empty)];
 
-            public ValueTask<IReadOnlyCollection<PublishRoute>> ResolveAsync(PolicyResolveContext context) => ValueTask.FromResult(Routes);
+            public ValueTask<IReadOnlyCollection<PublishRoute>> ResolveAsync(PolicyResolveContext context)
+                => ValueTask.FromResult<IReadOnlyCollection<PublishRoute>>(events.Value.Enabled && context.EventType == nameof(Events.NotificationEvent)
+                    ? [new PublishRoute(Events.EventsRouting.Publisher, events.Value.Exchange)]
+                    : LocalRoutes);
         }
 
         /// <summary>JWT bearer from the configured issuer; every endpoint needs a signed-in caller unless it says otherwise.</summary>

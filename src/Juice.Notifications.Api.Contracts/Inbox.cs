@@ -7,7 +7,11 @@ namespace Juice.Notifications.Api.Contracts
     /// phase 3; <c>actionable</c> says the type declares some.
     /// </summary>
     public sealed record InboxItemResponse(Guid Id, string Type, string Group, string Title, string Body, string? Url, JsonElement? Actions, bool Actionable,
-        NotificationPriority Priority, DateTimeOffset CreatedAt, DateTimeOffset? ReadAt, DateTimeOffset? ArchivedAt, InboxCorrelationResponse? Correlation = null);
+        NotificationPriority Priority, DateTimeOffset CreatedAt, DateTimeOffset? ReadAt, DateTimeOffset? ArchivedAt, InboxCorrelationResponse? Correlation = null,
+        IReadOnlyList<InboxInteractionResponse>? Interactions = null);
+
+    /// <summary>What the person did with the item: <c>read</c>, <c>acknowledged</c>, or <c>action</c> with its id (phase-3-plan I36).</summary>
+    public sealed record InboxInteractionResponse(string Kind, string? ActionId, DateTimeOffset At);
 
     public sealed record InboxGroupCountResponse(string Key, string Name, int Position, int Open, int Unread);
 

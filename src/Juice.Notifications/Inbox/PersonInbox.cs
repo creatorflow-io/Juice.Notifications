@@ -9,7 +9,18 @@ namespace Juice.Notifications.Inbox
     // unread, read all and archive. Every change is the person's own items only.
 
     public sealed record InboxItemView(Guid Id, string Type, string Group, string Title, string Body, string? Url, JsonElement? Actions, bool Actionable,
-        NotificationPriority Priority, DateTimeOffset CreatedAt, DateTimeOffset? ReadAt, DateTimeOffset? ArchivedAt, InboxCorrelationView? Correlation = null);
+        NotificationPriority Priority, DateTimeOffset CreatedAt, DateTimeOffset? ReadAt, DateTimeOffset? ArchivedAt, InboxCorrelationView? Correlation = null,
+        IReadOnlyList<InboxInteractionView>? Interactions = null);
+
+    /// <summary>What the person did with the item (phase-3-plan I36): <c>read</c>, <c>acknowledged</c>, or <c>action</c> with its id.</summary>
+    public sealed record InboxInteractionView(string Kind, string? ActionId, DateTimeOffset At);
+
+    public static class InteractionKinds
+    {
+        public const string Read = "read";
+        public const string Acknowledged = "acknowledged";
+        public const string Action = "action";
+    }
 
     /// <summary>
     /// The item's correlation as every recipient sees it (design §7.3, phase-3-plan I35): open items wait for someone; a resolved one shows its
@@ -36,18 +47,105 @@ namespace Juice.Notifications.Inbox
     /// commands: items aren't configuration (nothing to audit), each change is one statement, and a restore takes the catalog lock in its own
     /// transaction, which a command's handler can't (its transaction opens after it runs).
     /// </summary>
-    public sealed class PersonInboxEditor(NotificationsDbContext db, TimeProvider clock)
+    public sealed class PersonInboxEditor(NotificationsDbContext db, TimeProvider clock, Events.ProducerEvents? events = null)
     {
         private static Outcome<InboxItemView> Missing() => Outcome<InboxItemView>.NotFound("There is no such item in your inbox.");
 
-        /// <summary>Marks the item read (its time kept when it was read already) or unread.</summary>
+        /// <summary>Marks the item read (its time kept when it was read already) or unread. The first read is an interaction the producer hears.</summary>
         public async Task<Outcome<InboxItemView>> MarkReadAsync(Guid tenantId, Guid subscriberId, Guid itemId, bool read, CancellationToken ct)
         {
             var self = await People.DirectoryReader.SelfAsync(db, tenantId, subscriberId, ct);
             var now = clock.GetUtcNow();
             var changed = await db.InboxItems.Where(i => i.TenantId == tenantId && self.Contains(i.SubscriberId) && i.Id == itemId)
                 .ExecuteUpdateAsync(s => s.SetProperty(i => i.ReadAt, i => read ? i.ReadAt ?? now : null), ct);
-            return changed == 0 ? Missing() : await ViewAsync(tenantId, itemId, ct);
+            if (changed == 0)
+            {
+                return Missing();
+            }
+            if (read)
+            {
+                await RecordAsync(tenantId, await db.InboxItems.AsNoTracking().SingleAsync(i => i.TenantId == tenantId && i.Id == itemId, ct),
+                    InteractionKinds.Read, "", now, ct);
+            }
+            return await ViewAsync(tenantId, itemId, ct);
+        }
+
+        /// <summary>
+        /// The person chose one of the item's actions (design §7.3, §19 decision 13): an interaction, and <c>notification.interaction</c> for the
+        /// producer, who decides; the inbox decides nothing. Once per person, item and action; it reads the item. Refused once the correlation
+        /// is resolved or cancelled.
+        /// </summary>
+        public async Task<Outcome<InboxItemView>> ActAsync(Guid tenantId, Guid subscriberId, Guid itemId, string actionId, CancellationToken ct)
+            => await InteractAsync(tenantId, subscriberId, itemId, InteractionKinds.Action, actionId, ct);
+
+        /// <summary>The person acknowledged the item: an interaction the producer hears (it may acknowledge the correlation in turn).</summary>
+        public async Task<Outcome<InboxItemView>> AcknowledgeAsync(Guid tenantId, Guid subscriberId, Guid itemId, CancellationToken ct)
+            => await InteractAsync(tenantId, subscriberId, itemId, InteractionKinds.Acknowledged, "", ct);
+
+        private async Task<Outcome<InboxItemView>> InteractAsync(Guid tenantId, Guid subscriberId, Guid itemId, string kind, string actionId, CancellationToken ct)
+        {
+            var self = await People.DirectoryReader.SelfAsync(db, tenantId, subscriberId, ct);
+            var item = await db.InboxItems.AsNoTracking().SingleOrDefaultAsync(i => i.TenantId == tenantId && self.Contains(i.SubscriberId) && i.Id == itemId, ct);
+            if (item is null)
+            {
+                return Missing();
+            }
+            if (kind == InteractionKinds.Action && !ActionIds(item.Actions).Contains(actionId))
+            {
+                return Outcome<InboxItemView>.NotFound($"The item has no action {actionId}.");
+            }
+            if (item.CorrelationId is { } correlationId
+                && await db.Correlations.AsNoTracking().Where(c => c.TenantId == tenantId && c.Id == correlationId).Select(c => c.State).SingleAsync(ct)
+                    is CorrelationState.Resolved or CorrelationState.Cancelled)
+            {
+                return Outcome<InboxItemView>.Conflict(ErrorCodes.CorrelationClosed, "It has been decided already: the item's correlation is closed.");
+            }
+            var now = clock.GetUtcNow();
+            await RecordAsync(tenantId, item, kind, actionId, now, ct);
+            await db.InboxItems.Where(i => i.TenantId == tenantId && i.Id == itemId && i.ReadAt == null).ExecuteUpdateAsync(s => s.SetProperty(i => i.ReadAt, now), ct);
+            return await ViewAsync(tenantId, itemId, ct);
+        }
+
+        private static HashSet<string> ActionIds(string? actions)
+        {
+            if (actions is null)
+            {
+                return [];
+            }
+            using var document = JsonDocument.Parse(actions);
+            return document.RootElement.EnumerateArray().Where(a => a.TryGetProperty("id", out _)).Select(a => a.GetProperty("id").GetString()!)
+                .ToHashSet(StringComparer.Ordinal);
+        }
+
+        /// <summary>
+        /// Records the interaction once (a repeat writes nothing) and, the first time, raises <c>notification.interaction</c> in the same transaction
+        /// (phase-3-plan I36, I37).
+        /// </summary>
+        private async Task RecordAsync(Guid tenantId, InboxItem item, string kind, string actionId, DateTimeOffset now, CancellationToken ct)
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            var id = Guid.CreateVersion7();
+            var written = await db.Database.ExecuteSqlAsync($"""
+                INSERT INTO notifications.interactions (tenant_id, id, inbox_item_id, delivery_id, correlation_id, subscriber_id, kind, action_id, at)
+                VALUES ({tenantId}, {id}, {item.Id}, {item.DeliveryId}, {item.CorrelationId}, {item.SubscriberId}, {kind}, {actionId}, {now})
+                ON CONFLICT (tenant_id, inbox_item_id, kind, action_id) DO NOTHING
+                """, ct);
+            if (written > 0 && events is { Enabled: true })
+            {
+                var request = await (from i in db.DeliveryItems
+                                     join r in db.Requests on new { i.TenantId, Id = i.RequestId } equals new { r.TenantId, r.Id }
+                                     join x in db.Recipients on new { i.TenantId, Id = i.RecipientId } equals new { x.TenantId, Id = x.Id }
+                                     where i.TenantId == tenantId && i.DeliveryId == item.DeliveryId
+                                     select new { Request = r, x.NotificationId }).AsNoTracking().FirstAsync(ct);
+                await events.RaiseAsync(db, tenantId, request.Request.ApplicationId, app => new Events.NotificationEvent
+                {
+                    Event = Events.ProducerEventNames.Interaction, Application = app, NotificationTenantId = tenantId, CorrelationKey = request.Request.CorrelationKey,
+                    NotificationId = request.NotificationId, RequestId = request.Request.Id, Type = request.Request.TypeKey, ItemId = item.Id,
+                    SubscriberId = item.SubscriberId, Kind = kind, ActionId = actionId.Length > 0 ? actionId : null, OccurredAt = now,
+                }, ct);
+                await db.SaveChangesAsync(ct);
+            }
+            await transaction.CommitAsync(ct);
         }
 
         /// <summary>Marks every unread open item read, in one group or all; the answer is how many.</summary>
@@ -96,18 +194,30 @@ namespace Juice.Notifications.Inbox
 
     public sealed class PersonInboxReader(NotificationsDbContext db, DisplayGroupCatalog catalog, TimeProvider clock)
     {
-        internal static InboxItemView View(InboxItem i, Correlation? c)
+        internal static InboxItemView View(InboxItem i, Correlation? c, IReadOnlyList<InboxInteractionView>? interactions = null)
             => new(i.Id, i.TypeKey, i.GroupKey, i.Title, i.Body, i.Url, i.Actions is null ? null : JsonElement.Parse(i.Actions), i.Actionable, i.Priority,
-                i.CreatedAt, i.ReadAt, i.ArchivedAt, c is null ? null : new InboxCorrelationView(c.State, c.Outcome, c.AcknowledgedBy, c.ResolvedAt));
+                i.CreatedAt, i.ReadAt, i.ArchivedAt, c is null ? null : new InboxCorrelationView(c.State, c.Outcome, c.AcknowledgedBy, c.ResolvedAt),
+                interactions ?? []);
 
         /// <summary>The items, with their correlations, newest first.</summary>
         internal static async Task<List<InboxItemView>> ViewsAsync(NotificationsDbContext db, IQueryable<InboxItem> items, CancellationToken ct)
-            => (await (from i in items
-                       join c in db.Correlations on new { i.TenantId, Id = i.CorrelationId } equals new { c.TenantId, Id = (Guid?)c.Id } into correlations
-                       from c in correlations.DefaultIfEmpty()
-                       orderby i.Id descending
-                       select new { Item = i, Correlation = c }).AsNoTracking().ToListAsync(ct))
-                .Select(x => View(x.Item, x.Correlation)).ToList();
+        {
+            var rows = await (from i in items
+                              join c in db.Correlations on new { i.TenantId, Id = i.CorrelationId } equals new { c.TenantId, Id = (Guid?)c.Id } into correlations
+                              from c in correlations.DefaultIfEmpty()
+                              orderby i.Id descending
+                              select new { Item = i, Correlation = c }).AsNoTracking().ToListAsync(ct);
+            if (rows.Count == 0)
+            {
+                return [];
+            }
+            var tenant = rows[0].Item.TenantId;
+            var ids = rows.Select(r => r.Item.Id).ToList();
+            var interactions = (await db.Interactions.AsNoTracking().Where(x => x.TenantId == tenant && ids.Contains(x.InboxItemId)).OrderBy(x => x.At)
+                    .Select(x => new { x.InboxItemId, x.Kind, x.ActionId, x.At }).ToListAsync(ct))
+                .ToLookup(x => x.InboxItemId, x => new InboxInteractionView(x.Kind, x.ActionId.Length > 0 ? x.ActionId : null, x.At));
+            return rows.Select(x => View(x.Item, x.Correlation, interactions[x.Item.Id].ToList())).ToList();
+        }
 
         /// <summary>Actionable and open (design §7.3): actionable, and its correlation (if any) still open or acknowledged.</summary>
         private IQueryable<InboxItem> ActionableOpen(IQueryable<InboxItem> items)

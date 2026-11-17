@@ -62,7 +62,8 @@ namespace Juice.Notifications.Correlations
     /// Acknowledge, resolve and cancel (design §5.3), for the producer's own correlations (D5). Not mediator commands: the state change and the
     /// cancelling of everything still due are one transaction, and bulk statements, which a command's handler can't run inside its transaction.
     /// </summary>
-    public sealed class CorrelationLifecycle(NotificationsDbContext db, TimeProvider clock, IInboxEvents inbox, ILogger<CorrelationLifecycle> logger)
+    public sealed class CorrelationLifecycle(NotificationsDbContext db, TimeProvider clock, IInboxEvents inbox, Events.ProducerEvents events,
+        ILogger<CorrelationLifecycle> logger)
     {
         public Task<Outcome<CorrelationView>> AcknowledgeAsync(Guid tenantId, Guid applicationId, string key, string? by, CancellationToken ct)
             => ChangeAsync(tenantId, applicationId, key, by, null, ct, (c, now) => c.State switch
@@ -138,6 +139,19 @@ namespace Juice.Notifications.Correlations
                     return Outcome<CorrelationView>.Ok(await ViewAsync(db, correlation, ct));
                 }
                 correlation.UpdatedAt = now;
+                // The producer hears it (phase-3-plan I37), committed with the change.
+                var state = correlation.State;
+                await events.RaiseAsync(db, tenantId, applicationId, app => new Events.NotificationEvent
+                {
+                    Event = state switch
+                    {
+                        CorrelationState.Acknowledged => Events.ProducerEventNames.CorrelationAcknowledged,
+                        CorrelationState.Resolved => Events.ProducerEventNames.CorrelationResolved,
+                        _ => Events.ProducerEventNames.CorrelationCancelled,
+                    },
+                    Application = app, NotificationTenantId = tenantId, CorrelationKey = key, State = CorrelationLimits.Name(state),
+                    By = state == CorrelationState.Acknowledged ? correlation.AcknowledgedBy : correlation.ResolvedBy, Outcome = correlation.Outcome, OccurredAt = now,
+                }, ct);
                 // The row version: a request accepted at this moment (which touches it) and this change can't both commit.
                 await db.SaveChangesAsync(ct);
                 if (result == Change.Acknowledges)

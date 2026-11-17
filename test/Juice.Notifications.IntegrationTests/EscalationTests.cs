@@ -128,7 +128,7 @@ namespace Juice.Notifications.IntegrationTests
         private async Task AcknowledgeAsync(string key)
         {
             await using var db = _database.Context();
-            var lifecycle = new CorrelationLifecycle(db, _clock, new NoInboxEvents(), NullLogger<CorrelationLifecycle>.Instance);
+            var lifecycle = new CorrelationLifecycle(db, _clock, new NoInboxEvents(), _services!.GetRequiredService<Events.ProducerEvents>(), NullLogger<CorrelationLifecycle>.Instance);
             Assert.Equal(OutcomeKind.Ok, (await lifecycle.AcknowledgeAsync(Tenant, _seed.App, key, "eve", Ct)).Kind);
         }
 
@@ -174,7 +174,7 @@ namespace Juice.Notifications.IntegrationTests
             await DrainAsync<Notification, PlannerStage>("planner");
             await using (var db = _database.Context())
             {
-                var lifecycle = new CorrelationLifecycle(db, _clock, new NoInboxEvents(), NullLogger<CorrelationLifecycle>.Instance);
+                var lifecycle = new CorrelationLifecycle(db, _clock, new NoInboxEvents(), _services!.GetRequiredService<Events.ProducerEvents>(), NullLogger<CorrelationLifecycle>.Instance);
                 Assert.Equal(OutcomeKind.Ok, (await lifecycle.ResolveAsync(Tenant, _seed.App, key, "fixed", "eve", Ct)).Kind);
             }
             var escalation = await EscalationAsync(id);

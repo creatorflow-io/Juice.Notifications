@@ -16,7 +16,7 @@ namespace Juice.Notifications.Workflows
     /// reached, and sends the rest at once. The next step is due after its own wait; past the last, the escalation is exhausted. A step that
     /// reaches nobody is due again at once (the planner says so), so the next one runs without its wait.
     /// </summary>
-    public sealed class EscalationStage(ILogger<EscalationStage> logger) : IStage<Escalation>
+    public sealed class EscalationStage(ILogger<EscalationStage> logger, Events.ProducerEvents? events = null) : IStage<Escalation>
     {
         public const string StageName = "escalation";
 
@@ -59,7 +59,7 @@ namespace Juice.Notifications.Workflows
             var steps = EscalationRules.Read(policy.Steps);
             if (row.NextStep >= steps.Count)
             {
-                Exhaust(context, row);
+                await ExhaustAsync(context, row, steps.Count, ct);
                 return;
             }
             var notification = await db.Notifications.SingleAsync(n => n.TenantId == row.TenantId && n.Id == row.NotificationId, ct);
@@ -85,7 +85,7 @@ namespace Juice.Notifications.Workflows
             row.UpdatedAt = now;
             if (row.NextStep >= steps.Count)
             {
-                Exhaust(context, row);
+                await ExhaustAsync(context, row, steps.Count, ct);
             }
             else
             {
@@ -101,11 +101,25 @@ namespace Juice.Notifications.Workflows
             context.Done(row, null);
         }
 
-        private void Exhaust(StageContext context, Escalation row)
+        /// <summary>Past its last step: done, and the producer hears it (<c>escalation.exhausted</c>, design §5.4), saved with the step.</summary>
+        private async Task ExhaustAsync(StageContext context, Escalation row, int steps, CancellationToken ct)
         {
             (row.State, row.UpdatedAt) = (EscalationState.Exhausted, context.Now);
             logger.LogInformation("Escalation {Escalation} in tenant {Tenant} ran its last step", row.Id, row.TenantId);
             context.Done(row, null);
+            if (events is { Enabled: true })
+            {
+                var request = await (from n in context.Db.Notifications
+                                     join q in context.Db.Requests on new { n.TenantId, Id = n.RequestId } equals new { q.TenantId, q.Id }
+                                     where n.TenantId == row.TenantId && n.Id == row.NotificationId
+                                     select q).AsNoTracking().SingleAsync(ct);
+                await events.RaiseAsync(context.Db, row.TenantId, request.ApplicationId, app => new Events.NotificationEvent
+                {
+                    Event = Events.ProducerEventNames.EscalationExhausted, Application = app, NotificationTenantId = row.TenantId,
+                    CorrelationKey = request.CorrelationKey, NotificationId = row.NotificationId, RequestId = request.Id, Type = request.TypeKey, Steps = steps,
+                    OccurredAt = context.Now,
+                }, ct);
+            }
         }
     }
 }

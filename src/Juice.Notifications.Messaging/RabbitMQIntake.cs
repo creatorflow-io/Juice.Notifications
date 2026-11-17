@@ -90,6 +90,11 @@ namespace Juice.Notifications.Messaging
         public static IServiceCollection AddNotificationsRabbitMQIntake(this IServiceCollection services, IConfiguration configuration)
         {
             var options = configuration.GetSection(RabbitMQIntakeOptions.Section).Get<RabbitMQIntakeOptions>() ?? new RabbitMQIntakeOptions();
+            var events = configuration.GetSection(Events.EventsOptions.Section).Get<Events.EventsOptions>() ?? new Events.EventsOptions();
+            if (events.Enabled && !options.Enabled)
+            {
+                throw new InvalidOperationException("Events:Enabled needs the RabbitMQ intake (Intake:RabbitMQ:Enabled): events go to producers over its broker.");
+            }
             if (!options.Enabled)
             {
                 return services;
@@ -110,7 +115,19 @@ namespace Juice.Notifications.Messaging
                     c.UserName = options.UserName;
                     c.Password = options.Password;
                 });
-                rabbit.AddInfrastructureTopology(ConnectionName, topology => Declare(topology, options));
+                rabbit.AddInfrastructureTopology(ConnectionName, topology =>
+                {
+                    Declare(topology, options);
+                    if (events.Enabled)
+                    {
+                        // Producers bind their own queues to {app}.# (design §19 decision 12): the service only publishes.
+                        topology.DeclareExchange(events.Exchange, ExchangeType.Topic);
+                    }
+                });
+                if (events.Enabled)
+                {
+                    rabbit.AddProducer(Events.EventsRouting.Publisher, ConnectionName, producer => producer.DefaultExchange(events.Exchange));
+                }
                 rabbit.AddConsumer(ConsumerKey, options.Queue, ConnectionName, consumer => consumer
                     .ConfigureQos(options.Prefetch)
                     .ParkAfter(options.ParkAfterAttempts, options.ParkedName)

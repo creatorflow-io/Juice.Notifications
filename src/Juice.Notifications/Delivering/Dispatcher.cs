@@ -27,9 +27,53 @@ namespace Juice.Notifications.Delivering
     /// turns out to have lost its lease (§11).
     /// </summary>
     public sealed class DispatcherStage(IEnumerable<INotificationProvider> providers, IChannelRegistry channels, IOptions<DeliveryOptions> options, IServiceScopeFactory scopes,
-        ILogger<DispatcherStage> logger, People.ContactCrypto crypto, TimeProvider? clock = null) : IStage<Delivery>
+        ILogger<DispatcherStage> logger, People.ContactCrypto crypto, Events.ProducerEvents? events = null, TimeProvider? clock = null) : IStage<Delivery>
     {
         public string Name => DeliveryStageNames.Dispatcher;
+
+        /// <summary>
+        /// The step, then <c>delivery.failed</c> for each recipient whose every destination has now failed (design §5.4, phase-3-plan I37): this
+        /// delivery failed, and none of theirs went out or is still to go. Saved with the step.
+        /// </summary>
+        public async Task ExecuteAsync(StageContext context, Delivery row, CancellationToken ct)
+        {
+            var before = row.Status;
+            await SendAsync(context, row, ct);
+            if (events is { Enabled: true } && row.Status == DeliveryStatus.Failed && before != DeliveryStatus.Failed)
+            {
+                await FailedAsync(context, row, ct);
+            }
+        }
+
+        private async Task FailedAsync(StageContext context, Delivery row, CancellationToken ct)
+        {
+            var db = context.Db;
+            var recipients = await (from item in db.DeliveryItems
+                                    join r in db.Recipients on new { item.TenantId, Id = item.RecipientId } equals new { r.TenantId, r.Id }
+                                    join n in db.Notifications on new { r.TenantId, Id = r.NotificationId } equals new { n.TenantId, n.Id }
+                                    join q in db.Requests on new { n.TenantId, Id = n.RequestId } equals new { q.TenantId, q.Id }
+                                    where item.TenantId == row.TenantId && item.DeliveryId == row.Id
+                                    select new { Recipient = r, Request = q }).AsNoTracking().ToListAsync(ct);
+            DeliveryStatus[] ended = [DeliveryStatus.Failed, DeliveryStatus.Bounced, DeliveryStatus.Expired, DeliveryStatus.Cancelled];
+            foreach (var x in recipients)
+            {
+                var others = await (from item in db.DeliveryItems
+                                    join d in db.Deliveries on new { item.TenantId, Id = item.DeliveryId } equals new { d.TenantId, d.Id }
+                                    where item.TenantId == row.TenantId && item.RecipientId == x.Recipient.Id && d.Id != row.Id
+                                    select new { d.Status, d.Channel }).AsNoTracking().ToListAsync(ct);
+                if (others.Any(o => !ended.Contains(o.Status)))
+                {
+                    continue; // another destination went out or may still
+                }
+                var channels = others.Select(o => o.Channel).Append(row.Channel).Distinct().Order(StringComparer.Ordinal).ToList();
+                await events!.RaiseAsync(db, row.TenantId, x.Request.ApplicationId, app => new Events.NotificationEvent
+                {
+                    Event = Events.ProducerEventNames.DeliveryFailed, Application = app, NotificationTenantId = row.TenantId, CorrelationKey = x.Request.CorrelationKey,
+                    NotificationId = x.Recipient.NotificationId, RequestId = x.Request.Id, Type = x.Request.TypeKey, RecipientId = x.Recipient.Id,
+                    SubscriberId = x.Recipient.SubscriberId, NamedAs = x.Recipient.NamedAs, Channels = channels, OccurredAt = context.Now,
+                }, ct);
+            }
+        }
 
         /// <summary>
         /// The step itself kept failing (not a send: those are attempts): failed, visible in history and replayable. Unless a send already
@@ -52,7 +96,7 @@ namespace Juice.Notifications.Delivering
             Finish(context, row, DeliveryStatus.Failed, null, "The dispatcher failed repeatedly on this delivery: " + error, context.Now);
         }
 
-        public async Task ExecuteAsync(StageContext context, Delivery row, CancellationToken ct)
+        private async Task SendAsync(StageContext context, Delivery row, CancellationToken ct)
         {
             var db = context.Db;
             if (row.Status is not (DeliveryStatus.Pending or DeliveryStatus.Retrying))

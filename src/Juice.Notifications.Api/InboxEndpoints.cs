@@ -28,6 +28,12 @@ namespace Juice.Notifications.Api
                 => ChangedAsync(tenantId, http, events, editor.ArchiveAsync(tenantId, MeEndpoints.Me(http), id, true, ct)));
             me.MapDelete("/inbox/{id:guid}/archive", (Guid tenantId, Guid id, HttpContext http, PersonInboxEditor editor, IInboxEvents events, CancellationToken ct)
                 => ChangedAsync(tenantId, http, events, editor.ArchiveAsync(tenantId, MeEndpoints.Me(http), id, false, ct)));
+            // An item's action, or its acknowledgement: interactions the producer hears (phase-3-plan M23, design §19 decision 13).
+            me.MapPost("/inbox/{id:guid}/actions/{actionId}", (Guid tenantId, Guid id, string actionId, HttpContext http, PersonInboxEditor editor, IInboxEvents events,
+                CancellationToken ct)
+                => ChangedAsync(tenantId, http, events, editor.ActAsync(tenantId, MeEndpoints.Me(http), id, actionId, ct)));
+            me.MapPost("/inbox/{id:guid}/acknowledge", (Guid tenantId, Guid id, HttpContext http, PersonInboxEditor editor, IInboxEvents events, CancellationToken ct)
+                => ChangedAsync(tenantId, http, events, editor.AcknowledgeAsync(tenantId, MeEndpoints.Me(http), id, ct)));
             me.MapPost("/inbox/read-all", async (Guid tenantId, string? group, HttpContext http, PersonInboxEditor editor, IInboxEvents events, CancellationToken ct) =>
             {
                 var person = MeEndpoints.Me(http);
@@ -109,7 +115,8 @@ namespace Juice.Notifications.Api
 
         internal static InboxItemResponse ToResponse(InboxItemView i)
             => new(i.Id, i.Type, i.Group, i.Title, i.Body, i.Url, i.Actions, i.Actionable, i.Priority, i.CreatedAt, i.ReadAt, i.ArchivedAt,
-                i.Correlation is { } c ? new InboxCorrelationResponse(c.State, c.Outcome, c.AcknowledgedBy, c.ResolvedAt) : null);
+                i.Correlation is { } c ? new InboxCorrelationResponse(c.State, c.Outcome, c.AcknowledgedBy, c.ResolvedAt) : null,
+                i.Interactions?.Select(x => new InboxInteractionResponse(x.Kind, x.ActionId, x.At)).ToList() ?? []);
 
         private static InboxCountsResponse ToResponse(InboxCounts c)
             => new(c.Groups.Select(g => new InboxGroupCountResponse(g.Key, g.Name, g.Position, g.Open, g.Unread)).ToList(), c.Unread, c.ActionableOpen);

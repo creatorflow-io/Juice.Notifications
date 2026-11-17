@@ -1359,6 +1359,62 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasAnnotation("Juice:Auditable", true);
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.Interaction", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ActionId")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("action_id");
+
+                    b.Property<DateTimeOffset>("At")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("at");
+
+                    b.Property<Guid?>("CorrelationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<Guid>("DeliveryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("delivery_id");
+
+                    b.Property<Guid>("InboxItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("inbox_item_id");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("kind");
+
+                    b.Property<Guid>("SubscriberId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subscriber_id");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_interactions");
+
+                    b.HasIndex("TenantId", "CorrelationId")
+                        .HasDatabaseName("ix_interactions_correlation")
+                        .HasFilter("correlation_id IS NOT NULL");
+
+                    b.HasIndex("TenantId", "InboxItemId", "Kind", "ActionId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_interactions_once");
+
+                    b.ToTable("interactions", "notifications");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.LocalGroup", b =>
                 {
                     b.Property<Guid>("TenantId")
@@ -1970,6 +2026,44 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.ToTable("preferences", "notifications");
 
                     b.HasAnnotation("Juice:Auditable", true);
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.ProducerEvent", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ApplicationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("application_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Event")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("event");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_producer_events");
+
+                    b.HasIndex("CreatedAt", "Id")
+                        .HasDatabaseName("ix_producer_events_order");
+
+                    b.ToTable("producer_events", "notifications");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.RecipientResolverConfig", b =>
@@ -2633,6 +2727,16 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_integration_targets_integrations_tenant_id_integration_id");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.Interaction", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.InboxItem", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "InboxItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_interactions_inbox_items_tenant_id_inbox_item_id");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.LocalGroupMember", b =>

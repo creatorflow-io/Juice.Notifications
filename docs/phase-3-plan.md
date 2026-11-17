@@ -163,6 +163,20 @@ tests, a commit and a build-board update.
   `@juice-js/notifications` action buttons and correlation state.
 - Tests: an action is one interaction and one event however often it's clicked; an application's broker user can't bind another's events;
   `delivery.failed` and `recipient.unresolved` are published once.
+- *As built:* `interactions` (item, delivery, correlation, person, kind `read` | `acknowledged` | `action`, action id; unique per item, kind
+  and action): `POST me/inbox/{id}/actions/{actionId}` (an action the item has; it reads the item) and `POST me/inbox/{id}/acknowledge`,
+  both refused with 409 `correlation_closed` once decided; the first read is an interaction too. Items list the person's interactions.
+  Events: raised as `producer_events` rows saved with the change that raised them (a stage step's save; the correlation and inbox
+  transactions), not through the outbox directly, since the outbox saves the whole context and a stage step's save is the stage's own;
+  `ProducerEventRelay` moves them into the outbox in batches (`FOR UPDATE SKIP LOCKED`, so replicas share it), and the outbox publishes
+  them on the `events` route: RabbitMQ, topic exchange `Events:Exchange` (`juice.notifications.events`), declared with the intake's
+  topology on its connection; the routing key is the event's name, `{application}.notification.{event}` (Juice uses `IEvent.EventName`).
+  `NotificationEvent` carries the event id (its message id, UUIDv7), application, tenant, correlation key, notification, request and type,
+  and the event's own fields. Raised: `interaction`, `correlation.acknowledged|resolved|cancelled`, `escalation.exhausted`,
+  `recipient.unresolved` (the planner's `ResolverUnavailable` names), and `delivery.failed` (a delivery failed and every other one of
+  the recipient's ended without success). Only with `Events:Enabled` (which needs the RabbitMQ intake) and for applications with a
+  `brokerUser`. Topic permissions are the deployment's (README: Events to producers). `@juice-js/notifications`: action buttons while
+  the correlation is open, the chosen one marked, the outcome once decided (juice-layout e83bbfd).
 
 ### M24: proof points and acceptance (`p3-g1` … `p3-g3`)
 

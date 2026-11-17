@@ -185,6 +185,39 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(3, (await ItemsAsync(ann, type, 3)).Count(i => i.Correlation!.State == CorrelationState.Open));
         }
 
+        /// <summary>
+        /// Inbox actions (phase-3-plan M23, design §19 decision 13): an action is one interaction however often it's chosen, an action the type
+        /// doesn't declare is not found, and once the correlation is closed it's refused. The item lists the person's own interactions.
+        /// </summary>
+        [Fact]
+        public async Task An_action_is_one_interaction_and_is_refused_once_decided()
+        {
+            LocalStack.RequireAvailable();
+            var (ann, annMe) = await PersonAsync("ann");
+            using var _ = ann;
+            var type = await TypeAsync(actions: """[{ "id": "approve", "label": "Approve" }, { "id": "reject", "label": "Reject" }]""");
+            var key = Key();
+            await SendAsync(type, Crew(annMe), key);
+            var item = Assert.Single(await ItemsAsync(ann, type, 1));
+            var actions = $"{Tenant}/me/inbox/{item.Id}/actions";
+
+            var acted = await OkAsync<InboxItemResponse>(ann.PostAsync($"{actions}/approve", null, Ct));
+            await OkAsync<InboxItemResponse>(ann.PostAsync($"{actions}/approve", null, Ct));
+            Assert.NotNull(acted.ReadAt);
+            Assert.Equal(["action:approve", "read"], acted.Interactions!.Select(i => i.ActionId is null ? i.Kind : $"{i.Kind}:{i.ActionId}").Order());
+            await using (var db = people.App.Database.Context())
+            {
+                Assert.Equal(1, await db.Interactions.CountAsync(i => i.InboxItemId == item.Id && i.Kind == "action", Ct));
+            }
+            Assert.Equal(HttpStatusCode.NotFound, (await ann.PostAsync($"{actions}/delete", null, Ct)).StatusCode);
+            await OkAsync<InboxItemResponse>(ann.PostAsync($"{Tenant}/me/inbox/{item.Id}/acknowledge", null, Ct));
+
+            using var producer = people.App.Client(await LocalStack.ProducerTokenAsync());
+            await OkAsync<CorrelationResponse>(producer.PostAsJsonAsync($"{Tenant}/correlations/{Uri.EscapeDataString(key)}/resolve",
+                new ResolveCorrelationBody("Approved", "ann"), Ct));
+            Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.CorrelationClosed), await ProblemAsync(ann.PostAsync($"{actions}/reject", null, Ct)));
+        }
+
         [Fact]
         public async Task An_unknown_key_is_not_found_and_a_bad_body_is_refused_at_the_field()
         {

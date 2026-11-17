@@ -62,6 +62,8 @@ namespace Juice.Notifications.Data
         public DbSet<Correlation> Correlations => Set<Correlation>();
         public DbSet<Digest> Digests => Set<Digest>();
         public DbSet<EscalationPolicy> EscalationPolicies => Set<EscalationPolicy>();
+        public DbSet<ProducerEvent> ProducerEvents => Set<ProducerEvent>();
+        public DbSet<Interaction> Interactions => Set<Interaction>();
         public DbSet<Escalation> Escalations => Set<Escalation>();
         public DbSet<InboxItem> InboxItems => Set<InboxItem>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
@@ -469,6 +471,26 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Version).IsRowVersion();
                 e.HasIndex(x => new { x.TenantId, x.ApplicationId, x.Key }).IsUnique().HasDatabaseName(Constraints.CorrelationKey);
                 e.HasOne<ApplicationTenant>().WithMany().HasForeignKey(x => new { x.ApplicationId, x.TenantId }).OnDelete(DeleteBehavior.Restrict);
+            });
+
+            model.Entity<ProducerEvent>(e =>
+            {
+                e.ToTable("producer_events");
+                TenantKey(e);
+                e.Property(x => x.Event).HasMaxLength(40);
+                e.Property(x => x.Payload).HasColumnType("jsonb");
+                e.HasIndex(x => new { x.CreatedAt, x.Id }).HasDatabaseName("ix_producer_events_order");
+            });
+
+            model.Entity<Interaction>(e =>
+            {
+                e.ToTable("interactions");
+                TenantKey(e);
+                e.Property(x => x.Kind).HasMaxLength(20);
+                e.Property(x => x.ActionId).HasMaxLength(50);
+                e.HasIndex(x => new { x.TenantId, x.InboxItemId, x.Kind, x.ActionId }).IsUnique().HasDatabaseName(Constraints.InteractionOnce);
+                e.HasIndex(x => new { x.TenantId, x.CorrelationId }).HasFilter("correlation_id IS NOT NULL").HasDatabaseName("ix_interactions_correlation");
+                e.HasOne<InboxItem>().WithMany().HasForeignKey(x => new { x.TenantId, x.InboxItemId }).OnDelete(DeleteBehavior.Cascade);
             });
 
             model.Entity<EscalationPolicy>(e =>
