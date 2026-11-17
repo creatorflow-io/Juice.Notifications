@@ -71,10 +71,7 @@ namespace Juice.Notifications.Api
         public async Task<(Application? Application, IResult? Refusal)> ResolveAsync(ClaimsPrincipal user, CancellationToken ct, bool forWriting = true)
         {
             // A producer is a client acting as itself (client credentials, phase-1-plan I11), never a person signed in through that client.
-            // How a token shows that depends on the identity provider (AuthOptions.ProducerProof).
-            var azp = user.FindFirst("azp")?.Value;
-            var proof = auth.Value.ProducerProof == ProducerProofs.SubjectIsClient ? user.FindFirst("sub")?.Value : user.FindFirst("client_id")?.Value;
-            var client = azp is not null && proof == azp ? azp : null;
+            var client = ActingClient(user, auth.Value);
             // The service's own application (contact verification) is never a producer, whatever client a token names.
             var app = client is null ? null : await db.Applications.AsNoTracking()
                 .SingleOrDefaultAsync(a => a.ClientId == client && a.Key != People.ServiceTypes.ApplicationKey, ct);
@@ -88,6 +85,17 @@ namespace Juice.Notifications.Api
                 return (null, ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.ApplicationDisabled, $"The application {app.Key} is disabled."));
             }
             return (app, null);
+        }
+
+        /// <summary>
+        /// The client a token was issued to for itself (client credentials), or null for a person's token. How a token shows that depends on the
+        /// identity provider (<see cref="AuthOptions.ProducerProof"/>): producers must be one, and <c>me</c> refuses one (a service account is no person).
+        /// </summary>
+        public static string? ActingClient(ClaimsPrincipal user, AuthOptions auth)
+        {
+            var azp = user.FindFirst("azp")?.Value;
+            var proof = auth.ProducerProof == ProducerProofs.SubjectIsClient ? user.FindFirst("sub")?.Value : user.FindFirst("client_id")?.Value;
+            return azp is not null && proof == azp ? azp : null;
         }
     }
 }

@@ -56,6 +56,9 @@ namespace Juice.Notifications.Data
         public DbSet<TopicSubscription> TopicSubscriptions => Set<TopicSubscription>();
         public DbSet<Preference> Preferences => Set<Preference>();
         public DbSet<Mute> Mutes => Set<Mute>();
+        public DbSet<DisplayGroup> DisplayGroups => Set<DisplayGroup>();
+        public DbSet<TypeDisplayGroup> TypeDisplayGroups => Set<TypeDisplayGroup>();
+        public DbSet<InboxItem> InboxItems => Set<InboxItem>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
         public DbSet<Notification> Notifications => Set<Notification>();
         public DbSet<NotificationRecipient> Recipients => Set<NotificationRecipient>();
@@ -130,6 +133,8 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.DeclarationHash).HasMaxLength(64);
                 e.Property(x => x.Correlation).HasMaxLength(10);
                 e.HasIndex(x => new { x.ApplicationId, x.Key, x.Version }).IsUnique().HasDatabaseName(Constraints.TypeVersion);
+                // A type's declared display group, by key (the inbox catalog: a move, a group's delete).
+                e.HasIndex(x => new { x.Key, x.Version });
                 e.HasOne<Application>().WithMany().HasForeignKey(x => x.ApplicationId).OnDelete(DeleteBehavior.Restrict);
             });
 
@@ -359,6 +364,51 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.TenantId, x.SubscriberId }).HasFilter("cancelled_at IS NULL");
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
                     .HasConstraintName(Constraints.MuteSubscriber);
+            });
+
+            model.Entity<DisplayGroup>(e =>
+            {
+                e.ToTable("display_groups");
+                TenantKey(e);
+                e.Property(x => x.Key).HasMaxLength(63);
+                e.Property(x => x.Name).HasMaxLength(100);
+                // The key the catalog's references name (a type's chosen group), so one unique constraint, not an index beside it.
+                e.HasAlternateKey(x => new { x.TenantId, x.Key }).HasName(Constraints.DisplayGroupKey);
+            });
+
+            model.Entity<TypeDisplayGroup>(e =>
+            {
+                e.ToTable("type_display_groups");
+                TenantKey(e);
+                e.Property(x => x.TypeKey).HasMaxLength(200);
+                e.Property(x => x.GroupKey).HasMaxLength(63);
+                e.HasIndex(x => new { x.TenantId, x.TypeKey }).IsUnique().HasDatabaseName(Constraints.TypeDisplayGroupKey);
+                // The group must exist: a move racing the group's delete fails rather than pointing at nothing.
+                e.HasOne<DisplayGroup>().WithMany().HasPrincipalKey(g => new { g.TenantId, g.Key }).HasForeignKey(x => new { x.TenantId, x.GroupKey })
+                    .OnDelete(DeleteBehavior.Restrict).HasConstraintName(Constraints.TypeDisplayGroupGroup);
+            });
+
+            model.Entity<InboxItem>(e =>
+            {
+                e.ToTable("inbox_items");
+                TenantKey(e);
+                e.Property(x => x.TypeKey).HasMaxLength(200);
+                e.Property(x => x.GroupKey).HasMaxLength(63);
+                e.Property(x => x.Title).HasMaxLength(250);
+                e.Property(x => x.Body).HasMaxLength(4000);
+                e.Property(x => x.Url).HasMaxLength(2000);
+                e.Property(x => x.Actions).HasColumnType("jsonb");
+                e.Property(x => x.Priority).HasConversion<string>().HasMaxLength(20);
+                // One item per delivery: a repeated send (a retry after the item was written) writes nothing.
+                e.HasIndex(x => new { x.TenantId, x.DeliveryId }).IsUnique().HasDatabaseName(Constraints.InboxItemDelivery);
+                // A person's open items, newest first, by group; and their unread counts.
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId, x.GroupKey, x.Id }).HasFilter("archived_at IS NULL").HasDatabaseName("ix_inbox_items_open");
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId, x.Id }).HasDatabaseName("ix_inbox_items_person");
+                // A type moved, or a group deleted: its open items.
+                e.HasIndex(x => new { x.TenantId, x.TypeKey }).HasFilter("archived_at IS NULL").HasDatabaseName("ix_inbox_items_type");
+                e.HasIndex(x => new { x.TenantId, x.GroupKey }).HasFilter("archived_at IS NULL").HasDatabaseName("ix_inbox_items_group");
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade);
+                e.HasOne<Delivery>().WithMany().HasForeignKey(x => new { x.TenantId, x.DeliveryId }).OnDelete(DeleteBehavior.Cascade);
             });
 
             model.Entity<NotificationRequest>(e =>

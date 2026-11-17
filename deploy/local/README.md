@@ -10,6 +10,7 @@ can run at once.
 | RabbitMQ | `rabbitmq:4.1.4-management-alpine` | `localhost:5673`, UI http://localhost:15673 | M2 |
 | Mailpit | `axllent/mailpit:v1.27.10` | SMTP `localhost:1026`, UI http://localhost:8026 | M6 |
 | Audit host | built from `audit/` (Juice.Audit 10.6.1) | gRPC `localhost:5285` (h2c); records in schema `audit` of database `notifications` | p1-09 |
+| Redis | `redis:7.4.2-alpine` | `localhost:6380` | M15: the inbox hub's SignalR backplane (`Inbox:SignalR:Redis`), for the two-replica test |
 
 ## Audit records and provisioning
 
@@ -75,9 +76,11 @@ Contact addresses and device tokens are encrypted at rest under `NOTIFICATIONS_C
 | `notifications-admin` | client credentials | `notifications-platform-admin` | register applications, link tenants |
 | `sample-producer` | client credentials | none | send notifications as an application (from M2) |
 | `tenant-admin` | client credentials | `notifications-tenant-admin`, `platform_tenant` = `0193f0aa-0000-7000-8000-0000000000a1` | configure that one tenant's delivery (the tests' tenant) |
+| `people-test` | password (public client) | none, `platform_tenant` = `0193f0aa-0000-7000-8000-0000000000a1` | sign in the person accounts `ann` and `ben` (password `PEOPLE_TEST_PASSWORD`) for the person's API, `me`, which refuses a client's own token |
 
 Producers must authenticate as their client: the API accepts a producer token only when its `client_id` claim (set by the `juice-notifications`
-scope on client-credentials tokens only) equals its `azp`. A stack created before 11 Nov 2026 lacks that mapper and the `tenant-admin` client, because Keycloak imports the realm only into an
+scope on client-credentials tokens only) equals its `azp`. A stack created before 11 Nov 2026 lacks that mapper and the `tenant-admin` client, and one
+created before 17 Nov 2026 lacks `people-test`, `ann` and `ben`, because Keycloak imports the realm only into an
 empty volume. Bring it up to date (safe to repeat):
 
 ```bash

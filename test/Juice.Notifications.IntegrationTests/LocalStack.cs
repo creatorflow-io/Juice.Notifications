@@ -58,6 +58,34 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
 
+        private static readonly Lazy<bool> RedisUp = new(() =>
+        {
+            try
+            {
+                using var tcp = new System.Net.Sockets.TcpClient();
+                return tcp.ConnectAsync("127.0.0.1", RedisPort).Wait(TimeSpan.FromSeconds(2)) && tcp.Connected;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        });
+
+        public const int RedisPort = 6380;
+
+        /// <summary>The stack's Redis, for the inbox hub's backplane (phase-2-plan M15).</summary>
+        public static string Redis => $"127.0.0.1:{RedisPort}";
+
+        /// <summary>Skips the calling test when the stack or its Redis isn't up (a stack created before M15 has none: docker compose up -d --wait).</summary>
+        public static void RequireRedis()
+        {
+            RequireAvailable();
+            if (!RedisUp.Value)
+            {
+                Assert.Skip("The local stack has no Redis on " + Redis + ": docker compose up -d --wait.");
+            }
+        }
+
         public static string Secret(string name) => Env.Value[name];
 
         public static string ServerConnectionString(string database)
@@ -79,6 +107,22 @@ namespace Juice.Notifications.IntegrationTests
         public static Task<string> AdminTokenAsync() => TokenAsync("notifications-admin", "NOTIFICATIONS_ADMIN_CLIENT_SECRET");
 
         public static Task<string> ProducerTokenAsync() => TokenAsync("sample-producer", "SAMPLE_PRODUCER_CLIENT_SECRET");
+
+        /// <summary>
+        /// A person's token (the realm's person accounts <c>ann</c> and <c>ben</c>, signed in through <c>people-test</c>), a member of
+        /// <see cref="ProducerApp.Tenant"/>: the person's API (<c>me</c>) refuses a client's own token.
+        /// </summary>
+        public static async Task<string> PersonTokenAsync(string username = "ann")
+        {
+            using var http = new HttpClient();
+            using var response = await http.PostAsync("http://127.0.0.1:8081/realms/juice/protocol/openid-connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["grant_type"] = "password", ["client_id"] = "people-test", ["username"] = username, ["password"] = Secret("PEOPLE_TEST_PASSWORD"),
+            }));
+            response.EnsureSuccessStatusCode();
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            return body.GetProperty("access_token").GetString()!;
+        }
 
         /// <summary>An admin of <see cref="ProducerApp.Tenant"/> only (the realm's tenant-admin client).</summary>
         public static Task<string> TenantAdminTokenAsync() => TokenAsync("tenant-admin", "TENANT_ADMIN_CLIENT_SECRET");

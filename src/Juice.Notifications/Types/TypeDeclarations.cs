@@ -14,7 +14,7 @@ namespace Juice.Notifications.Types
     /// </summary>
     public sealed record TypeDeclaration(
         string? Key, string? Name, string? Category, string? DisplayGroup, string? Priority, bool? Mandatory, bool? ExternalRecipients,
-        JsonElement? Schema, string? Correlation, IReadOnlyList<string>? Redact, JsonElement? Workflow, JsonElement? Templates);
+        JsonElement? Schema, string? Correlation, IReadOnlyList<string>? Redact, JsonElement? Workflow, JsonElement? Templates, JsonElement? Actions = null);
 
     /// <summary>Declares a version of a type for <paramref name="ApplicationKey"/>: the same declaration as the latest returns it; anything else adds one.</summary>
     public sealed record DeclareType(Guid ApplicationId, string ApplicationKey, TypeDeclaration Declaration) : MessageBase, IRequest<Outcome<TypeVersionView>>;
@@ -36,13 +36,13 @@ namespace Juice.Notifications.Types
     public sealed record TypeVersionDetail(
         string Key, int Version, string Name, string Category, string DisplayGroup, NotificationPriority Priority, bool Mandatory, bool ExternalRecipients,
         string Correlation, IReadOnlyList<string> Redact, JsonElement Schema, JsonElement Workflow,
-        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Templates, string SchemaHash, DateTimeOffset CreatedAt);
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Templates, string SchemaHash, DateTimeOffset CreatedAt, JsonElement? Actions = null);
 
     /// <summary>A declaration that passed the rules, with every default filled in.</summary>
     internal sealed record CheckedType(
         string Key, string Name, string Category, string DisplayGroup, NotificationPriority Priority, bool Mandatory, bool ExternalRecipients,
         string Correlation, IReadOnlyList<string> Redact, JsonElement Schema, string Workflow,
-        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Templates)
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Templates, string? Actions = null)
     {
         /// <summary>Where each (channel, stored locale) template was in the declaration, as sent: the pointer for errors found later.</summary>
         public IReadOnlyDictionary<(string Channel, string Locale), string> Pointers { get; init; } = new Dictionary<(string, string), string>();
@@ -56,7 +56,8 @@ namespace Juice.Notifications.Types
                 // A template can have later versions (edited after the declaration); the latest of each is the current one.
                 templates.GroupBy(t => t.Channel).ToDictionary(g => g.Key,
                     g => (IReadOnlyDictionary<string, string>)g.GroupBy(t => t.Locale).Select(l => l.MaxBy(t => t.Version)!)
-                        .ToDictionary(t => t.Locale, t => t.Engine == TemplateEngines.Passthrough ? TemplateEngines.Passthrough : t.Body)));
+                        .ToDictionary(t => t.Locale, t => t.Engine == TemplateEngines.Passthrough ? TemplateEngines.Passthrough : t.Body)),
+                type.Actions);
         }
 
         /// <summary>The whole declaration, canonical: equal declarations, however written, hash alike.</summary>
@@ -79,6 +80,11 @@ namespace Juice.Notifications.Types
                 ["redact"] = new JsonArray([.. Redact.Select(r => (JsonNode)r)]), ["schema"] = JsonNode.Parse(Schema.GetRawText()),
                 ["workflow"] = JsonNode.Parse(Workflow), ["templates"] = templates,
             };
+            if (Actions is not null)
+            {
+                // Only when declared, so a declaration from before actions existed hashes as it did.
+                node["actions"] = JsonNode.Parse(Actions);
+            }
             return CanonicalJson.Hash(JsonSerializer.SerializeToElement(node));
         }
     }
@@ -177,13 +183,71 @@ namespace Juice.Notifications.Types
             }
             var pointers = new Dictionary<(string, string), string>();
             var templates = CheckTemplates(d.Templates, channels, pointers, Fail);
+            var actions = CheckActions(d.Actions, Fail);
 
             if (errors.Count > 0)
             {
                 return (null, errors);
             }
             return (new CheckedType(d.Key!, name!, d.Category!, displayGroup, priority, d.Mandatory ?? false, d.ExternalRecipients ?? false, correlation,
-                [.. redact], d.Schema!.Value, SendOnlyWorkflow, templates) { Pointers = pointers }, []);
+                [.. redact], d.Schema!.Value, SendOnlyWorkflow, templates, actions) { Pointers = pointers }, []);
+        }
+
+        public const int MaxActions = 5;
+        public const int MaxActionLabel = 50;
+
+        /// <summary>A short name people read (an action's label, a display group's name): 1 to <paramref name="max"/> characters, no control characters or surrounding spaces.</summary>
+        public static bool IsLabel([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] string? text, int max)
+            => text is { Length: > 0 } && text.Length <= max && text.Trim().Length == text.Length && !text.Any(char.IsControl) && Intake.RequestRules.IsWellFormed(text);
+
+        /// <summary>
+        /// A type's inbox actions (design §7.3): up to 5 of <c>{ "id", "label" }</c>, ids distinct slugs, labels 1–50 characters. Stored canonical
+        /// (id then label); null when none are declared or the list is empty. Shown on the type's items from phase 2; acted on in phase 3.
+        /// </summary>
+        private static string? CheckActions(JsonElement? declared, Action<string, string> fail)
+        {
+            if (declared is not { } actions || actions.ValueKind == JsonValueKind.Null)
+            {
+                return null;
+            }
+            if (CanonicalJson.Unstorable(actions, "/actions") is { } unstorable)
+            {
+                fail(unstorable.Pointer, unstorable.Message);
+                return null;
+            }
+            if (actions.ValueKind != JsonValueKind.Array || actions.GetArrayLength() > MaxActions)
+            {
+                fail("/actions", $"Actions are a list of up to {MaxActions} objects: {{ \"id\": \"approve\", \"label\": \"Approve\" }}.");
+                return null;
+            }
+            var result = new JsonArray();
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            var i = 0;
+            foreach (var action in actions.EnumerateArray())
+            {
+                var at = $"/actions/{i++}";
+                if (action.ValueKind != JsonValueKind.Object || action.EnumerateObject().Any(p => p.Name is not ("id" or "label")))
+                {
+                    fail(at, "An action is an object with an id and a label, and nothing else.");
+                    continue;
+                }
+                var id = action.TryGetProperty("id", out var idValue) && idValue.ValueKind == JsonValueKind.String ? idValue.GetString() : null;
+                var label = action.TryGetProperty("label", out var labelValue) && labelValue.ValueKind == JsonValueKind.String ? labelValue.GetString() : null;
+                if (id is null || !Slug().IsMatch(id))
+                {
+                    fail(at + "/id", "An action's id is 1–63 lowercase letters, digits or hyphens, starting with a letter.");
+                }
+                else if (!ids.Add(id))
+                {
+                    fail(at + "/id", $"The action id {id} is declared twice.");
+                }
+                if (!IsLabel(label, MaxActionLabel))
+                {
+                    fail(at + "/label", $"An action's label is 1–{MaxActionLabel} characters, no control characters or surrounding spaces.");
+                }
+                result.Add(new JsonObject { ["id"] = id, ["label"] = label });
+            }
+            return result.Count == 0 ? null : result.ToJsonString();
         }
 
         public static bool TryPriority(string value, out NotificationPriority priority)
@@ -335,7 +399,7 @@ namespace Juice.Notifications.Types
                 ApplicationId = request.ApplicationId, Key = type.Key, Version = (latest?.Version ?? 0) + 1, Name = type.Name, Category = type.Category,
                 DisplayGroup = type.DisplayGroup, Priority = type.Priority, Mandatory = type.Mandatory, ExternalRecipients = type.ExternalRecipients,
                 Correlation = type.Correlation, Schema = CanonicalJson.Write(type.Schema), SchemaHash = CanonicalJson.Hash(type.Schema),
-                Workflow = type.Workflow, Redact = [.. type.Redact], DeclarationHash = hash, CreatedAt = now,
+                Workflow = type.Workflow, Redact = [.. type.Redact], Actions = type.Actions, DeclarationHash = hash, CreatedAt = now,
             };
             db.Types.Add(created);
             foreach (var (channel, locales) in type.Templates)
@@ -386,7 +450,7 @@ namespace Juice.Notifications.Types
                 type.ExternalRecipients, type.Correlation, type.Redact, schema.RootElement.Clone(), workflow.RootElement.Clone(),
                 templates.GroupBy(t => t.Channel).ToDictionary(g => g.Key,
                     g => (IReadOnlyDictionary<string, string>)g.ToDictionary(t => t.Locale, t => t.Engine == TemplateEngines.Passthrough ? TemplateEngines.Passthrough : t.Body)),
-                type.SchemaHash, type.CreatedAt);
+                type.SchemaHash, type.CreatedAt, type.Actions is null ? null : JsonElement.Parse(type.Actions));
         }
     }
 }

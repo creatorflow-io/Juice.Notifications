@@ -24,6 +24,11 @@ namespace Juice.Notifications
         Message,
         /// <summary>A request body with its content type (<c>WebhookContent</c>): JSON when the output parses as JSON, else plain text.</summary>
         Body,
+        /// <summary>
+        /// An inbox item (<c>InboxContent</c>): a title, a text body and a link; a first line <c>Title: …</c> gives the title (otherwise the
+        /// type's name), and the link is the request's <c>links.self</c>.
+        /// </summary>
+        Item,
     }
 
     /// <summary>
@@ -66,9 +71,14 @@ namespace Juice.Notifications
 
         public ChannelRegistry(IEnumerable<ChannelDefinition> definitions, BuiltInChannelFallback? builtIns = null)
         {
-            _channels = new Dictionary<string, ChannelDefinition>(StringComparer.Ordinal);
+            // The inbox is the core's own (design §9.1): always there, and no package defines it.
+            _channels = new Dictionary<string, ChannelDefinition>(StringComparer.Ordinal) { [Channels.Inbox] = BuiltInChannels.Inbox };
             foreach (var definition in definitions)
             {
+                if (definition.Key == Channels.Inbox)
+                {
+                    throw new InvalidOperationException($"The channel '{Channels.Inbox}' is the service's own; a package can't define it.");
+                }
                 if (definition.Passthrough && definition.Content != ContentShape.Body)
                 {
                     // Passthrough sends the request's envelope as a JSON body; a channel whose content is a message has nothing to put it in.
@@ -103,9 +113,15 @@ namespace Juice.Notifications
         }
     }
 
-    /// <summary>The built-in definitions phase 1 registers.</summary>
+    /// <summary>The built-in definitions: phase 1's webhook and email (replaceable by a package), and the inbox (always the core's).</summary>
     public static class BuiltInChannels
     {
+        /// <summary>
+        /// The in-app inbox (phase-2-plan I17): reaches people only, at no address (the person is the destination, <c>inbox:{subscriberId}</c>),
+        /// through the service's own provider, which writes one item per delivery and so repeats safely.
+        /// </summary>
+        public static readonly ChannelDefinition Inbox = new(Channels.Inbox, AddressKind.None, ChannelAudience.People, ContentShape.Item, RepeatsSafely: true);
+
         public static readonly ChannelDefinition Webhook = new(Channels.Webhook, AddressKind.None, ChannelAudience.SharedTargets, ContentShape.Body,
             Passthrough: true, RepeatsSafely: true);
         public static readonly ChannelDefinition Email = new(Channels.Email, AddressKind.Email, ChannelAudience.People | ChannelAudience.SharedTargets,

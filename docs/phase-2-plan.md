@@ -156,7 +156,7 @@ Each milestone ends with its review loop (code-review rounds, then a confirmatio
   passed in `Bypassed` (`tenant-mute`, `opt-out`, `personal-mute`, `quiet-hours`). The delivery planner drops channels turned off (a person
   left with none is `OptedOut`) and, in quiet hours, plans the inbox now and defers the rest (`Deferred`, due at the end, computed in wall-clock
   time: an end the clocks skip is when they jump, one shown twice is the first still to come). Schema: `preferences`, `mutes`,
-  `subscribers.quiet_hours`, `notification_recipients.bypassed`. A recipient is `Planned` once it has any delivery on record, as in phase 1 (history says how each ended); one deferred whose request expired or that is given up stays `Planned` if its inbox item is on record, else `Cancelled` or `Failed`. Half a surrogate pair on its own (`D800`) in stored JSON (data, a schema, templates, a match, settings) is now a field error, not a 500 (`CanonicalJson.Unstorable`). Deferred #36–#38.
+  `subscribers.quiet_hours`, `notification_recipients.bypassed`. A recipient is `Planned` once it has any delivery on record, as in phase 1 (history says how each ended); one deferred whose request expired or that is given up stays `Planned` if its inbox item is on record, else `Cancelled` or `Failed`. Half a surrogate pair on its own (U+D800) in stored JSON (data, a schema, templates, a match, settings) is now a field error, not a 500 (`CanonicalJson.Unstorable`). Deferred #36–#38.
 
 ### M15: display groups and the inbox (`p2-09`, `p2-10`)
 
@@ -165,6 +165,27 @@ Each milestone ends with its review loop (code-review rounds, then a confirmatio
   filter (actionable only in phase 2), and the SignalR hub (I18) with the Redis backplane.
 - Tests: proof point 5 (read state syncs across two sessions on two replicas); proof point 6 (a type moved to a custom group shows there, open items
   move with it, and its actions are still listed); a person reads only their own items.
+- *As built:* first deferred #27: `me` and the hub refuse a client's own token (`not_a_person`), and the local realm gained person accounts
+  (`ann`, `ben`, password grant through the public client `people-test`, `PEOPLE_TEST_PASSWORD`; `scripts/keycloak-update.sh` adds them to an
+  existing stack). The core always hosts `inbox` (a package can't define it): audience people, no address, content `Item` (a first line `Title: …`
+  gives the title, else the type's name; the rest is the body; the link is `links.self` when http(s)); a type without an inbox template gets that
+  default. Every person recipient gets an inbox destination (`inbox:{subscriberId}`) through the tenant's own integration `notifications.inbox`
+  (kind `inbox`, `ManagedBy = service`), inserted on first use: every delivery names an integration, so history, retries and dead-letter retry
+  work unchanged; the API lists it and refuses to change, delete or target it (`managed_by_service`), and refuses a new `inbox` integration.
+  The inbox provider writes the item in its own transaction, as a send is, idempotent on the delivery (`ix_inbox_items_delivery`), not in the
+  dispatcher's step transaction as I17 said: a recorded attempt can't then say "delivered" without the item. It resolves the group when it
+  writes (in the insert, under the tenant's catalog lock taken shared; a move or a group's delete takes it exclusive) (the tenant's choice for the type, else the declared group if the tenant has it, else `general`) and copies the content and the type's
+  actions. Types declare `actions` (up to 5 `{ id, label }`, hashed only when present, so earlier declarations keep their hash); an item with
+  actions is `actionable`, and "actionable and open" is that and not archived. Display groups: `GET …/display-groups` (seeded on first read),
+  `PUT/DELETE …/display-groups/{key}` (up to 50; built-ins renamed and reordered, never deleted, `display_group_built_in`), `PUT/DELETE
+  …/types/{typeKey}/display-group` (a move, or back to the declared group), each rewriting open items in its transaction; deleting a group sends
+  its types back to their declared groups with their items. The person's inbox: `GET me/inbox` (`group`, `unread`, `actionable`, `archived`,
+  `before`, `limit` ≤ 100), `GET me/inbox/counts` (each group in order, unread, actionable and open), `GET me/inbox/{id}`, `POST/DELETE
+  …/{id}/read`, `POST/DELETE …/{id}/archive` (archiving reads it; restoring puts it in its type's current group) and `POST me/inbox/read-all`
+  (`group`). The hub `/hubs/inbox?tenant=` (token as `access_token` in the query for WebSockets) has one event, `inboxChanged` `{ kind, items }`,
+  with `added`, `changed` or `reset` (reload: many items at once, or a tenant-wide move): one event instead of §7's three, since a client
+  reloads its counts on any of them; a session closes when its token expires and reconnects with a fresh one. Where a type's items go is one database function, `notifications.inbox_group(tenant, type)` (the tenant's choice, else the group the type's latest version declares if the tenant has it, else `general`), used to write, restore and re-home items. Catalog changes and restores are services with their own transactions (`DisplayGroupEditor`, `PersonInboxEditor`), not mediator commands: a change and its items' rewrite are one transaction holding the tenant's catalog lock (an advisory lock: exclusive to change the catalog, shared to write or restore an item), and a command's transaction opens only after its handler. Adding a group re-homes items of types that declare it. The Redis backplane is `Inbox:SignalR:Redis`; the local stack gained Redis (`localhost:6380`). Schema:
+  `display_groups`, `type_display_groups`, `inbox_items`. Deferred #39–#41.
 
 ### M16: identity resolver (`p2-05`, after `p2-d1`)
 
@@ -204,7 +225,7 @@ Each milestone ends with its review loop (code-review rounds, then a confirmatio
 |---|---|
 | Tenant admin | `GET/PUT/DELETE /api/v1/tenants/{tenantId}/resolvers`, `…/subscribers` (list, view, `…/aliases`), `…/groups` and `…/groups/{key}/members`, `…/topics`, `…/mutes`, `…/display-groups`, `PUT …/types/{key}/display-group` |
 | Signed-in person | `GET …/me`, `…/me/quiet-hours` (M14), `…/me/contact-points` (+ `/{id}/verify`), `…/me/devices`, `…/me/preferences`, `…/me/topics`, `…/me/mutes`, `…/me/inbox` (+ `/{id}/read`, `/read-all`, `/{id}/archive`, `/counts`) |
-| Signed-in person | SignalR hub `/hubs/inbox` (events `itemAdded`, `itemChanged`, `countsChanged`) |
+| Signed-in person | SignalR hub `/hubs/inbox?tenant={tenantId}` (event `inboxChanged`: `added`, `changed`, `reset`; M15) |
 
 ---
 

@@ -120,7 +120,7 @@ namespace Juice.Notifications.IntegrationTests
         /// The request's recipients, by subscriber, once each is through with planning (done, or deferred) and its deliveries are sent, with the
         /// deliveries' statuses by subscriber.
         /// </summary>
-        private async Task<Dictionary<Guid, (NotificationRecipient Recipient, List<DeliveryStatus> Deliveries)>> PlannedAsync(Guid requestId, int count)
+        private async Task<Dictionary<Guid, (NotificationRecipient Recipient, List<(string Channel, DeliveryStatus Status)> Deliveries)>> PlannedAsync(Guid requestId, int count)
         {
             await using var db = people.App.Database.Context();
             for (var i = 0; i < 200; i++)
@@ -129,26 +129,34 @@ namespace Juice.Notifications.IntegrationTests
                 var deliveries = await (from item in db.DeliveryItems
                                         join d in db.Deliveries on new { item.TenantId, Id = item.DeliveryId } equals new { d.TenantId, d.Id }
                                         where item.RequestId == requestId
-                                        select new { item.RecipientId, d.Status }).AsNoTracking().ToListAsync(Ct);
+                                        select new { item.RecipientId, d.Channel, d.Status }).AsNoTracking().ToListAsync(Ct);
                 if (recipients.Count == count && recipients.All(r => r.NextAt == null || r.Outcome == RecipientOutcome.Deferred)
                     && deliveries.All(d => d.Status is not (DeliveryStatus.Pending or DeliveryStatus.Sending or DeliveryStatus.Retrying)))
                 {
                     return recipients.ToDictionary(r => r.SubscriberId!.Value,
-                        r => (r, deliveries.Where(d => d.RecipientId == r.Id).Select(d => d.Status).ToList()));
+                        r => (r, deliveries.Where(d => d.RecipientId == r.Id).Select(d => (d.Channel, d.Status)).OrderBy(d => d.Channel, StringComparer.Ordinal).ToList()));
                 }
                 await Task.Delay(100, Ct);
             }
             throw new TimeoutException($"Request {requestId} wasn't planned.");
         }
 
-        private static void Reached((NotificationRecipient Recipient, List<DeliveryStatus> Deliveries) planned, params string[] bypassed)
+        /// <summary>Reached in the inbox and by email (the item written, the email accepted), having gone past the rules named.</summary>
+        private static void Reached((NotificationRecipient Recipient, List<(string Channel, DeliveryStatus Status)> Deliveries) planned, params string[] bypassed)
         {
             Assert.Equal(RecipientOutcome.Planned, planned.Recipient.Outcome);
             Assert.Equal(bypassed.Order(), planned.Recipient.Bypassed.Order());
-            Assert.Equal([DeliveryStatus.Accepted], planned.Deliveries);
+            Assert.Equal([(Channels.Email, DeliveryStatus.Accepted), (Channels.Inbox, DeliveryStatus.Delivered)], planned.Deliveries);
         }
 
-        private static void Held((NotificationRecipient Recipient, List<DeliveryStatus> Deliveries) planned, RecipientOutcome outcome)
+        /// <summary>Reached in the inbox only.</summary>
+        private static void InboxOnly((NotificationRecipient Recipient, List<(string Channel, DeliveryStatus Status)> Deliveries) planned)
+        {
+            Assert.Equal(RecipientOutcome.Planned, planned.Recipient.Outcome);
+            Assert.Equal([(Channels.Inbox, DeliveryStatus.Delivered)], planned.Deliveries);
+        }
+
+        private static void Held((NotificationRecipient Recipient, List<(string Channel, DeliveryStatus Status)> Deliveries) planned, RecipientOutcome outcome)
         {
             Assert.Equal((outcome, (DateTimeOffset?)null), (planned.Recipient.Outcome, planned.Recipient.NextAt));
             Assert.Empty(planned.Recipient.Bypassed);
@@ -157,8 +165,8 @@ namespace Juice.Notifications.IntegrationTests
 
         /// <summary>
         /// Phase 2 proof point 1: a person who opted out of a category, snoozed everything and is in their quiet hours still gets a mandatory type
-        /// of it, and the recipient records each rule it went past. A normal type of the category doesn't reach them. Until the inbox channel
-        /// arrives (M15) the mandatory type reaches them by email; M15 adds the inbox delivery to this test.
+        /// of it, in the inbox and by email, and the recipient records each rule it went past. A normal type of the category doesn't reach them.
+        /// The item is in their inbox.
         /// </summary>
         [Fact]
         public async Task Mandatory_type_reaches_an_opted_out_person_in_the_inbox_and_records_the_bypass()
@@ -173,6 +181,9 @@ namespace Juice.Notifications.IntegrationTests
 
             Reached((await PlannedAsync(await SendAsync(mandatory, crew), 1))[pat.Id], BypassedRules.OptOut, BypassedRules.PersonalMute, BypassedRules.QuietHours);
             Held((await PlannedAsync(await SendAsync(normal, crew), 1))[pat.Id], RecipientOutcome.OptedOut);
+            await using var db = people.App.Database.Context();
+            var item = await db.InboxItems.AsNoTracking().SingleAsync(i => i.TenantId == TenantId && i.SubscriberId == pat.Id, Ct);
+            Assert.Equal((mandatory, "Hello", DisplayGroups.General), (item.TypeKey, item.Title, item.GroupKey));
         }
 
         /// <summary>
@@ -207,7 +218,9 @@ namespace Juice.Notifications.IntegrationTests
             Reached(held[cat.Id]);
             Reached(held[dan.Id]);
             Reached(held[eve.Id]);
-            Reached(held[fay.Id]);
+            // Her inbox is off with everything else: the email alone.
+            Assert.Equal(RecipientOutcome.Planned, held[fay.Id].Recipient.Outcome);
+            Assert.Equal([(Channels.Email, DeliveryStatus.Accepted)], held[fay.Id].Deliveries);
 
             var bypassed = await PlannedAsync(await SendAsync(mandatory, crew), 6);
             Reached(bypassed[ann.Id], BypassedRules.OptOut);
@@ -216,7 +229,7 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
-        /// §6.4 quiet hours: a normal type waits, deferred until they end, and goes out then (the inbox, once it exists, doesn't wait). A mandatory
+        /// §6.4 quiet hours: a normal type's inbox item comes at once; its email waits, deferred until they end, and goes out then. A mandatory
         /// type doesn't wait (proof point 1 shows it recorded).
         /// </summary>
         [Fact]
@@ -235,7 +248,7 @@ namespace Juice.Notifications.IntegrationTests
             var (deferred, deliveries) = planned[pat.Id];
             Assert.Equal(RecipientOutcome.Deferred, deferred.Outcome);
             Assert.InRange(deferred.NextAt!.Value, end.AddMinutes(-1), end.AddMinutes(1));
-            Assert.Empty(deliveries);
+            Assert.Equal([(Channels.Inbox, DeliveryStatus.Delivered)], deliveries);
 
             // The hours end: the email goes out, and the recipient is planned.
             await using (var db = people.App.Database.Context())
@@ -290,33 +303,47 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
-        /// §6.4 a channel turned off: respected for every type. Off for the category wins over on for every category, and the other way round; a
-        /// person left with no channel is opted out. (The inbox, which a mandatory type keeps, arrives in M15.)
+        /// §6.4 a channel turned off: respected for every type. Off for the category wins over on for every category, and the other way round. A
+        /// person who turned off the inbox too is opted out of a normal type; a mandatory type keeps their inbox.
         /// </summary>
         [Fact]
         public async Task A_channel_turned_off_is_respected_even_for_a_mandatory_type()
         {
             LocalStack.RequireAvailable();
             var (normal, mandatory, category) = await TypesAsync();
-            var (crew, members) = await CrewAsync("ann", "ben", "cat");
+            var (crew, members) = await CrewAsync("ann", "ben", "cat", "dan");
             var ann = members[0];
             var ben = members[1];
             var cat = members[2];
+            var dan = members[3];
             await PreferAsync(ann, category, "email", PreferenceModes.Off);
             await PreferAsync(ben, "*", "email", PreferenceModes.Off);
             await PreferAsync(cat, "*", "email", PreferenceModes.Off);
             await PreferAsync(cat, category, "email", PreferenceModes.On);
+            await PreferAsync(dan, category, "email", PreferenceModes.Off);
+            await PreferAsync(dan, category, "inbox", PreferenceModes.Off);
 
             foreach (var type in new[] { normal, mandatory })
             {
-                var planned = await PlannedAsync(await SendAsync(type, crew), 3);
-                Held(planned[ann.Id], RecipientOutcome.OptedOut);
-                Held(planned[ben.Id], RecipientOutcome.OptedOut);
+                var planned = await PlannedAsync(await SendAsync(type, crew), 4);
+                InboxOnly(planned[ann.Id]);
+                InboxOnly(planned[ben.Id]);
                 Reached(planned[cat.Id]);
+                if (type == normal)
+                {
+                    Held(planned[dan.Id], RecipientOutcome.OptedOut);
+                }
+                else
+                {
+                    InboxOnly(planned[dan.Id]); // the inbox can't be turned off for a mandatory type
+                }
             }
         }
 
-        /// <summary>§6.4 a channel the type doesn't declare: a person's verified address on it is never used, mandatory or not.</summary>
+        /// <summary>
+        /// §6.4 a channel the type doesn't declare: a person's verified address on it is never used, mandatory or not. The inbox needs no template:
+        /// a type without one shows its name (phase-2-plan I17).
+        /// </summary>
         [Fact]
         public async Task A_channel_the_type_doesnt_declare_is_never_used()
         {
@@ -326,7 +353,7 @@ namespace Juice.Notifications.IntegrationTests
             var pat = members[0];
             foreach (var type in new[] { normal, mandatory })
             {
-                Held((await PlannedAsync(await SendAsync(type, crew), 1))[pat.Id], RecipientOutcome.Failed);
+                InboxOnly((await PlannedAsync(await SendAsync(type, crew), 1))[pat.Id]);
             }
         }
 
@@ -371,7 +398,7 @@ namespace Juice.Notifications.IntegrationTests
         public async Task A_person_sets_preferences_quiet_hours_and_mutes()
         {
             LocalStack.RequireAvailable();
-            using var me = people.App.Client(await LocalStack.TenantAdminTokenAsync());
+            using var me = people.App.Client(await LocalStack.PersonTokenAsync());
             using var admin = people.App.Client(await LocalStack.AdminTokenAsync());
             var self = await OkAsync<MeResponse>(me.GetAsync($"{Tenant}/me", Ct));
             Assert.Equal("oidc", self.Source);

@@ -350,5 +350,49 @@ namespace Juice.Notifications.Tests
             var content = JsonSerializer.Deserialize<EmailContent>(ChannelContent.Email("Subject: " + subject + "\n\nbody", "F"))!;
             Assert.Equal(new string('a', 249), content.Subject);
         }
+
+        /// <summary>An inbox item (phase-2-plan I17): its title from a first line, else the type's name; its link from links.self, if http(s).</summary>
+        [Fact]
+        public void An_inbox_item_takes_its_title_from_the_first_line_and_its_link_from_self()
+        {
+            var links = new Dictionary<string, string> { ["self"] = "https://app.example.com/alerts/1" };
+            var item = JsonSerializer.Deserialize<InboxContent>(ChannelContent.Inbox("Title: Disk full\n\nHost db-1\n", "app.disk", "Fallback", links,
+                """[{"id":"ack","label":"Acknowledge"}]"""))!;
+            Assert.Equal(("app.disk", "Disk full", "Host db-1", "https://app.example.com/alerts/1"), (item.Type, item.Title, item.Body, item.Url));
+            Assert.Equal("ack", item.Actions!.Value[0].GetProperty("id").GetString());
+
+            // No template: the type's name, no body. A link that isn't http(s) isn't kept, nor is a title split over lines.
+            var bare = JsonSerializer.Deserialize<InboxContent>(ChannelContent.Inbox(null, "app.disk", "Fallback",
+                new Dictionary<string, string> { ["self"] = "javascript:alert(1)" }, null))!;
+            Assert.Equal(("Fallback", "", null), (bare.Title, bare.Body, bare.Url));
+            Assert.Null(bare.Actions);
+            Assert.Equal("a b", JsonSerializer.Deserialize<InboxContent>(ChannelContent.Inbox("Title: a" + (char)0x2028 + "b" + (char)10 + "body", "t", "F", null, null))!.Title);
+            Assert.Equal("F", JsonSerializer.Deserialize<InboxContent>(ChannelContent.Inbox("Title:   \nbody", "t", "F", null, null))!.Title);
+        }
+
+        /// <summary>A type's inbox actions (design §7.3): up to five, ids distinct slugs, labels short; stored canonical, and hashed only when declared.</summary>
+        [Fact]
+        public void A_type_declares_up_to_five_actions()
+        {
+            static (Types.CheckedType? Type, IReadOnlyList<FieldError> Errors) Check(string? actions)
+                => Types.TypeRules.Check("app", new Types.TypeDeclaration("app.thing", "Thing", "ops", null, null, null, null,
+                    JsonElement.Parse("""{ "type": "object" }"""), null, null, null, null, actions is null ? null : JsonElement.Parse(actions)),
+                    new ChannelRegistry([], BuiltInChannelFallback.Instance));
+
+            var (type, errors) = Check("""[ { "label": "Approve", "id": "approve" }, { "id": "reject", "label": "Reject" } ]""");
+            Assert.Empty(errors);
+            Assert.Equal("""[{"id":"approve","label":"Approve"},{"id":"reject","label":"Reject"}]""", type!.Actions);
+            Assert.NotEqual(Check(null).Type!.Hash(), type.Hash());
+            Assert.Null(Check("[]").Type!.Actions);
+            Assert.Equal(Check(null).Type!.Hash(), Check("[]").Type!.Hash());
+
+            Assert.Contains(Check("""[ { "id": "a", "label": "A" }, { "id": "a", "label": "B" } ]""").Errors, e => e.Pointer == "/actions/1/id");
+            Assert.Contains(Check("""[ { "id": "Approve", "label": "A" } ]""").Errors, e => e.Pointer == "/actions/0/id");
+            Assert.Contains(Check("""[ { "id": "a", "label": " A" } ]""").Errors, e => e.Pointer == "/actions/0/label");
+            Assert.Contains(Check("""[ { "id": "a", "label": "A", "url": "x" } ]""").Errors, e => e.Pointer == "/actions/0");
+            Assert.Contains(Check("""{ "id": "a" }""").Errors, e => e.Pointer == "/actions");
+            Assert.Contains(Check("""[ {"id":"a","label":"A"}, {"id":"b","label":"B"}, {"id":"c","label":"C"}, {"id":"d","label":"D"}, {"id":"e","label":"E"}, {"id":"f","label":"F"} ]""").Errors,
+                e => e.Pointer == "/actions");
+        }
     }
 }

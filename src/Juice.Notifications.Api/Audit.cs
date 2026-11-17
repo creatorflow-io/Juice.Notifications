@@ -68,7 +68,9 @@ namespace Juice.Notifications.Api
             app.UseAudit(options.AppName, filter => filter.Clear()
                 .Include("/api/#", "POST", "PUT", "PATCH", "DELETE")
                 // Later rules win: a producer's request is traffic, not a change.
-                .Exclude("/api/v1/tenants/{tenantId}/notifications", "POST"));
+                .Exclude("/api/v1/tenants/{tenantId}/notifications", "POST")
+                // Nor is a person reading or archiving their own inbox (phase-2-plan M15): their own items, many times a day.
+                .Exclude("/api/v1/tenants/{tenantId}/me/inbox/#", "POST", "DELETE"));
             app.Use(async (http, next) =>
             {
                 if (http.RequestServices.GetService<IAuditContextAccessor>() is { IsInitialized: true } accessor)

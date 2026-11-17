@@ -355,6 +355,59 @@ namespace Juice.Notifications.Data
         public DateTimeOffset? CancelledAt { get; set; }
     }
 
+    /// <summary>
+    /// A display group in a tenant's catalog (design D12, phase-2-plan I24): where the inbox shows a type's items. <c>approval</c>, <c>system</c>
+    /// and <c>general</c> are seeded on first use (<see cref="BuiltIn"/>): they can be renamed and reordered, never deleted. A group's behaviour never
+    /// depends on its key or name.
+    /// </summary>
+    public sealed class DisplayGroup : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public required string Key { get; init; }
+        public required string Name { get; set; }
+        /// <summary>Order in the inbox, ascending; ties by key.</summary>
+        public int Position { get; set; }
+        public bool BuiltIn { get; init; }
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    /// <summary>A tenant's choice of display group for a type (every version of its key), over the group the type declares (design D12).</summary>
+    public sealed class TypeDisplayGroup : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public required string TypeKey { get; init; }
+        public required string GroupKey { get; set; }
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    /// <summary>
+    /// One item in a person's inbox (design §7.3, §12, phase-2-plan I17): written by the inbox provider when its delivery is sent, once per
+    /// delivery. Its content is the delivery's, copied so the inbox reads one table; its group is resolved when delivered and rewritten when the
+    /// tenant moves the type or deletes the group (I24). Open means not archived (phase 3 adds the correlation's state).
+    /// </summary>
+    public sealed class InboxItem : ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid SubscriberId { get; init; }
+        public Guid DeliveryId { get; init; }
+        public required string TypeKey { get; init; }
+        public required string GroupKey { get; set; }
+        public required string Title { get; init; }
+        public required string Body { get; init; }
+        public string? Url { get; init; }
+        /// <summary>The type's actions when delivered (id and label), as JSON; null when it has none. Acted on in phase 3.</summary>
+        public string? Actions { get; init; }
+        /// <summary>The type declares actions (§7.3): the "actionable and open" filter.</summary>
+        public bool Actionable { get; init; }
+        public NotificationPriority Priority { get; init; }
+        public DateTimeOffset CreatedAt { get; init; }
+        public DateTimeOffset? ReadAt { get; set; }
+        public DateTimeOffset? ArchivedAt { get; set; }
+    }
+
     /// <summary>Another source's id for a subscriber, linked by a tenant admin (design D23, phase-2-plan p2-d2).</summary>
     public sealed class SubscriberAlias : ITenantOwned, Juice.Domain.IAuditable
     {

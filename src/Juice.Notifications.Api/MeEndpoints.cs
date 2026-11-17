@@ -24,21 +24,17 @@ namespace Juice.Notifications.Api
             me.AddEndpointFilter(async (context, next) =>
             {
                 var http = context.HttpContext;
-                var subject = http.User.FindFirst("sub")?.Value;
-                if (!Guid.TryParse(http.GetRouteValue("tenantId") as string, out var tenantId) || subject is null
-                    || !RequestRules.IsRecipientId(subject)
-                    || !await http.RequestServices.GetRequiredService<ITenantAccess>().IsMemberAsync(http.User, tenantId, http.RequestAborted))
+                var (person, refusal) = Guid.TryParse(http.GetRouteValue("tenantId") as string, out var tenantId)
+                    ? await PersonAsync(http.User, tenantId, http.RequestServices, http.RequestAborted)
+                    : (null, NotAMember());
+                if (person is not { } subscriberId)
                 {
-                    return ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantMember, "The caller isn't a member of this tenant.");
+                    return refusal;
                 }
-                var db = http.RequestServices.GetRequiredService<NotificationsDbContext>();
-                var clock = http.RequestServices.GetRequiredService<TimeProvider>();
-                var name = http.User.FindFirst("preferred_username")?.Value ?? http.User.FindFirst("name")?.Value;
-                var person = SubscriberDirectory.Fit(new ResolvedPerson(OidcSource, subject, name));
-                http.Items[MeKey] = await KnownAsync(db, tenantId, person, http.RequestAborted)
-                    ?? (await SubscriberDirectory.MapAsync(db, tenantId, [person], clock.GetUtcNow(), http.RequestAborted))[(OidcSource, subject)];
+                http.Items[MeKey] = subscriberId;
                 return await next(context);
             });
+            me.MapInboxEndpoints();
 
             me.MapGet("", async (Guid tenantId, HttpContext http, SubscriberReader reader, CancellationToken ct)
                 => await reader.GetAsync(tenantId, Me(http), ct) is { } s
@@ -154,6 +150,33 @@ namespace Juice.Notifications.Api
                 { } own when person.Name is null || person.Name == own.Name => own.MergedInto ?? own.Id,
                 _ => null,
             };
+        }
+
+        private static IResult NotAMember() => ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantMember, "The caller isn't a member of this tenant.");
+
+        /// <summary>
+        /// The signed-in person's subscriber in the tenant (phase-2-plan I16), created on first use; or the refusal: a client's own token is no
+        /// person's (deferred #27), and a person outside the tenant isn't its member. The <c>me</c> endpoints and the inbox hub both ask this.
+        /// </summary>
+        internal static async Task<(Guid? Person, IResult Refusal)> PersonAsync(System.Security.Claims.ClaimsPrincipal user, Guid tenantId,
+            IServiceProvider services, CancellationToken ct)
+        {
+            if (Producers.ActingClient(user, services.GetRequiredService<Microsoft.Extensions.Options.IOptions<AuthOptions>>().Value) is not null)
+            {
+                // A service account given the tenant claim would otherwise become a subscriber and follow topics.
+                return (null, ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotAPerson, "The person's API takes a person's token, not a client's own."));
+            }
+            var subject = user.FindFirst("sub")?.Value;
+            if (subject is null || !RequestRules.IsRecipientId(subject) || !await services.GetRequiredService<ITenantAccess>().IsMemberAsync(user, tenantId, ct))
+            {
+                return (null, NotAMember());
+            }
+            var db = services.GetRequiredService<NotificationsDbContext>();
+            var clock = services.GetRequiredService<TimeProvider>();
+            var name = user.FindFirst("preferred_username")?.Value ?? user.FindFirst("name")?.Value;
+            var person = SubscriberDirectory.Fit(new ResolvedPerson(OidcSource, subject, name));
+            return (await KnownAsync(db, tenantId, person, ct)
+                ?? (await SubscriberDirectory.MapAsync(db, tenantId, [person], clock.GetUtcNow(), ct))[(OidcSource, subject)], null!);
         }
 
         /// <summary>The signed-in person's subscriber id, which the group's filter found.</summary>

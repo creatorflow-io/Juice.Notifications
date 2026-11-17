@@ -37,7 +37,7 @@ namespace Juice.Notifications.Api
                 return ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotYourApplication, $"An application declares only its own types; you are {caller.Key}.");
             }
             var declaration = new TypeDeclaration(body.Key, body.Name, body.Category, body.DisplayGroup, body.Priority, body.Mandatory, body.ExternalRecipients,
-                body.Schema, body.Correlation, body.Redact, body.Workflow, body.Templates);
+                body.Schema, body.Correlation, body.Redact, body.Workflow, body.Templates, body.Actions);
             var command = new DeclareType(caller.Id, caller.Key, declaration);
             return await ApiResults.SendAsync(mediator, db, command,
                 outcome => outcome.Value!.IsNew
@@ -79,7 +79,7 @@ namespace Juice.Notifications.Api
             }
             return await reader.VersionAsync(app.Id, typeKey, version, ct) is { } d
                 ? Results.Ok(new TypeVersionDetailResponse(d.Key, d.Version, d.Name, d.Category, d.DisplayGroup, d.Priority, d.Mandatory, d.ExternalRecipients,
-                    d.Correlation, d.Redact, d.Schema, d.Workflow, d.Templates, d.SchemaHash, d.CreatedAt))
+                    d.Correlation, d.Redact, d.Schema, d.Workflow, d.Templates, d.SchemaHash, d.CreatedAt, d.Actions))
                 : ApiResults.NotFound($"The type {typeKey} has no version {version}.");
         }
 

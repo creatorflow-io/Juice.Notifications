@@ -3,6 +3,7 @@
 # Safe to run again: each step skips what is already there. Run scripts/init.sh first, so .env has every secret.
 #   - the juice-notifications scope's client_id mapper (11 Nov 2026): producers authenticate as their client;
 #   - the notifications-tenant-admin role and the tenant-admin client (11 Nov 2026): an admin of the tests' tenant.
+#   - the people-test client and the person accounts ann and ben (17 Nov 2026): the person's API (me) takes no client's own token.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1
@@ -34,4 +35,27 @@ if [[ -z "$client" ]]; then
     -s 'config."jsonType.label"=String' -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=false'
   $K add-roles -r juice --uusername service-account-tenant-admin --rolename notifications-tenant-admin
 fi
+
+people=$($K get clients -r juice --fields id,clientId --format csv --noquotes | grep ",people-test$" | cut -d, -f1 || true)
+if [[ -z "$people" ]]; then
+  people=$($K create clients -r juice -i -s clientId=people-test -s "name=People (local): person accounts by password, tenant $TENANT" -s enabled=true \
+    -s publicClient=true -s standardFlowEnabled=false -s directAccessGrantsEnabled=true)
+  $K update "clients/$people/default-client-scopes/$scope" -r juice
+  $K create "clients/$people/protocol-mappers/models" -r juice -s 'name=platform tenant' -s protocol=openid-connect \
+    -s protocolMapper=oidc-hardcoded-claim-mapper -s 'config."claim.name"=platform_tenant' -s "config.\"claim.value\"=$TENANT" \
+    -s 'config."jsonType.label"=String' -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=false'
+  $K create "clients/$people/protocol-mappers/models" -r juice -s name=username -s protocol=openid-connect \
+    -s protocolMapper=oidc-usermodel-property-mapper -s 'config."user.attribute"=username' -s 'config."claim.name"=preferred_username' \
+    -s 'config."jsonType.label"=String' -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=false'
+  # The realm has no "basic" scope, so a person's token gets its subject from this mapper (a service account's has one anyway).
+  $K create "clients/$people/protocol-mappers/models" -r juice -s name=subject -s protocol=openid-connect -s protocolMapper=oidc-sub-mapper \
+    -s 'config."access.token.claim"=true' -s 'config."introspection.token.claim"=true'
+fi
+for person in ann ben; do
+  if [[ -z "$($K get users -r juice -q "username=$person" -q exact=true --fields id --format csv --noquotes)" ]]; then
+    $K create users -r juice -s "username=$person" -s enabled=true -s "email=$person@example.com" -s emailVerified=true \
+      -s "firstName=${person^}" -s lastName=Local
+  fi
+  $K set-password -r juice --username "$person" --new-password "$PEOPLE_TEST_PASSWORD"
+done
 echo "Keycloak realm juice is up to date."

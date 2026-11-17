@@ -77,6 +77,35 @@
           "config": { "claim.name": "platform_tenant", "claim.value": "0193f0aa-0000-7000-8000-0000000000a1", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
         }
       ]
+    },
+    {
+      "clientId": "people-test",
+      "name": "People (local): signs in the realm's person accounts with a password, for the person's API tests; tenant 0193f0aa-0000-7000-8000-0000000000a1",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "defaultClientScopes": ["juice-notifications"],
+      "protocolMappers": [
+        {
+          "name": "platform tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "platform_tenant", "claim.value": "0193f0aa-0000-7000-8000-0000000000a1", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "subject",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": { "access.token.claim": "true", "introspection.token.claim": "true" }
+        },
+        {
+          "name": "username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": { "user.attribute": "username", "claim.name": "preferred_username", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+        }
+      ]
     }
   ],
   "users": [
@@ -97,6 +126,26 @@
       "enabled": true,
       "serviceAccountClientId": "tenant-admin",
       "realmRoles": ["notifications-tenant-admin"]
+    },
+    {
+      "username": "ann",
+      "enabled": true,
+      "email": "ann@example.com",
+      "emailVerified": true,
+      "firstName": "Ann",
+      "lastName": "Local",
+      "credentials": [{ "type": "password", "value": "${PEOPLE_TEST_PASSWORD}", "temporary": false }],
+      "realmRoles": []
+    },
+    {
+      "username": "ben",
+      "enabled": true,
+      "email": "ben@example.com",
+      "emailVerified": true,
+      "firstName": "Ben",
+      "lastName": "Local",
+      "credentials": [{ "type": "password", "value": "${PEOPLE_TEST_PASSWORD}", "temporary": false }],
+      "realmRoles": []
     }
   ]
 }

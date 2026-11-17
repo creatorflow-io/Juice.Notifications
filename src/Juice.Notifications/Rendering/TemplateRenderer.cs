@@ -722,19 +722,50 @@ namespace Juice.Notifications.Rendering
         /// </summary>
         public static string Email(string rendered, string fallbackSubject)
         {
-            var text = rendered.Replace("\r\n", "\n").TrimStart('\n');
-            var subject = fallbackSubject;
-            if (text.StartsWith("Subject:", StringComparison.OrdinalIgnoreCase))
-            {
-                var end = text.IndexOf('\n');
-                subject = (end < 0 ? text[8..] : text[8..end]).Trim();
-                text = end < 0 ? "" : text[(end + 1)..].TrimStart('\n');
-            }
-            // One line: a line break in a subject would start a new header, including the Unicode ones some mail software honours.
-            subject = string.Join(' ', subject.Split(['\r', '\n', '\u0085', '\u2028', '\u2029'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            var (subject, text) = Header(rendered, "Subject:", fallbackSubject);
             var html = "<!doctype html><html><body><div style=\"font-family:sans-serif;white-space:pre-wrap\">"
                 + WebUtility.HtmlEncode(text.TrimEnd()) + "</div></body></html>";
-            return JsonSerializer.Serialize(new EmailContent(subject.Length > 0 ? Cut(subject, 250) : fallbackSubject, text.TrimEnd(), html));
+            return JsonSerializer.Serialize(new EmailContent(Cut(subject, 250), text.TrimEnd(), html));
+        }
+
+        /// <summary>
+        /// A first line <paramref name="name"/> <c>…</c> (any case) gives the header, on one line (a line break in a subject would start a new
+        /// header, the Unicode ones some mail software honours included); otherwise the fallback. The rest, from its first non-empty line, is the body.
+        /// </summary>
+        private static (string Header, string Body) Header(string rendered, string name, string fallback)
+        {
+            var text = rendered.Replace("\r\n", "\n").TrimStart('\n');
+            if (!text.StartsWith(name, StringComparison.OrdinalIgnoreCase))
+            {
+                return (OneLine(fallback), text);
+            }
+            var end = text.IndexOf('\n');
+            var header = OneLine(end < 0 ? text[name.Length..] : text[name.Length..end]);
+            // An empty header is no header: the fallback, on one line too (a type's name can hold a line break).
+            return (header.Length > 0 ? header : OneLine(fallback), end < 0 ? "" : text[(end + 1)..].TrimStart('\n'));
+        }
+
+        /// <summary>The text on one line: every line break, the Unicode ones included, becomes a space.</summary>
+        private static string OneLine(string text)
+            => string.Join(' ', text.Split([(char)0x0D, (char)0x0A, (char)0x85, (char)0x2028, (char)0x2029], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        public const int MaxTitle = 250;
+        public const int MaxBody = 4000;
+        public const int MaxUrl = 2000;
+
+        /// <summary>
+        /// An inbox item (phase-2-plan I17): a first line <c>Title: …</c> gives the title (otherwise the type's name), the rest is the text body;
+        /// the link is the request's <c>links.self</c> when it is an http(s) URL. With no template (<paramref name="rendered"/> null): the type's
+        /// name and an empty body. The type's actions (JSON) are carried as declared. Each part is cut to what the item
+        /// stores.
+        /// </summary>
+        public static string Inbox(string? rendered, string typeKey, string fallbackTitle, IReadOnlyDictionary<string, string>? links, string? actions)
+        {
+            var (title, text) = Header(rendered ?? "", "Title:", fallbackTitle);
+            var url = links?.GetValueOrDefault("self") is { } self && Uri.TryCreate(self, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp) && self.Length <= MaxUrl ? self : null;
+            return JsonSerializer.Serialize(new InboxContent(typeKey, Cut(title, MaxTitle), Cut(text.TrimEnd(), MaxBody), url,
+                actions is null ? null : JsonElement.Parse(actions)));
         }
 
         /// <summary>At most <paramref name="max"/> UTF-16 units, never splitting a surrogate pair (half an emoji isn't text).</summary>
@@ -769,4 +800,7 @@ namespace Juice.Notifications.Rendering
     public sealed record EmailContent(string Subject, string Text, string Html);
 
     public sealed record WebhookContent(string ContentType, string Body);
+
+    /// <summary>An inbox delivery's content: what its item shows, and the type's actions (<c>[{ id, label }]</c>).</summary>
+    public sealed record InboxContent(string Type, string Title, string Body, string? Url, JsonElement? Actions);
 }

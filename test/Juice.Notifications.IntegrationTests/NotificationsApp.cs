@@ -21,6 +21,11 @@ namespace Juice.Notifications.IntegrationTests
         /// <summary>With a test class's own settings and services, applied over the defaults.</summary>
         internal NotificationsApp(Action<IWebHostBuilder> configure) => _configure = configure;
 
+        /// <summary>A replica: another host on <paramref name="database"/>, which its owner creates and drops.</summary>
+        internal NotificationsApp(ScratchDatabase database, Action<IWebHostBuilder> configure) => (Database, _ownsDatabase, _configure) = (database, false, configure);
+
+        private readonly bool _ownsDatabase = true;
+
         public ScratchDatabase Database { get; } = new();
 
         /// <summary>The audit records the host saved.</summary>
@@ -32,7 +37,10 @@ namespace Juice.Notifications.IntegrationTests
 
         public async ValueTask InitializeAsync()
         {
-            await Database.InitializeAsync();
+            if (_ownsDatabase)
+            {
+                await Database.InitializeAsync();
+            }
             if (!LocalStack.Available)
             {
                 return;
@@ -61,6 +69,9 @@ namespace Juice.Notifications.IntegrationTests
             _factory.CreateClient().Dispose();
         }
 
+        /// <summary>The in-memory server, for clients that need its handler (SignalR).</summary>
+        public TestServer Server => _factory!.Server;
+
         /// <summary>The host's services.</summary>
         public IServiceProvider Services => _factory!.Services;
 
@@ -81,7 +92,10 @@ namespace Juice.Notifications.IntegrationTests
             {
                 await _factory.DisposeAsync();
             }
-            await Database.DisposeAsync();
+            if (_ownsDatabase)
+            {
+                await Database.DisposeAsync();
+            }
         }
     }
 }

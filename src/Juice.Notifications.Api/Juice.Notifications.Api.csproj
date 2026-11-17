@@ -9,6 +9,7 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.StackExchangeRedis" />
     <PackageReference Include="Juice.Messaging.Outbox.Delivery" />
     <PackageReference Include="Juice.Messaging.Local" />
     <PackageReference Include="Juice.Messaging.Idempotency.Caching" />

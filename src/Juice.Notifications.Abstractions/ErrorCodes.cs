@@ -18,6 +18,8 @@ namespace Juice.Notifications
 
         // Producers (phase-1-plan M2)
 
+        /// <summary>A client's own token (client credentials) on the person's API (<c>me</c>): a service account is no person.</summary>
+        public const string NotAPerson = "not_a_person";
         /// <summary>The token's client is not a registered application.</summary>
         public const string NotAProducer = "not_a_producer";
         /// <summary>A RabbitMQ message without a broker-verified <c>user_id</c>: nothing says which application sent it.</summary>
@@ -79,9 +81,16 @@ namespace Juice.Notifications
         public const string AlreadyVerified = "already_verified";
         /// <summary>The tenant has no enabled integration for the channel, so a code can't be sent.</summary>
         public const string ChannelUnavailable = "channel_unavailable";
-        /// <summary>The service's own application or types, which the API doesn't change.</summary>
+        /// <summary>The service's own application, types or inbox integration, which the API doesn't change.</summary>
         public const string ManagedByService = "managed_by_service";
         /// <summary>As many mutes are in force or to come as allowed (a person 100, a tenant 500); cancel one first.</summary>
         public const string MuteLimit = "mute_limit";
+
+        // Display groups and the inbox (phase-2-plan M15)
+
+        /// <summary>The tenant has as many display groups as allowed (50).</summary>
+        public const string DisplayGroupLimit = "display_group_limit";
+        /// <summary>One of the three groups every tenant has: renamed and reordered, never deleted.</summary>
+        public const string DisplayGroupBuiltIn = "display_group_built_in";
     }
 }

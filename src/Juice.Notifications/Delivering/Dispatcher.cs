@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Juice.Notifications.Data;
+using Juice.Notifications.Inbox;
 using Juice.Notifications.People;
 using Juice.Notifications.Planning;
 using Juice.Notifications.Providers;
@@ -402,6 +403,10 @@ namespace Juice.Notifications.Delivering
                     return new SnapshotAddress(null, false, pointId,
                         root.TryGetProperty("verification", out var verification) && verification.ValueKind == JsonValueKind.True);
                 }
+                if (root.TryGetProperty("subscriber", out var subscriber) && subscriber.ValueKind == JsonValueKind.String && subscriber.TryGetGuid(out var subscriberId))
+                {
+                    return new SnapshotAddress(subscriberId.ToString(), false); // a person's inbox: the provider writes their item
+                }
                 if (root.TryGetProperty("address", out var address) && address.ValueKind == JsonValueKind.String && address.GetString() is { Length: > 0 } value)
                 {
                     return new SnapshotAddress(value, false);
@@ -433,6 +438,7 @@ namespace Juice.Notifications.Delivering
             services.AddSingleton<WebhookProvider>();
             services.AddSingleton<INotificationProvider>(sp => sp.GetRequiredService<WebhookProvider>());
             services.AddSingleton<INotificationProvider, SmtpProvider>();
+            services.AddInboxProvider();
             // The lease has to outlast a send, or another worker claims the row mid-send (§11): SMTP takes up to connect + 2 × request + QUIT, about
             // 27 s with the defaults; 60 s leaves room for recording and saving. A host passing a shorter lease gets this floor.
             // A copy: the caller's options (perhaps shared with other stages) stay as they were.

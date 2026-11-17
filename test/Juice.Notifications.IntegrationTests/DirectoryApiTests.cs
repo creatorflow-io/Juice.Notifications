@@ -132,7 +132,7 @@ namespace Juice.Notifications.IntegrationTests
                 await ProblemAsync(admin.PutAsJsonAsync($"{Tenant}/topics/.hidden", new PutTopicBody(null, null), Ct)));
 
             // A person: the tenant admin client's own token (its subject, and the tenant its claim names).
-            using var me = people.App.Client(await LocalStack.TenantAdminTokenAsync());
+            using var me = people.App.Client(await LocalStack.PersonTokenAsync());
             var mine = await OkAsync<List<MyTopicResponse>>(me.GetAsync($"{Tenant}/me/topics", Ct));
             Assert.Equal([("billing.service:alerts", false)], mine.Select(t => (t.Key, t.Subscribed)));
             await NoContentAsync(me.PutAsync($"{Tenant}/me/topics/billing.service:alerts", null, Ct));
@@ -162,10 +162,12 @@ namespace Juice.Notifications.IntegrationTests
         public async Task Only_a_member_of_the_tenant_has_a_me()
         {
             LocalStack.RequireAvailable();
-            // The producer's token names no tenant; the tenant admin's names another one than this.
+            // A client's own token is no person's (deferred #27), even one with the tenant claim; a person's token names another tenant than this.
             using var producer = people.App.Client(await LocalStack.ProducerTokenAsync());
-            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantMember, ""), await ProblemAsync(producer.GetAsync($"{Tenant}/me/topics", Ct)));
-            using var member = people.App.Client(await LocalStack.TenantAdminTokenAsync());
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotAPerson, ""), await ProblemAsync(producer.GetAsync($"{Tenant}/me/topics", Ct)));
+            using var serviceAccount = people.App.Client(await LocalStack.TenantAdminTokenAsync());
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotAPerson, ""), await ProblemAsync(serviceAccount.GetAsync($"{Tenant}/me/topics", Ct)));
+            using var member = people.App.Client(await LocalStack.PersonTokenAsync());
             Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantMember, ""),
                 await ProblemAsync(member.GetAsync($"/api/v1/tenants/{ProducerApp.OtherTenant}/me/topics", Ct)));
             Assert.Equal(HttpStatusCode.Unauthorized, (await people.App.Client().GetAsync($"{Tenant}/me/topics", Ct)).StatusCode);

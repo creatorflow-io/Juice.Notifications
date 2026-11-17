@@ -24,6 +24,7 @@ KEYCLOAK_ADMIN_PASSWORD=$(secret)
 NOTIFICATIONS_ADMIN_CLIENT_SECRET=$(secret)
 SAMPLE_PRODUCER_CLIENT_SECRET=$(secret)
 TENANT_ADMIN_CLIENT_SECRET=$(secret)
+PEOPLE_TEST_PASSWORD=$(secret)
 SAMPLE_WEBHOOK_SECRET=$(secret)
 NOTIFICATIONS_CONTACT_KEY=$(key)
 NOTIFICATIONS_CONTACT_HASH_KEY=$(key)
@@ -31,7 +32,7 @@ EOF
   echo "wrote deploy/local/.env"
 else
   # Keep what is there; add the secrets later versions introduced.
-  for name in TENANT_ADMIN_CLIENT_SECRET SAMPLE_WEBHOOK_SECRET; do
+  for name in TENANT_ADMIN_CLIENT_SECRET SAMPLE_WEBHOOK_SECRET PEOPLE_TEST_PASSWORD; do
     grep -q "^$name=" .env || { echo "$name=$(secret)" >> .env; echo "added $name to deploy/local/.env"; }
   done
   for name in NOTIFICATIONS_CONTACT_KEY NOTIFICATIONS_CONTACT_HASH_KEY; do

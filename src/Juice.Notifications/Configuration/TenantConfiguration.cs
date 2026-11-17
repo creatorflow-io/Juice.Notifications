@@ -240,8 +240,15 @@ namespace Juice.Notifications.Configuration
         private static Outcome<T> ConfigManaged<T>(string what)
             => Outcome<T>.Conflict(ErrorCodes.ManagedByConfiguration, $"The {what} comes from the deployment's configuration; change it there.");
 
+        private static Outcome<T> ServiceManaged<T>()
+            => Outcome<T>.Conflict(ErrorCodes.ManagedByService, $"The integration {Inbox.InboxIntegrations.Key} is the service's own (the inbox); it can't be changed or deleted, and it has no targets.");
+
         public async ValueTask<Outcome<IntegrationView>> Handle(PutIntegration r, CancellationToken ct)
         {
+            if (r.Key == Inbox.InboxIntegrations.Key)
+            {
+                return ServiceManaged<IntegrationView>(); // a key no one else can have: the answer is that it's the service's, not that it's malformed
+            }
             if (!ConfigurationRules.Key().IsMatch(r.Key))
             {
                 return Invalid<IntegrationView>(new FieldError("/key", "A key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
@@ -250,6 +257,10 @@ namespace Juice.Notifications.Configuration
             if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
             {
                 return ConfigManaged<IntegrationView>("integration " + r.Key);
+            }
+            if (existing?.ManagedBy == ManagedBy.Service)
+            {
+                return ServiceManaged<IntegrationView>();
             }
             // From configuration the file states the secret: one it leaves out is none, not the stored one. Through the API, one sent back as it
             // is stored is no new secret (a client that PUTs back what it read).
@@ -260,6 +271,10 @@ namespace Juice.Notifications.Configuration
             if (channel is null || channels.Find(channel) is null)
             {
                 errors.Add(new FieldError("/channel", "The channel is one of the registered channels."));
+            }
+            else if (channel == Channels.Inbox && existing is null)
+            {
+                errors.Add(new FieldError("/channel", "The inbox is the service's own channel: every tenant has its integration."));
             }
             else if (existing is not null && existing.Channel != channel)
             {
@@ -358,6 +373,10 @@ namespace Juice.Notifications.Configuration
             {
                 return ConfigManaged<bool>("integration " + r.Key);
             }
+            if (existing.ManagedBy == ManagedBy.Service)
+            {
+                return ServiceManaged<bool>();
+            }
             if (await db.Deliveries.AnyAsync(d => d.TenantId == r.NotificationTenantId && d.IntegrationId == existing.Id, ct))
             {
                 return Outcome<bool>.Conflict(ErrorCodes.IntegrationInUse, "Deliveries went through this integration; disable it instead, so their history keeps it.");
@@ -384,6 +403,10 @@ namespace Juice.Notifications.Configuration
             if (integration is null)
             {
                 return Outcome<TargetView>.NotFound($"There is no integration '{r.IntegrationKey}'.");
+            }
+            if (integration.ManagedBy == ManagedBy.Service)
+            {
+                return ServiceManaged<TargetView>();
             }
             var existing = await db.IntegrationTargets.SingleOrDefaultAsync(t => t.TenantId == r.NotificationTenantId && t.Key == r.Key, ct);
             if (existing is not null && existing.IntegrationId != integration.Id)

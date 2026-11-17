@@ -19,6 +19,9 @@ namespace Juice.Notifications.Delivering
 
         /// <summary>A person's contact point (design §3): its id, never its address, which is encrypted (phase-2-plan I19).</summary>
         public static string ContactPoint(Guid contactPointId) => $"cp:{contactPointId}";
+
+        /// <summary>A person's inbox (design §3, phase-2-plan I17).</summary>
+        public static string Inbox(Guid subscriberId) => $"inbox:{subscriberId}";
     }
 
     /// <summary>
@@ -31,7 +34,7 @@ namespace Juice.Notifications.Delivering
     /// <summary>The stage's step-failure limit, which the planner's timeout retries have to stay under.</summary>
     public sealed record DeliveryPlannerLimits(int MaxStepFailures);
 
-    public sealed class DeliveryPlannerStage(ILogger<DeliveryPlannerStage> logger, IChannelRegistry channels,
+    public sealed class DeliveryPlannerStage(ILogger<DeliveryPlannerStage> logger, IChannelRegistry channels, Inbox.InboxIntegrations inboxes,
         DeliveryPlannerLimits? limits = null) : IStage<NotificationRecipient>
     {
         public string Name => DeliveryStageNames.DeliveryPlanner;
@@ -280,8 +283,8 @@ namespace Juice.Notifications.Delivering
         /// <summary>
         /// A person's destinations (design §6.2, §6.4): each of their contact points (and those of an identity linked into them) that is verified,
         /// not failed, and on a channel the type has a template for, through the tenant's first enabled integration for that channel. None of
-        /// these rules bends for a mandatory type. The same address on two linked identities is one destination. The inbox (M15) and push devices
-        /// (phase 4, once push is registered) come later.
+        /// these rules bends for a mandatory type. The same address on two linked identities is one destination. First, always, the person's inbox
+        /// (phase-2-plan I17), through the tenant's own inbox integration, with or without an inbox template. Push devices come in phase 4.
         /// </summary>
         private async Task<List<Destination>> ContactDestinationsAsync(NotificationsDbContext db, NotificationRecipient row, Guid subscriberId,
             NotificationType type, CancellationToken ct)
@@ -289,6 +292,9 @@ namespace Juice.Notifications.Delivering
             var self = await People.DirectoryReader.SelfAsync(db, row.TenantId, subscriberId, ct);
             var declared = await db.Templates.AsNoTracking().Where(t => t.TypeId == type.Id && (t.TenantId == null || t.TenantId == row.TenantId))
                 .Select(t => t.Channel).Distinct().ToListAsync(ct);
+            var inbox = await inboxes.EnsureAsync(db, row.TenantId, ct);
+            List<Destination> destinations = [new Destination(DestinationKeys.Inbox(subscriberId), Channels.Inbox, inbox,
+                JsonSerializer.Serialize(new { subscriber = subscriberId }, Snapshot), null)];
             var points = (await db.ContactPoints.AsNoTracking()
                 .Where(c => c.TenantId == row.TenantId && self.Contains(c.SubscriberId) && c.VerifiedAt != null && c.Health != ContactHealth.Failed
                     && declared.Contains(c.Channel))
@@ -296,7 +302,6 @@ namespace Juice.Notifications.Delivering
                 // The hash is of the tenant, channel and address, not the person: one address on two linked identities is sent once.
                 .DistinctBy(c => (c.Channel, c.AddressHash)).ToList();
             var integrations = new Dictionary<string, Integration?>(StringComparer.Ordinal);
-            var destinations = new List<Destination>(points.Count);
             foreach (var point in points)
             {
                 if (!People.ContactRules.TakesContactPoints(channels.Find(point.Channel)))
@@ -341,7 +346,7 @@ namespace Juice.Notifications.Delivering
         /// recorded like any other failure, so the recipient's other channels still go out and history says why this one didn't. An integration on a
         /// channel no longer registered (its package removed) fails as <c>Content</c> too: nothing says what its content would be.
         /// </summary>
-        private static async Task<Rendered> RenderAsync(NotificationsDbContext db, Guid tenantId, NotificationType type,
+        private async Task<Rendered> RenderAsync(NotificationsDbContext db, Guid tenantId, NotificationType type,
             NotificationRequest request, string channel, ChannelDefinition? definition, RenderModel model, bool timeoutIsFinal, CancellationToken ct)
         {
             if (definition is null)
@@ -360,6 +365,11 @@ namespace Juice.Notifications.Delivering
                 });
                 return new Rendered(ChannelContent.Webhook(envelope, isJson: true), template, null, null);
             }
+            if (template is null && definition.Content == ContentShape.Item)
+            {
+                // The inbox always has something to show, so a mandatory type always reaches the person (phase-2-plan I17).
+                return new Rendered(ChannelContent.Inbox(null, type.Key, type.Name, request.Links, type.Actions), null, null, null);
+            }
             if (template is null)
             {
                 return new Rendered(NoContent, null, $"The type {type.Key} v{type.Version} has no {channel} template.", FailureCategory.Content);
@@ -367,8 +377,20 @@ namespace Juice.Notifications.Delivering
             try
             {
                 var rendered = await TemplateRenderer.RenderAsync(template.Body, model, ct);
-                return new Rendered(definition.Content == ContentShape.Message
-                    ? ChannelContent.Email(rendered, type.Name) : ChannelContent.Webhook(rendered, ChannelContent.IsJson(rendered)), template, null, null);
+                return new Rendered(definition.Content switch
+                {
+                    ContentShape.Message => ChannelContent.Email(rendered, type.Name),
+                    ContentShape.Item => ChannelContent.Inbox(rendered, type.Key, type.Name, request.Links, type.Actions),
+                    _ => ChannelContent.Webhook(rendered, ChannelContent.IsJson(rendered)),
+                }, template, null, null);
+            }
+            catch (RenderException ex) when (definition.Content == ContentShape.Item && (!ex.Retryable || timeoutIsFinal))
+            {
+                // The inbox always has something to show (phase-2-plan I17), so a mandatory type still reaches the person: the default item, and
+                // the template's failure in the log for whoever owns it.
+                logger.LogWarning("The inbox template of {Type} v{Version} failed for tenant {Tenant}, so its item shows the default: {Error}",
+                    type.Key, type.Version, tenantId, ex.Message);
+                return new Rendered(ChannelContent.Inbox(null, type.Key, type.Name, request.Links, type.Actions), template, null, null);
             }
             catch (RenderException ex) when (!ex.Retryable || timeoutIsFinal)
             {
@@ -382,7 +404,7 @@ namespace Juice.Notifications.Delivering
     public static class DeliveryPlanningRegistration
     {
         public static IServiceCollection AddDeliveryPlanning(this IServiceCollection services, StageOptions options, bool runWorkers = true)
-            => services.AddBuiltInChannels().AddSingleton(new DeliveryPlannerLimits(options.MaxStepFailures))
+            => Inbox.InboxRegistration.AddInboxIntegrations(services.AddBuiltInChannels()).AddSingleton(new DeliveryPlannerLimits(options.MaxStepFailures))
                 .AddStage<NotificationRecipient, DeliveryPlannerStage>(options, runWorkers);
     }
 }

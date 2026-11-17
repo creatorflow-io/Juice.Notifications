@@ -750,6 +750,149 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.ToTable("device_registrations", "notifications");
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.DisplayGroup", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("BuiltIn")
+                        .HasColumnType("boolean")
+                        .HasColumnName("built_in");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)")
+                        .HasColumnName("key");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("name");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer")
+                        .HasColumnName("position");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_display_groups");
+
+                    b.HasAlternateKey("TenantId", "Key")
+                        .HasName("ak_display_groups_key");
+
+                    b.ToTable("display_groups", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.InboxItem", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("Actionable")
+                        .HasColumnType("boolean")
+                        .HasColumnName("actionable");
+
+                    b.Property<string>("Actions")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("actions");
+
+                    b.Property<DateTimeOffset?>("ArchivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archived_at");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("body");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("DeliveryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("delivery_id");
+
+                    b.Property<string>("GroupKey")
+                        .IsRequired()
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)")
+                        .HasColumnName("group_key");
+
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("priority");
+
+                    b.Property<DateTimeOffset?>("ReadAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("read_at");
+
+                    b.Property<Guid>("SubscriberId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subscriber_id");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)")
+                        .HasColumnName("title");
+
+                    b.Property<string>("TypeKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("type_key");
+
+                    b.Property<string>("Url")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("url");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_inbox_items");
+
+                    b.HasIndex("TenantId", "DeliveryId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_inbox_items_delivery");
+
+                    b.HasIndex("TenantId", "GroupKey")
+                        .HasDatabaseName("ix_inbox_items_group")
+                        .HasFilter("archived_at IS NULL");
+
+                    b.HasIndex("TenantId", "TypeKey")
+                        .HasDatabaseName("ix_inbox_items_type")
+                        .HasFilter("archived_at IS NULL");
+
+                    b.HasIndex("TenantId", "SubscriberId", "Id")
+                        .HasDatabaseName("ix_inbox_items_person");
+
+                    b.HasIndex("TenantId", "SubscriberId", "GroupKey", "Id")
+                        .HasDatabaseName("ix_inbox_items_open")
+                        .HasFilter("archived_at IS NULL");
+
+                    b.ToTable("inbox_items", "notifications");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.Integration", b =>
                 {
                     b.Property<Guid>("TenantId")
@@ -1418,6 +1561,9 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasKey("Id")
                         .HasName("pk_notification_types");
 
+                    b.HasIndex("Key", "Version")
+                        .HasDatabaseName("ix_notification_types_key_version");
+
                     b.HasIndex("ApplicationId", "Key", "Version")
                         .IsUnique()
                         .HasDatabaseName("ix_notification_types_application_id_key_version");
@@ -1893,6 +2039,47 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasAnnotation("Juice:Auditable", true);
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.TypeDisplayGroup", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("GroupKey")
+                        .IsRequired()
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)")
+                        .HasColumnName("group_key");
+
+                    b.Property<string>("TypeKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("type_key");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_type_display_groups");
+
+                    b.HasIndex("TenantId", "GroupKey")
+                        .HasDatabaseName("ix_type_display_groups_tenant_id_group_key");
+
+                    b.HasIndex("TenantId", "TypeKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_type_display_groups_key");
+
+                    b.ToTable("type_display_groups", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
+                });
+
             modelBuilder.Entity("Juice.Messaging.Outbox.OutboxDelivery", b =>
                 {
                     b.HasOne("Juice.Messaging.Outbox.OutboxEvent", "OutboxEvent")
@@ -1994,6 +2181,23 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_device_registrations_subscribers_tenant_id_subscriber_id");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.InboxItem", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.Delivery", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DeliveryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_inbox_items_deliveries_tenant_id_delivery_id");
+
+                    b.HasOne("Juice.Notifications.Data.Subscriber", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubscriberId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_inbox_items_subscribers_tenant_id_subscriber_id");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.IntegrationTarget", b =>
@@ -2156,6 +2360,17 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_topic_subscriptions_topics");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.TypeDisplayGroup", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.DisplayGroup", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "GroupKey")
+                        .HasPrincipalKey("TenantId", "Key")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_type_display_groups_display_groups");
                 });
 
             modelBuilder.Entity("Juice.Messaging.Outbox.OutboxEvent", b =>

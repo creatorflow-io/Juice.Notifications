@@ -109,6 +109,11 @@ namespace Juice.Notifications.Api
             services.AddHostedService<People.ServiceTypesProvisioner>();
             services.Configure<People.DeviceOptions>(configuration.GetSection(People.DeviceOptions.Section));
             services.AddScoped<History.DeliveryHistory>();
+            // Display groups and the inbox (phase-2-plan M15).
+            services.AddScoped<Inbox.DisplayGroupReader>();
+            services.AddScoped<Inbox.PersonInboxReader>();
+            services.AddScoped<Inbox.PersonInboxEditor>();
+            services.AddScoped<Inbox.DisplayGroupEditor>();
 
             // The pipeline stages (design §4.1). Their workers run unless Stages:Run is false (a host that only takes requests).
             var runStages = configuration.GetValue("Stages:Run", true);
@@ -120,6 +125,8 @@ namespace Juice.Notifications.Api
             var dispatcher = new Stages.StageOptions { Lease = TimeSpan.FromSeconds(60) };
             configuration.GetSection("Stages:Dispatcher").Bind(dispatcher); // settings override the defaults one by one
             services.AddDispatching(dispatcher, runStages);
+            // After the dispatcher's silent default: inbox changes are told through the hub.
+            services.AddInboxHub(configuration);
             if (runStages)
             {
                 services.AddHostedService<People.DeviceSweep>();
@@ -215,6 +222,18 @@ namespace Juice.Notifications.Api
                     options.TokenValidationParameters.ValidateIssuer = true;
                     options.TokenValidationParameters.ValidateAudience = true;
                     options.TokenValidationParameters.ValidateLifetime = true;
+                    // WebSockets and server-sent events can't carry a header: the inbox hub takes the token from the query, and nothing else does.
+                    options.Events = new JwtBearerEvents
+                    {
+                        OnMessageReceived = context =>
+                        {
+                            if (context.HttpContext.Request.Path.StartsWithSegments(InboxHub.Path) && context.Request.Query["access_token"] is { Count: 1 } token)
+                            {
+                                context.Token = token;
+                            }
+                            return Task.CompletedTask;
+                        },
+                    };
                 });
             services.AddAuthorizationBuilder()
                 .SetFallbackPolicy(new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build())
@@ -247,6 +266,9 @@ namespace Juice.Notifications.Api
             app.MapPeopleEndpoints();
             app.MapMeEndpoints();
             app.MapHistoryEndpoints();
+            app.MapDisplayGroupEndpoints();
+            // A session ends when its token does (a person removed from the tenant gets no new one), and reconnects with a fresh one.
+            app.MapHub<InboxHub>(InboxHub.Path, options => options.CloseOnAuthenticationExpiration = true);
             return app;
         }
     }

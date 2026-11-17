@@ -87,7 +87,7 @@ namespace Juice.Notifications.IntegrationTests
         {
             LocalStack.RequireAvailable();
             await MailIntegrationAsync();
-            using var me = people.App.Client(await LocalStack.TenantAdminTokenAsync());
+            using var me = people.App.Client(await LocalStack.PersonTokenAsync());
             var address = Mailbox("pat");
 
             var added = await OkAsync<ContactPointResponse>(me.PostAsJsonAsync(Points, new AddContactPointBody("email", address.ToUpperInvariant()), Ct));
@@ -152,7 +152,7 @@ namespace Juice.Notifications.IntegrationTests
         {
             LocalStack.RequireAvailable();
             await MailIntegrationAsync();
-            using var me = people.App.Client(await LocalStack.TenantAdminTokenAsync());
+            using var me = people.App.Client(await LocalStack.PersonTokenAsync());
             var added = await OkAsync<ContactPointResponse>(me.PostAsJsonAsync(Points, new AddContactPointBody("email", Mailbox("tries")), Ct));
             await OkAsync<VerificationSentResponse>(me.PostAsync($"{Points}/{added.Id}/verification", null, Ct));
             // A known code in place of the one sent, as the service would have hashed it.
@@ -187,7 +187,7 @@ namespace Juice.Notifications.IntegrationTests
         public async Task No_code_is_sent_where_the_tenant_cant_send_it()
         {
             LocalStack.RequireAvailable();
-            using var me = people.App.Client(await LocalStack.TenantAdminTokenAsync());
+            using var me = people.App.Client(await LocalStack.PersonTokenAsync());
             var other = $"/api/v1/tenants/{ProducerApp.OtherTenant}/me/contact-points";
             // The tenant-admin client belongs to one tenant only.
             Assert.Equal(HttpStatusCode.Forbidden, (await me.GetAsync(other, Ct)).StatusCode);
@@ -260,13 +260,16 @@ namespace Juice.Notifications.IntegrationTests
             var subscribers = await read.Subscribers.AsNoTracking().Where(s => s.Source == "fake" && (s.ExternalId == ann.ExternalId || s.ExternalId == ben.ExternalId))
                 .ToDictionaryAsync(s => s.ExternalId, s => s.Id, Ct);
             Assert.Equal(RecipientOutcome.Planned, recipients.Single(r => r.SubscriberId == subscribers[ann.ExternalId]).Outcome);
-            // Nothing reaches Ben: his only address failed. Mandatory doesn't bend that.
-            Assert.Equal(RecipientOutcome.Failed, recipients.Single(r => r.SubscriberId == subscribers[ben.ExternalId]).Outcome);
+            // Only his inbox reaches Ben: his only address failed, and mandatory doesn't bend that.
+            Assert.Equal(RecipientOutcome.Planned, recipients.Single(r => r.SubscriberId == subscribers[ben.ExternalId]).Outcome);
 
             var point = await read.ContactPoints.AsNoTracking().SingleAsync(c => c.SubscriberId == subscribers[ann.ExternalId] && c.VerifiedAt != null, Ct);
             Assert.Equal("fake", point.VerifiedBy);
-            var delivery = Assert.Single(await read.Deliveries.AsNoTracking()
-                .Where(d => read.DeliveryItems.Any(it => it.DeliveryId == d.Id && it.RequestId == accepted.Id)).ToListAsync(Ct));
+            var deliveries = await read.Deliveries.AsNoTracking()
+                .Where(d => read.DeliveryItems.Any(it => it.DeliveryId == d.Id && it.RequestId == accepted.Id)).ToListAsync(Ct);
+            // An inbox item each, and one email: Ann's verified address.
+            Assert.Equal(2, deliveries.Count(d => d.Channel == Channels.Inbox));
+            var delivery = Assert.Single(deliveries, d => d.Channel == Channels.Email);
             Assert.Equal(($"cp:{point.Id}", DeliveryStatus.Accepted, true), (delivery.DestinationKey, delivery.Status, delivery.Mandatory));
             // History shows the address masked, never the address.
             Assert.Contains("a…@example.com", delivery.DestinationSnapshot);
@@ -376,7 +379,10 @@ namespace Juice.Notifications.IntegrationTests
             await Task.Delay(1000, Ct);
             Assert.Single(await MailAsync(shared));
             await using var read = people.App.Database.Context();
-            Assert.Single(await read.Deliveries.AsNoTracking().Where(d => read.DeliveryItems.Any(i => i.DeliveryId == d.Id && i.RequestId == accepted.Id)).ToListAsync(Ct));
+            // One email and one inbox item: the person, not each identity, is the recipient.
+            Assert.Equal([Channels.Email, Channels.Inbox], (await read.Deliveries.AsNoTracking()
+                .Where(d => read.DeliveryItems.Any(i => i.DeliveryId == d.Id && i.RequestId == accepted.Id)).Select(d => d.Channel).ToListAsync(Ct))
+                .Order(StringComparer.Ordinal));
         }
 
         /// <summary>A producer can't name a contact point: only the service's own requests do.</summary>
@@ -398,7 +404,7 @@ namespace Juice.Notifications.IntegrationTests
         public async Task A_device_registers_moves_to_whoever_registers_it_last_and_is_swept_when_unseen()
         {
             LocalStack.RequireAvailable();
-            using var me = people.App.Client(await LocalStack.TenantAdminTokenAsync());
+            using var me = people.App.Client(await LocalStack.PersonTokenAsync());
             var devices = $"{Tenant}/me/devices";
             var token = "fcm:" + Guid.NewGuid().ToString("N");
 

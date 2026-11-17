@@ -8,14 +8,14 @@ namespace Juice.Notifications.Api.Contracts
     /// </summary>
     public sealed record DeclareTypeBody(
         string? Key, string? Name, string? Category, string? DisplayGroup, string? Priority, bool? Mandatory, bool? ExternalRecipients,
-        JsonElement? Schema, string? Correlation, List<string>? Redact, JsonElement? Workflow, JsonElement? Templates);
+        JsonElement? Schema, string? Correlation, List<string>? Redact, JsonElement? Workflow, JsonElement? Templates, JsonElement? Actions = null);
 
     public sealed record TypeVersionResponse(string Key, int Version, string Name, string SchemaHash, DateTimeOffset CreatedAt);
 
     public sealed record TypeVersionDetailResponse(
         string Key, int Version, string Name, string Category, string DisplayGroup, NotificationPriority Priority, bool Mandatory, bool ExternalRecipients,
         string Correlation, IReadOnlyList<string> Redact, JsonElement Schema, JsonElement Workflow,
-        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Templates, string SchemaHash, DateTimeOffset CreatedAt);
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Templates, string SchemaHash, DateTimeOffset CreatedAt, JsonElement? Actions = null);
 
     /// <summary>
     /// <c>{ "kind": "route" }</c>; <c>{ "kind": "address", "channel": "email", "address": "…" }</c> for a type that allows it; a person kind by id

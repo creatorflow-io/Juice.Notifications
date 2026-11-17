@@ -172,14 +172,17 @@ namespace Juice.Notifications
         public static readonly IReadOnlyList<string> All = [None, Optional, Required];
     }
 
-    /// <summary>Who owns a row: the deployment's configuration, or the API. Each leaves the other's alone.</summary>
+    /// <summary>
+    /// Who owns a row: the deployment's configuration, or the API. Each leaves the other's alone. The service's own rows (the inbox integration
+    /// every tenant gets) are neither's to change.
+    /// </summary>
     public static class ManagedBy
     {
         public const string Configuration = "config";
         public const string Api = "api";
+        public const string Service = "service";
     }
 
-    /// <summary>The display groups every tenant starts with (design D12).</summary>
     /// <summary>How a template is rendered: Scriban (design D22), or the producer's data sent as is (webhook only).</summary>
     public static class TemplateEngines
     {
@@ -187,10 +190,13 @@ namespace Juice.Notifications
         public const string Passthrough = "passthrough";
     }
 
+    /// <summary>The display groups every tenant starts with (design D12), in order, with their first names.</summary>
     public static class DisplayGroups
     {
         public const string Approval = "approval";
         public const string System = "system";
         public const string General = "general";
+
+        public static readonly IReadOnlyList<(string Key, string Name)> BuiltIn = [(Approval, "Approvals"), (System, "System"), (General, "General")];
     }
 }

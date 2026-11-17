@@ -43,6 +43,11 @@ namespace Juice.Notifications.Data
         public const string PreferenceSubscriber = "fk_preferences_subscribers";
         public const string MuteSubscriber = "fk_mutes_subscribers";
         public const string DeviceToken = "ix_device_registrations_token";
+        public const string DisplayGroupKey = "ak_display_groups_key";
+        public const string TypeDisplayGroupKey = "ix_type_display_groups_key";
+        /// <summary>A type moved to a group deleted at the same moment, or a group deleted while a type is moved to it.</summary>
+        public const string TypeDisplayGroupGroup = "fk_type_display_groups_display_groups";
+        public const string InboxItemDelivery = "ix_inbox_items_delivery";
     }
 
     public enum ConflictKind
