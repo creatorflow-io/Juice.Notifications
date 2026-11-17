@@ -220,7 +220,9 @@ namespace Juice.Notifications.Planning
                 context.Done(row, null);
                 return;
             }
-            var specs = JsonSerializer.Deserialize<List<RecipientSpec>>(request.Recipients, IntakeQueries.Json) ?? [];
+            // An escalation step (phase-3-plan I34): its policy's names, not the request's, sent at once whatever the workflow.
+            var escalating = row.EscalationStep > 0 && row.EscalationSpecs is not null;
+            var specs = JsonSerializer.Deserialize<List<RecipientSpec>>(escalating ? row.EscalationSpecs! : request.Recipients, IntakeQueries.Json) ?? [];
             var configs = specs.Any(s => s.Resolver is not null)
                 ? await db.Resolvers.AsNoTracking().Where(c => c.TenantId == row.TenantId && c.Enabled).ToListAsync(ct)
                 : [];
@@ -356,8 +358,26 @@ namespace Juice.Notifications.Planning
                     });
                 }
             }
+            foreach (var recipient in due)
+            {
+                recipient.EscalationStep = row.EscalationStep;
+            }
+            if (escalating)
+            {
+                // Nobody twice: anyone the notification reached already (the request's plan, an earlier step) isn't added again.
+                var reached = (await db.Recipients.AsNoTracking().Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Kind != RecipientKind.Name)
+                    .Select(r => r.NamedAs).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+                due.RemoveAll(r => reached.Contains(r.NamedAs));
+                if (!due.Any(r => r.Kind != RecipientKind.Name))
+                {
+                    // Nobody new: the next step runs at once, not after its wait (design §7.1).
+                    await db.Escalations.Where(e => e.TenantId == row.TenantId && e.NotificationId == row.Id && e.State == EscalationState.Running)
+                        .ExecuteUpdateAsync(s => s.SetProperty(e => e.NextAt, context.Now), ct);
+                    logger.LogInformation("Escalation step {Step} of notification {Id} in tenant {Tenant} reached nobody new", row.EscalationStep, row.Id, row.TenantId);
+                }
+            }
             var type = await db.Types.AsNoTracking().SingleAsync(t => t.Id == request.TypeId, ct);
-            if (!workflows.For(type).IsSendOnly)
+            if (!escalating && !workflows.For(type).IsSendOnly)
             {
                 // A workflow: the people wait (Pending, not due) until its send step, which applies mutes and preferences as they are then. The
                 // notification runs its workflow on the next claim, at once.
@@ -431,6 +451,7 @@ namespace Juice.Notifications.Planning
         /// </summary>
         private static NotificationRecipient Unreached(Notification row, string named, string resolver, RecipientOutcome outcome, DateTimeOffset now) => new()
         {
+            EscalationStep = row.EscalationStep,
             TenantId = row.TenantId, NotificationId = row.Id, Kind = RecipientKind.Name, Resolver = resolver, NamedAs = named, Via = [named],
             Outcome = outcome, NextAt = null, CreatedAt = now,
         };
@@ -485,6 +506,8 @@ namespace Juice.Notifications.Planning
             services.TryAddSingleton(TimeProvider.System);
             services.AddSingleton<ResolverCache>();
             services.AddSingleton<Workflows.WorkflowRunner>();
+            // Escalations run on their own claims (phase-3-plan I34), and hand their steps to this stage.
+            services.AddStage<Escalation, Workflows.EscalationStage>(options, runWorkers);
             services.TryAddSingleton<People.MuteMatches>();
             // Contact points a source vouches for are stored encrypted, on registered channels.
             services.AddBuiltInChannels();

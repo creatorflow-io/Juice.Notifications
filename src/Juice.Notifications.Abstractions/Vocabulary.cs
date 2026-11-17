@@ -41,6 +41,10 @@ namespace Juice.Notifications
     [JsonConverter(typeof(JsonStringEnumConverter<DigestState>))]
     public enum DigestState { Open, Closed, Cancelled }
 
+    /// <summary>An escalation's state (design §7.1): running its policy's steps, stopped (the correlation closed or was acknowledged), or past its last step.</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter<EscalationState>))]
+    public enum EscalationState { Running, Stopped, Exhausted }
+
     public static class DigestRules
     {
         /// <summary>Notifications a digest's content lists; the rest are counted as <c>more</c> (design §7.1).</summary>

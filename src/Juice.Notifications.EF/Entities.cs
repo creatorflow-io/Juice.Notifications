@@ -479,6 +479,12 @@ namespace Juice.Notifications.Data
         public DateTimeOffset? ResolverWaitSince { get; set; }
         /// <summary>When the workflow's current step began waiting (a <c>delay</c>); null when it isn't (phase-3-plan I28).</summary>
         public DateTimeOffset? StepEnteredAt { get; set; }
+        /// <summary>
+        /// The escalation step being planned (1 for the policy's first step), and what it names (recipient specs, JSON): the planner resolves
+        /// these instead of the request's, and sends them at once (phase-3-plan I34). 0 and null for the request's own plan.
+        /// </summary>
+        public int EscalationStep { get; set; }
+        public string? EscalationSpecs { get; set; }
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset UpdatedAt { get; set; }
     }
@@ -508,6 +514,43 @@ namespace Juice.Notifications.Data
         public DateTimeOffset UpdatedAt { get; set; }
         /// <summary>PostgreSQL's <c>xmin</c>: a concurrency token, so a request and a resolve at once can't both pass.</summary>
         public uint Version { get; set; }
+    }
+
+    /// <summary>
+    /// A tenant's escalation policy (design §7.1, §12; phase-3-plan I34): steps that, while a correlation stays open, add recipients after a
+    /// wait. <c>Steps</c> is JSON: <c>[{ "afterMinutes": 15, "recipients": [recipient specs] }]</c>.
+    /// </summary>
+    public sealed class EscalationPolicy : ITenantOwned, Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public required string Key { get; init; }
+        public required string Steps { get; set; }
+        /// <summary>Whether acknowledging the correlation stops it (otherwise only resolve and cancel do).</summary>
+        public bool StopOnAcknowledge { get; set; }
+        public string ManagedBy { get; set; } = Notifications.ManagedBy.Api;
+        public required string DefinitionHash { get; set; }
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    /// <summary>
+    /// A notification's escalation (design §7.1, §12): its policy's next step and when it is due. Claimed then: while the correlation is still
+    /// open (and not acknowledged, for a policy that stops on that), the step's recipients are added to the notification. One per notification.
+    /// </summary>
+    public sealed class Escalation : Claimable, ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid NotificationId { get; init; }
+        public Guid CorrelationId { get; init; }
+        public Guid PolicyId { get; init; }
+        /// <summary>The policy's step to run next, from 0.</summary>
+        public int NextStep { get; set; }
+        public EscalationState State { get; set; }
+        /// <summary>Why it stopped: <c>acknowledged</c>, <c>resolved</c>, <c>cancelled</c>, <c>policy-deleted</c>.</summary>
+        public string? StopReason { get; set; }
+        public DateTimeOffset CreatedAt { get; init; }
+        public DateTimeOffset UpdatedAt { get; set; }
     }
 
     /// <summary>
@@ -572,7 +615,7 @@ namespace Juice.Notifications.Data
         /// so a person named twice is one recipient (the unique key).
         /// </summary>
         public required string NamedAs { get; init; }
-        public int EscalationStep { get; init; }
+        public int EscalationStep { get; set; }
         /// <summary>The digest it waits in (phase-3-plan I31): it is sent with the digest's other members when that closes.</summary>
         public Guid? DigestId { get; set; }
         public RecipientOutcome Outcome { get; set; }

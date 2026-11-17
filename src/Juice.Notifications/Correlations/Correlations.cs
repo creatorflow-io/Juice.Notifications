@@ -67,7 +67,7 @@ namespace Juice.Notifications.Correlations
         public Task<Outcome<CorrelationView>> AcknowledgeAsync(Guid tenantId, Guid applicationId, string key, string? by, CancellationToken ct)
             => ChangeAsync(tenantId, applicationId, key, by, null, ct, (c, now) => c.State switch
             {
-                CorrelationState.Open => Set(c, () => (c.State, c.AcknowledgedBy, c.AcknowledgedAt) = (CorrelationState.Acknowledged, by, now)),
+                CorrelationState.Open => Acknowledge(c, by, now),
                 CorrelationState.Acknowledged => Change.None,
                 _ => Change.Closed,
             });
@@ -90,7 +90,13 @@ namespace Juice.Notifications.Correlations
                 _ => Change.Closed,
             });
 
-        private enum Change { None, Changed, Stops, Closed }
+        private enum Change { None, Changed, Acknowledges, Stops, Closed }
+
+        private static Change Acknowledge(Correlation c, string? by, DateTimeOffset now)
+        {
+            (c.State, c.AcknowledgedBy, c.AcknowledgedAt) = (CorrelationState.Acknowledged, by, now);
+            return Change.Acknowledges;
+        }
 
         private static Change Set(Correlation c, Action apply, bool stops = false)
         {
@@ -134,6 +140,20 @@ namespace Juice.Notifications.Correlations
                 correlation.UpdatedAt = now;
                 // The row version: a request accepted at this moment (which touches it) and this change can't both commit.
                 await db.SaveChangesAsync(ct);
+                if (result == Change.Acknowledges)
+                {
+                    // Escalations whose policy stops on acknowledgement stop now (phase 3 proof point 2); the others go on.
+                    var running = EscalationState.Running.ToString();
+                    var stopped = EscalationState.Stopped.ToString();
+                    const string acknowledged = "acknowledged";
+                    await db.Database.ExecuteSqlAsync($"""
+                        UPDATE notifications.escalations e
+                        SET state = {stopped}, stop_reason = {acknowledged}, next_at = NULL, claimed_by = NULL, lease_until = NULL, version = e.version + 1, updated_at = {now}
+                        FROM notifications.escalation_policies p
+                        WHERE e.tenant_id = {tenantId} AND e.correlation_id = {correlation.Id} AND e.state = {running}
+                          AND p.tenant_id = e.tenant_id AND p.id = e.policy_id AND p.stop_on_acknowledge
+                        """, ct);
+                }
                 if (result == Change.Stops)
                 {
                     var (notifications, recipients, deliveries) = await StopAsync(db, tenantId, correlation.Id, now, ct);
@@ -190,6 +210,15 @@ namespace Juice.Notifications.Correlations
                 WHERE d.tenant_id = {tenantId} AND d.status IN ({deliveryPending}, {retrying}) AND (d.lease_until IS NULL OR d.lease_until <= {now})
                   AND EXISTS (SELECT 1 FROM notifications.delivery_items i JOIN notifications.requests r ON r.tenant_id = i.tenant_id AND r.id = i.request_id
                               WHERE i.tenant_id = d.tenant_id AND i.delivery_id = d.id AND r.correlation_id = {correlationId})
+                """, ct);
+            // Its escalations end here: nobody more is added.
+            var (escalating, ended) = (EscalationState.Running.ToString(), EscalationState.Stopped.ToString());
+            var stopReason = await db.Correlations.AsNoTracking().Where(c => c.TenantId == tenantId && c.Id == correlationId).Select(c => c.State).SingleAsync(ct)
+                == CorrelationState.Resolved ? "resolved" : "cancelled";
+            await db.Database.ExecuteSqlAsync($"""
+                UPDATE notifications.escalations e
+                SET state = {ended}, stop_reason = {stopReason}, next_at = NULL, claimed_by = NULL, lease_until = NULL, version = e.version + 1, updated_at = {now}
+                WHERE e.tenant_id = {tenantId} AND e.correlation_id = {correlationId} AND e.state = {escalating}
                 """, ct);
             return (notifications, recipients, deliveries);
         }

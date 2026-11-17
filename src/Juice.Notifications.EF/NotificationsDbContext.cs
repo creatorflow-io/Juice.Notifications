@@ -61,6 +61,8 @@ namespace Juice.Notifications.Data
         public DbSet<ThrottleEntry> ThrottleEntries => Set<ThrottleEntry>();
         public DbSet<Correlation> Correlations => Set<Correlation>();
         public DbSet<Digest> Digests => Set<Digest>();
+        public DbSet<EscalationPolicy> EscalationPolicies => Set<EscalationPolicy>();
+        public DbSet<Escalation> Escalations => Set<Escalation>();
         public DbSet<InboxItem> InboxItems => Set<InboxItem>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
         public DbSet<Notification> Notifications => Set<Notification>();
@@ -450,6 +452,7 @@ namespace Juice.Notifications.Data
                 Claim(e);
                 e.Property(x => x.State).HasConversion<string>().HasMaxLength(20);
                 e.Property(x => x.Error).HasMaxLength(2000);
+                e.Property(x => x.EscalationSpecs).HasColumnType("jsonb");
                 e.HasIndex(x => new { x.TenantId, x.RequestId }).IsUnique();
                 e.HasOne<NotificationRequest>().WithMany().HasForeignKey(x => new { x.TenantId, x.RequestId }).OnDelete(DeleteBehavior.Cascade);
             });
@@ -466,6 +469,31 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Version).IsRowVersion();
                 e.HasIndex(x => new { x.TenantId, x.ApplicationId, x.Key }).IsUnique().HasDatabaseName(Constraints.CorrelationKey);
                 e.HasOne<ApplicationTenant>().WithMany().HasForeignKey(x => new { x.ApplicationId, x.TenantId }).OnDelete(DeleteBehavior.Restrict);
+            });
+
+            model.Entity<EscalationPolicy>(e =>
+            {
+                e.ToTable("escalation_policies");
+                TenantKey(e);
+                e.Property(x => x.Key).HasMaxLength(63);
+                e.Property(x => x.Steps).HasColumnType("jsonb");
+                e.Property(x => x.ManagedBy).HasMaxLength(20);
+                e.Property(x => x.DefinitionHash).HasMaxLength(64).IsConcurrencyToken();
+                e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique().HasDatabaseName(Constraints.EscalationPolicyKey);
+            });
+
+            model.Entity<Escalation>(e =>
+            {
+                e.ToTable("escalations");
+                TenantKey(e);
+                Claim(e);
+                e.Property(x => x.State).HasConversion<string>().HasMaxLength(20);
+                e.Property(x => x.StopReason).HasMaxLength(40);
+                e.HasIndex(x => new { x.TenantId, x.NotificationId }).IsUnique().HasDatabaseName("ix_escalations_notification");
+                e.HasIndex(x => new { x.TenantId, x.CorrelationId }).HasDatabaseName("ix_escalations_correlation");
+                e.HasOne<Notification>().WithMany().HasForeignKey(x => new { x.TenantId, x.NotificationId }).OnDelete(DeleteBehavior.Cascade);
+                e.HasOne<Correlation>().WithMany().HasForeignKey(x => new { x.TenantId, x.CorrelationId }).OnDelete(DeleteBehavior.Restrict);
+                // No key to the policy: one deleted while an escalation runs stops it (its step finds no policy) rather than being refused.
             });
 
             model.Entity<Digest>(e =>

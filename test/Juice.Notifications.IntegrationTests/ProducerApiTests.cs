@@ -148,7 +148,7 @@ namespace Juice.Notifications.IntegrationTests
             { "schema that isn't a schema", """{ "schema": { "type": 5 } }""", "/schema" },
             { "schema from another draft", """{ "schema": { "$schema": "http://json-schema.org/draft-07/schema#" } }""", "/schema/$schema" },
             { "a $ref to another document", """{ "schema": { "$ref": "https://example.com/schemas/x.json" } }""", "/schema/$ref" },
-            { "a step not available yet", """{ "workflow": [ { "step": "escalate" } ] }""", "/workflow/0/step" },
+            { "an unknown step", """{ "workflow": [ { "step": "page" } ] }""", "/workflow/0/step" },
             { "unknown priority", """{ "priority": "urgent" }""", "/priority" },
             { "bad redaction path", """{ "redact": [ "subject" ] }""", "/redact/0" },
             { "a locale tag too long to store", """{ "templates": { "email": { "en": "x", "en-aaaaaaaa-bbbbbbbb-cccccccc-dddddddd": "y" } } }""", "/templates/email/en-aaaaaaaa-bbbbbbbb-cccccccc-dddddddd" },

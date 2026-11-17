@@ -974,6 +974,144 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasAnnotation("Juice:Auditable", true);
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.Escalation", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ClaimedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("claimed_by");
+
+                    b.Property<Guid>("CorrelationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("correlation_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_until");
+
+                    b.Property<DateTimeOffset?>("NextAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_at");
+
+                    b.Property<int>("NextStep")
+                        .HasColumnType("integer")
+                        .HasColumnName("next_step");
+
+                    b.Property<Guid>("NotificationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("notification_id");
+
+                    b.Property<Guid>("PolicyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("policy_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("state");
+
+                    b.Property<int>("StepFailures")
+                        .HasColumnType("integer")
+                        .HasColumnName("step_failures");
+
+                    b.Property<string>("StopReason")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("stop_reason");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_escalations");
+
+                    b.HasIndex("NextAt")
+                        .HasDatabaseName("ix_escalations_due")
+                        .HasFilter("next_at IS NOT NULL");
+
+                    b.HasIndex("TenantId", "CorrelationId")
+                        .HasDatabaseName("ix_escalations_correlation");
+
+                    b.HasIndex("TenantId", "NotificationId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_escalations_notification");
+
+                    b.ToTable("escalations", "notifications");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.EscalationPolicy", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("DefinitionHash")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("definition_hash");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)")
+                        .HasColumnName("key");
+
+                    b.Property<string>("ManagedBy")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("managed_by");
+
+                    b.Property<string>("Steps")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("steps");
+
+                    b.Property<bool>("StopOnAcknowledge")
+                        .HasColumnType("boolean")
+                        .HasColumnName("stop_on_acknowledge");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_escalation_policies");
+
+                    b.HasIndex("TenantId", "Key")
+                        .IsUnique()
+                        .HasDatabaseName("ix_escalation_policies_key");
+
+                    b.ToTable("escalation_policies", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.InboxItem", b =>
                 {
                     b.Property<Guid>("TenantId")
@@ -1368,6 +1506,14 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)")
                         .HasColumnName("error");
+
+                    b.Property<string>("EscalationSpecs")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("escalation_specs");
+
+                    b.Property<int>("EscalationStep")
+                        .HasColumnType("integer")
+                        .HasColumnName("escalation_step");
 
                     b.Property<DateTimeOffset?>("LeaseUntil")
                         .HasColumnType("timestamp with time zone")
@@ -2437,6 +2583,23 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_device_registrations_subscribers_tenant_id_subscriber_id");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.Escalation", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.Correlation", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CorrelationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_escalations_correlations_tenant_id_correlation_id");
+
+                    b.HasOne("Juice.Notifications.Data.Notification", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "NotificationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_escalations_notifications_tenant_id_notification_id");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.InboxItem", b =>

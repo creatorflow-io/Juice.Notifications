@@ -144,6 +144,18 @@ tests, a commit and a build-board update.
 
 - I34: policies (API, provisioning), the `escalate` step, the `escalation` stage.
 - Tests: proof point 2; a step reaching nobody runs the next at once; the last step raises `escalation.exhausted`; resolve stops it.
+- *As built:* `escalation_policies` (`Key`, `Steps` = `[{ "afterMinutes": 0–10080, "recipients": [1–20 specs] }]` up to 10, recipients a
+  route or people through an enabled resolver of the tenant that handles the kind, checked when saved; `StopOnAcknowledge`, default true),
+  `PUT/GET/DELETE …/escalation-policies/{key}` (mediator commands, audited). The step: `{ "step": "escalate", "policy": "key" }` or
+  `"policyFrom": "labels.<name>"`, once per workflow, for types that can carry a correlation; without a correlation or with an unknown policy
+  it does nothing (logged) and the workflow goes on. It adds one `escalations` row per notification (saved with the step). The `escalation`
+  stage claims it when due: stops it if the policy is gone or the correlation closed or acknowledged (for a policy that stops on that);
+  otherwise hands the step to the planner rather than resolving itself: the notification goes back to `Planning` with
+  `escalation_step` and `escalation_specs`, and the planner resolves those names, numbers the new recipients with the step, leaves out
+  anyone it reached already (by `NamedAs`), and sends them at once whatever the workflow; a step that reaches nobody new makes the
+  escalation due at once. An escalation waits (5 s at a time) while its notification is still running its workflow or planning an
+  earlier step. Acknowledging stops the escalations whose policy stops on it, in its transaction; resolving and cancelling stop all of
+  them. `escalation.exhausted` is published with M23's events. Provisioning policies from configuration waits for a need.
 
 ### M23: interactions and events (`p3-07`, `p3-08`)
 

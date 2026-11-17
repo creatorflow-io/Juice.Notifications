@@ -69,6 +69,9 @@ namespace Juice.Notifications.Workflows
                             return;
                         }
                         break;
+                    case EscalateStep escalate:
+                        await StartEscalationAsync(db, row, request, escalate, now, ct);
+                        break;
                     case DigestStep digest:
                         await JoinDigestAsync(db, row, request, digest, now, ct);
                         // Its send is the digest's: past both (the declaration guarantees the send follows).
@@ -176,6 +179,41 @@ namespace Juice.Notifications.Workflows
                 """, ct);
             await transaction.CommitAsync(ct);
             return null;
+        }
+
+        /// <summary>
+        /// Starts the notification's escalation (I34): the policy the step names (or a label names), its first step due after its wait. It is saved
+        /// with the step, so a step run again finds it there. Without a correlation, or a policy by that key, there is nothing to escalate: said
+        /// in the log, and the workflow goes on.
+        /// </summary>
+        private async Task StartEscalationAsync(NotificationsDbContext db, Notification row, NotificationRequest request, EscalateStep escalate,
+            DateTimeOffset now, CancellationToken ct)
+        {
+            if (request.CorrelationId is not { } correlation)
+            {
+                logger.LogInformation("Notification {Id} in tenant {Tenant} has no correlation key, so its escalate step does nothing", row.Id, row.TenantId);
+                return;
+            }
+            var key = escalate.Policy ?? request.Labels.GetValueOrDefault(escalate.PolicyFromLabel!);
+            var policy = key is null ? null
+                : await db.EscalationPolicies.AsNoTracking().SingleOrDefaultAsync(p => p.TenantId == row.TenantId && p.Key == key, ct);
+            if (policy is null)
+            {
+                logger.LogWarning("Notification {Id} in tenant {Tenant} escalates by policy {Policy}, which the tenant doesn't have; it doesn't escalate",
+                    row.Id, row.TenantId, key ?? $"(label {escalate.PolicyFromLabel} missing)");
+                return;
+            }
+            if (await db.Escalations.AnyAsync(e => e.TenantId == row.TenantId && e.NotificationId == row.Id, ct)
+                || db.Escalations.Local.Any(e => e.NotificationId == row.Id))
+            {
+                return;
+            }
+            var steps = Configuration.EscalationRules.Read(policy.Steps);
+            db.Escalations.Add(new Escalation
+            {
+                TenantId = row.TenantId, NotificationId = row.Id, CorrelationId = correlation, PolicyId = policy.Id, NextStep = 0, State = EscalationState.Running,
+                NextAt = now + TimeSpan.FromMinutes(steps[0].AfterMinutes), CreatedAt = now, UpdatedAt = now,
+            });
         }
 
         /// <summary>Advisory locks of digests: joining one and closing it take the same lock per tenant, type, grouping and key.</summary>

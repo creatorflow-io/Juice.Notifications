@@ -49,6 +49,7 @@ namespace Juice.Notifications.Data
         public const string TypeDisplayGroupGroup = "fk_type_display_groups_display_groups";
         public const string InboxItemDelivery = "ix_inbox_items_delivery";
         public const string CorrelationKey = "ix_correlations_key";
+        public const string EscalationPolicyKey = "ix_escalation_policies_key";
     }
 
     public enum ConflictKind

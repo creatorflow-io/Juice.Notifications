@@ -39,7 +39,12 @@ namespace Juice.Notifications.Tests
         [InlineData("""[{"step":"delay","seconds":30}]""", "/workflow")] // never sends
         [InlineData("""["send"]""", "/workflow/0")]
         [InlineData("""[{"step":"wait"},{"step":"send"}]""", "/workflow/0/step")]
-        [InlineData("""[{"step":"escalate"},{"step":"send"}]""", "/workflow/0/step")]
+        [InlineData("""[{"step":"page"},{"step":"send"}]""", "/workflow/0/step")]
+        [InlineData("""[{"step":"send"},{"step":"escalate"}]""", "/workflow/1")]
+        [InlineData("""[{"step":"send"},{"step":"escalate","policy":"Ops"}]""", "/workflow/1/policy")]
+        [InlineData("""[{"step":"send"},{"step":"escalate","policyFrom":"data.policy"}]""", "/workflow/1/policyFrom")]
+        [InlineData("""[{"step":"send"},{"step":"escalate","policy":"ops","policyFrom":"labels.p"}]""", "/workflow/1")]
+        [InlineData("""[{"step":"send"},{"step":"escalate","policy":"ops"},{"step":"escalate","policy":"sre"}]""", "/workflow/2")]
         [InlineData("""[{"step":"digest","windowSeconds":60}]""", "/workflow/0")] // holds for a send that isn't there
         [InlineData("""[{"step":"digest","windowSeconds":60},{"step":"delay","seconds":5},{"step":"send"}]""", "/workflow/0")]
         [InlineData("""[{"step":"digest"},{"step":"send"}]""", "/workflow/0/windowSeconds")]

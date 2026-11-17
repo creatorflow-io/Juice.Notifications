@@ -26,6 +26,12 @@ namespace Juice.Notifications.Workflows
     /// </summary>
     public sealed record DigestStep(TimeSpan Window, string By) : WorkflowStep(WorkflowSteps.Digest);
 
+    /// <summary>
+    /// Runs an escalation policy on the notification's correlation (design §7.1, phase-3-plan I34): the tenant's policy <see cref="Policy"/>, or
+    /// the one a label names (<see cref="PolicyFromLabel"/>). The workflow goes on; the escalation runs on its own until the correlation closes.
+    /// </summary>
+    public sealed record EscalateStep(string? Policy, string? PolicyFromLabel) : WorkflowStep(WorkflowSteps.Escalate);
+
     /// <summary>What a digest groups by: a route recipient by its route, a person by themselves, the correlation, or the type.</summary>
     public static class DigestKeys
     {
@@ -83,7 +89,7 @@ namespace Juice.Notifications.Workflows
             var errors = new List<FieldError>();
             if (json.ValueKind != JsonValueKind.Array || json.GetArrayLength() is 0 or > MaxSteps)
             {
-                return (null, [new FieldError("/workflow", $"A workflow is a list of 1–{MaxSteps} steps: send, delay, condition, throttle, digest.")]);
+                return (null, [new FieldError("/workflow", $"A workflow is a list of 1–{MaxSteps} steps: send, delay, condition, throttle, digest, escalate.")]);
             }
             var steps = new List<WorkflowStep>();
             var index = 0;
@@ -103,13 +109,12 @@ namespace Juice.Notifications.Workflows
                     WorkflowSteps.Condition => ["step", "when"],
                     WorkflowSteps.Throttle => ["step", "limit", "windowSeconds", "by"],
                     WorkflowSteps.Digest => ["step", "windowSeconds", "by"],
+                    WorkflowSteps.Escalate => ["step", "policy", "policyFrom"],
                     _ => null,
                 };
                 if (allowed is null)
                 {
-                    errors.Add(new FieldError(at + "/step", step is WorkflowSteps.Escalate
-                        ? $"The {step} step isn't available yet."
-                        : "A step is send, delay, condition, throttle or digest."));
+                    errors.Add(new FieldError(at + "/step", "A step is send, delay, condition, throttle, digest or escalate."));
                     continue;
                 }
                 foreach (var property in element.EnumerateObject().Where(p => !allowed.Contains(p.Name)))
@@ -201,9 +206,39 @@ namespace Juice.Notifications.Workflows
                             steps.Add(new DigestStep(TimeSpan.FromSeconds(dw), digestBy));
                         }
                         break;
+                    case WorkflowSteps.Escalate:
+                        var policy = element.TryGetProperty("policy", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+                        var from = element.TryGetProperty("policyFrom", out var f) && f.ValueKind == JsonValueKind.String ? f.GetString() : null;
+                        string? label = null;
+                        if ((policy is null) == (from is null))
+                        {
+                            errors.Add(new FieldError(at, "An escalation names its policy (\"policy\": \"key\") or the label that names it (\"policyFrom\": \"labels.name\"), not both."));
+                        }
+                        else if (policy is not null && !Configuration.ConfigurationRules.Key().IsMatch(policy))
+                        {
+                            errors.Add(new FieldError(at + "/policy", "A policy's key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
+                        }
+                        else if (from is not null && (!from.StartsWith(ThrottleKeys.LabelPrefix, StringComparison.Ordinal)
+                            || !Intake.RequestRules.IsLabelName(label = from[ThrottleKeys.LabelPrefix.Length..])))
+                        {
+                            errors.Add(new FieldError(at + "/policyFrom", "Name the label that holds the policy's key: labels.<name>."));
+                        }
+                        else if (correlation == CorrelationRules.None)
+                        {
+                            errors.Add(new FieldError(at, "An escalation runs while its correlation is open: the type's requests must be able to carry a key."));
+                        }
+                        else if (steps.Any(s => s is EscalateStep))
+                        {
+                            errors.Add(new FieldError(at, "A workflow escalates once."));
+                        }
+                        else
+                        {
+                            steps.Add(new EscalateStep(policy, label));
+                        }
+                        break;
                 }
             }
-            if (errors.Count == 0 && !steps.Any(s => s is SendStep))
+            if (errors.Count == 0 && !steps.Any(s => s is SendStep or DigestStep))
             {
                 errors.Add(new FieldError("/workflow", "A workflow sends: give it a send step."));
             }

@@ -29,6 +29,14 @@ namespace Juice.Notifications.Api.Contracts
     /// </summary>
     public sealed record PutResolverBody(string? Kind, List<string>? Handles, JsonElement? Settings, string? SecretRef, bool? Enabled);
 
+    /// <summary>
+    /// <c>PUT …/escalation-policies/{key}</c> (phase-3-plan I34): steps <c>[{ "afterMinutes": 15, "recipients": [ … ] }]</c> (recipients as a request
+    /// names them: a route, or people through the tenant's resolvers), and whether acknowledging stops it (default true). Left out: as stored.
+    /// </summary>
+    public sealed record PutEscalationPolicyBody(JsonElement? Steps, bool? StopOnAcknowledge);
+
+    public sealed record EscalationPolicyResponse(string Key, JsonElement Steps, bool StopOnAcknowledge, string ManagedBy, DateTimeOffset UpdatedAt);
+
     public sealed record ResolverResponse(string Key, string Kind, IReadOnlyList<string> Handles, JsonElement Settings, string? SecretRef, bool Enabled,
         string ManagedBy, DateTimeOffset UpdatedAt);
 

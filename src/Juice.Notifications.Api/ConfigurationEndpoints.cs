@@ -49,6 +49,15 @@ namespace Juice.Notifications.Api
                 => SendAsync(mediator, db, new PutResolver(tenantId, key, body.Kind, body.Handles, body.Settings, body.SecretRef, body.Enabled), ToResponse, ct));
             tenant.MapDelete("/resolvers/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteResolver(tenantId, key), ct));
+
+            // Escalation policies (phase-3-plan M22).
+            tenant.MapGet("/escalation-policies", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
+                => Results.Ok((await reader.EscalationPoliciesAsync(tenantId, ct)).Select(ToResponse)));
+            tenant.MapPut("/escalation-policies/{key}", (Guid tenantId, string key, PutEscalationPolicyBody body, IMediator mediator, NotificationsDbContext db,
+                CancellationToken ct)
+                => SendAsync(mediator, db, new PutEscalationPolicy(tenantId, key, body.Steps, body.StopOnAcknowledge), ToResponse, ct));
+            tenant.MapDelete("/escalation-policies/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => DeleteAsync(mediator, db, new DeleteEscalationPolicy(tenantId, key), ct));
         }
 
         /// <summary>
@@ -92,5 +101,7 @@ namespace Juice.Notifications.Api
         private static AllowlistResponse ToResponse(AllowlistView v) => new(v.Destination, v.Ports, v.ManagedBy, v.UpdatedAt);
 
         private static ResolverResponse ToResponse(ResolverView v) => new(v.Key, v.Kind, v.Handles, v.Settings, v.SecretRef, v.Enabled, v.ManagedBy, v.UpdatedAt);
+
+        private static EscalationPolicyResponse ToResponse(EscalationPolicyView v) => new(v.Key, v.Steps, v.StopOnAcknowledge, v.ManagedBy, v.UpdatedAt);
     }
 }
