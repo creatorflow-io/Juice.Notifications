@@ -50,6 +50,7 @@ namespace Juice.Notifications.IntegrationTests
                 host.UseSetting("Intake:RabbitMQ:Password", LocalStack.Available ? LocalStack.Secret("RABBITMQ_PASSWORD") : "unused");
                 host.UseSetting("Intake:RabbitMQ:RetryDelay", "00:00:01");
                 host.UseSetting("Intake:RabbitMQ:ParkAfter", "00:00:02"); // 3 attempts
+                host.UseSetting("Events:Enabled", "true"); // events to producers on the same broker (phase-3-plan I37)
                 host.ConfigureServices(services => services.AddSingleton(Failures).AddScoped<IIntegrationEventPipelineBehavior>(sp => sp.GetRequiredService<FailOnce>()));
             });
         }
@@ -68,9 +69,15 @@ namespace Juice.Notifications.IntegrationTests
                 foreach (var user in new[] { Producer, Stranger })
                 {
                     await Put(broker, $"users/{user}", new { password = Password, tags = "" });
-                    // A producer publishes to the intake exchange and does nothing else.
-                    await Put(broker, $"permissions/{VirtualHost}/{user}", new { configure = "^$", write = "^notifications$", read = "^$" });
+                    // A producer publishes to the intake exchange, and may bind queues of its own (server-named) to the events exchange.
+                    await Put(broker, $"permissions/{VirtualHost}/{user}", new
+                    {
+                        configure = @"^amq\.gen-.*$", write = @"^(notifications|amq\.gen-.*)$", read = @"^(juice\.notifications\.events|amq\.gen-.*)$",
+                    });
                 }
+                // Each may bind only to its own application's events (design §19 decision 12): the stranger stands for another application.
+                await Put(broker, $"topic-permissions/{VirtualHost}/{Producer}", new { exchange = "juice.notifications.events", write = "^$", read = $@"^{Key}\." });
+                await Put(broker, $"topic-permissions/{VirtualHost}/{Stranger}", new { exchange = "juice.notifications.events", write = "^$", read = @"^other\." });
             }
             _brokerReady = true;
             await App.InitializeAsync();

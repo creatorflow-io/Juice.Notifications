@@ -131,6 +131,9 @@ services:
       Intake__RabbitMQ__Enabled: "true"
       # Events to producers over the same broker (phase-3-plan I37): topic exchange juice.notifications.events.
       Events__Enabled: "true"
+      # The integration tests' webhook signing secret (TestHooks, a public test value), so the load check can aim at this container
+      # (NOTIFICATIONS_LOAD_API): their integrations name env:NOTIFICATIONS_SECRET_TEST_HOOK, read here at send time.
+      NOTIFICATIONS_SECRET_TEST_HOOK: test-signing-secret
       Intake__RabbitMQ__Host: rabbitmq
       Intake__RabbitMQ__UserName: notifications
       Intake__RabbitMQ__Password: ${RABBITMQ_PASSWORD}

@@ -9,7 +9,8 @@ namespace Juice.Notifications.IntegrationTests
 {
     /// <summary>
     /// The M9 load check (phase-1-plan §5 M9): 1,000 requests a minute to two webhook routes on the local stack; p95 from accepted to first
-    /// attempt at most 30 s; no lease storms. It takes minutes, so it runs only when <c>NOTIFICATIONS_LOAD=1</c> (and
+    /// attempt at most 30 s; no lease storms. Since phase 2 (M18) every third request also names a person (one of 50 local users, through a
+    /// <c>local</c> resolver), whose inbox item is one more delivery: subscriber recipients in the mix. It takes minutes, so it runs only when <c>NOTIFICATIONS_LOAD=1</c> (and
     /// <c>NOTIFICATIONS_LOAD_MINUTES</c>, default 2). The result is written to the test output for the acceptance record.
     /// </summary>
     public sealed class LoadCheckTests(ProducerApp producer, ITestOutputHelper output) : IClassFixture<ProducerApp>
@@ -38,6 +39,13 @@ namespace Juice.Notifications.IntegrationTests
             await Ok(client.PutAsJsonAsync($"/api/v1/applications/{ProducerApp.Key}/types", new DeclareTypeBody(type, "Load", "alerts", null, null,
                 null, null, DeliveryTests.Json("""{ "type": "object" }"""), null, null, null, DeliveryTests.Json("""{ "webhook": "passthrough" }""")), Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/load-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
+            // People: 50 local users, reached through the tenant's local resolver (phase 2).
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/resolvers/load-people", new PutResolverBody("local", ["user"], null, null, null), Ct));
+            const int People = 50;
+            for (var p = 0; p < People; p++)
+            {
+                await Ok(admin.PutAsJsonAsync($"{Tenant}/local-users/load-{p}", new PutLocalUserBody($"Load {p}", null, null), Ct));
+            }
             foreach (var (receiver, name) in new[] { (first, "load-a"), (second, "load-b") })
             {
                 await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [first.Port, second.Port]), Ct));
@@ -62,6 +70,7 @@ namespace Juice.Notifications.IntegrationTests
             // 1,000 a minute: one every 60 ms, sent on a schedule (not one after another), so a slow answer doesn't lower the rate.
             var total = 1000 * minutes;
             var accepted = new ConcurrentBag<Guid>();
+            var withPerson = 0;
             var failures = 0;
             var started = DateTimeOffset.UtcNow;
             var sends = new List<Task>(total);
@@ -73,15 +82,21 @@ namespace Juice.Notifications.IntegrationTests
                     await Task.Delay(due - DateTimeOffset.UtcNow, Ct);
                 }
                 var key = $"{type}-{i}"; // unique per run: a key seen before is a duplicate, answered with the original
+                // Every third request also names a person: the routes still match (route recipients come from the type), and the person gets an inbox item.
+                List<RecipientBody>? recipients = i % 3 == 0 ? [new RecipientBody("route"), new RecipientBody("user", Id: $"load-{i % People}", Resolver: "load-people")] : null;
                 sends.Add(Task.Run(async () =>
                 {
                     try
                     {
-                        var response = await client.PostAsJsonAsync($"{Tenant}/notifications", new SendNotificationBody(type, null, key, null, null, null, null, null,
+                        var response = await client.PostAsJsonAsync($"{Tenant}/notifications", new SendNotificationBody(type, null, key, null, recipients, null, null, null,
                             DeliveryTests.Json("""{ "n": 1 }"""), null, null), Ct);
                         if (response.IsSuccessStatusCode)
                         {
                             accepted.Add((await response.Content.ReadFromJsonAsync<AcceptedResponse>(Ct))!.Id);
+                            if (recipients is not null)
+                            {
+                                Interlocked.Increment(ref withPerson);
+                            }
                             return;
                         }
                     }
@@ -110,7 +125,7 @@ namespace Juice.Notifications.IntegrationTests
                     where delivery.FirstAttemptAt != null
                     select new { delivery.FirstAttemptAt, request.AcceptedAt }).AsNoTracking()
                     .Select(x => (x.FirstAttemptAt!.Value - x.AcceptedAt).TotalSeconds).ToListAsync(Ct);
-                if (delays.Count >= ids.Count * 2)
+                if (delays.Count >= ids.Count * 2 + withPerson)
                 {
                     break;
                 }
@@ -136,11 +151,11 @@ namespace Juice.Notifications.IntegrationTests
             double Percentile(double p) => delays.Count == 0 ? double.NaN : delays[Math.Min(delays.Count - 1, (int)Math.Ceiling(p * delays.Count) - 1)];
             var p95 = Percentile(0.95);
             output.WriteLine($"load check: {total} requests over {sentFor.TotalSeconds:F0} s ({total / sentFor.TotalMinutes:F0}/min), {failures} refused, " +
-                $"{delays.Count}/{ids.Count * 2} deliveries attempted; accepted→first attempt p50 {Percentile(0.5):F2} s, p95 {p95:F2} s, " +
+                $"{delays.Count}/{ids.Count * 2 + withPerson} deliveries attempted ({withPerson} to people's inboxes); accepted→first attempt p50 {Percentile(0.5):F2} s, p95 {p95:F2} s, " +
                 $"p99 {Percentile(0.99):F2} s, max {delays.LastOrDefault():F2} s; lease_lost {leaseLost}; receivers {first.Requests.Count} + {second.Requests.Count}");
 
             Assert.Equal(0, failures);
-            Assert.Equal(ids.Count * 2, delays.Count);
+            Assert.Equal(ids.Count * 2 + withPerson, delays.Count);
             Assert.True(p95 <= 30, $"p95 {p95:F2} s");
             Assert.True(leaseLost <= total / 100, $"lease_lost {leaseLost}: a lease storm");
             // A lease storm (rows claimed again while being sent) shows as sends beyond one per delivery, also when the meter is out of reach.
