@@ -866,6 +866,10 @@ with several items (D19), which the review's one-parent tree didn't cover.
 | 10 | Identity resolver contract (15 Nov) | `juice-tenants` holds no users, groups or roles; the OIDC provider is the source. The identity resolver reads Keycloak's admin REST API (service account, `view-users`) behind `IIdentityDirectory`, so another directory can be added later. An email counts as verified only when Keycloak marks it `emailVerified`. A user belongs to a tenant through a `platform_tenant` user attribute, issued as the token's claim. | D23, §6.1, phase-2-plan p2-d1 |
 | 11 | Who links subscriber aliases? (15 Nov) | Tenant admins, through the API, audited. The only automatic link is the signed-in person to their own `oidc` subscriber. A resolver-declared sync waits for an external directory resolver. | D23, phase-2-plan p2-d2, I16 |
 
+| 12 | How do events reach producers? (17 Nov) | Over RabbitMQ from the outbox: topic exchange `juice.notifications.events`, routing key `{applicationKey}.{event}`; an application's broker user may bind only `{applicationKey}.#` (topic permissions). No events for an application without a broker user in phase 3. | §5.4, phase-3-plan p3-d1, I37 |
+| 13 | What does an inbox action do? (17 Nov) | Records an interaction and publishes `notification.interaction`; the producer decides and resolves. Several people may act; the same person and action twice is one; refused once the correlation is closed. | §7.3, phase-3-plan p3-d2, I36 |
+| 14 | A request on a resolved or cancelled correlation? (17 Nov) | Reopens it (`Open`, acknowledgement and outcome cleared, `reopenedAt` set); earlier notifications stay as they ended. | §5.3, phase-3-plan p3-d3, I32 |
+
 ## 20. Open questions
 
 None. The two questions open before phase 2 (the identity resolver contract, and who links subscriber aliases) were settled on 15 November
