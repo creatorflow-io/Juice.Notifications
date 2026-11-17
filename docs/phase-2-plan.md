@@ -220,6 +220,17 @@ Each milestone ends with its review loop (code-review rounds, then a confirmatio
 ### M17: `@juice-js/notifications` (`p2-11`)
 
 - I26, with unit tests in the library and a demo page in the `juice-layout` app against the local stack.
+- *As built:* `juice-layout` branch `dev/notifications-inbox` (c8966dd, 6606dbf; not yet on `alpha` or `master`, which publish). The
+  library: `NotificationsApi` (the person's API; the tenant is the token's `platform_tenant` claim unless configured, since the app's tenant
+  identifier in its URL isn't the GUID the API routes by), `InboxService` (counts and items as signals; the hub's `inboxChanged` refreshes the
+  counts and the items shown, `added` and `reset` reload the first page, a reconnect reloads everything), `juice-notification-bell` and
+  `juice-inbox-panel` (group tabs with unread counts, "needs action", read and unread, archive, read all, paging; an item's actions listed,
+  not yet buttons), and `NotificationsRoutingModule` (preferences with quiet hours; email addresses with code verification); 18 unit tests.
+  `@juice-js/layout` gained `LAYOUT_TOOLBAR_ITEMS`, so an app puts the bell in its toolbar without the layout knowing it. The demo app's
+  `ng serve -c notifications` signs in against this stack's Keycloak (public client `juice-layout-demo`, code flow with PKCE). The API
+  gained `Cors:Origins` (exact origins, no credentials; preflight answered before authentication), set in the local stack for
+  `https://localhost:4201`. The contact point `health` arrives as `Ok`, `Bouncing`, `Failed`: that enum keeps its own names, unlike the
+  others (camelCase).
 
 ### M18: proof points and acceptance (`p2-g1` … `p2-g6`)
 

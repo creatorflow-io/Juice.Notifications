@@ -4,6 +4,7 @@
 #   - the juice-notifications scope's client_id mapper (11 Nov 2026): producers authenticate as their client;
 #   - the notifications-tenant-admin role and the tenant-admin client (11 Nov 2026): an admin of the tests' tenant.
 #   - the people-test client and the person accounts ann and ben (17 Nov 2026): the person's API (me) takes no client's own token.
+#   - the juice-layout demo app's public client juice-layout-demo (17 Nov 2026, M17).
 #   - the identity directory (17 Nov 2026, M16): the platform_tenant user attribute (admin-only) issued by people-test, people in two
 #     tenants, the group ops, the realm role on-call, and the notifications-directory client the identity resolver reads them as: a
 #     service account with realm-management view-users (users, groups) and view-realm (a realm role's holders). Never view-clients,
@@ -87,6 +88,26 @@ for line in "${PEOPLE[@]}"; do
   [[ "$roles" == on-call ]] && $K add-roles -r juice --uid "$id" --rolename on-call
   $K set-password -r juice --username "$person" --new-password "$PEOPLE_TEST_PASSWORD"
 done
+
+# The juice-layout demo app (M17): code flow with PKCE from https://localhost:4201, for @juice-js/notifications.
+demo=$($K get clients -r juice --fields id,clientId --format csv --noquotes | grep ",juice-layout-demo$" | cut -d, -f1 || true)
+if [[ -z "$demo" ]]; then
+  demo=$($K create clients -r juice -i -s clientId=juice-layout-demo -s "name=juice-layout demo app (local)" -s enabled=true -s publicClient=true \
+    -s standardFlowEnabled=true -s directAccessGrantsEnabled=false -s 'redirectUris=["https://localhost:4201/*"]' \
+    -s 'webOrigins=["https://localhost:4201"]' -s 'attributes."pkce.code.challenge.method"=S256' \
+    -s 'attributes."post.logout.redirect.uris"=https://localhost:4201/*')
+  $K update "clients/$demo/default-client-scopes/$scope" -r juice
+  $K create "clients/$demo/protocol-mappers/models" -r juice -s 'name=platform tenant' -s protocol=openid-connect \
+    -s protocolMapper=oidc-usermodel-attribute-mapper -s 'config."user.attribute"=platform_tenant' -s 'config."claim.name"=platform_tenant' \
+    -s 'config."jsonType.label"=String' -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=false'
+  $K create "clients/$demo/protocol-mappers/models" -r juice -s name=subject -s protocol=openid-connect -s protocolMapper=oidc-sub-mapper \
+    -s 'config."access.token.claim"=true' -s 'config."introspection.token.claim"=true'
+  $K create "clients/$demo/protocol-mappers/models" -r juice -s name=username -s protocol=openid-connect \
+    -s protocolMapper=oidc-usermodel-property-mapper -s 'config."user.attribute"=username' -s 'config."claim.name"=preferred_username' \
+    -s 'config."jsonType.label"=String' -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=true'
+  $K create "clients/$demo/protocol-mappers/models" -r juice -s 'name=full name' -s protocol=openid-connect -s protocolMapper=oidc-full-name-mapper \
+    -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=true' -s 'config."userinfo.token.claim"=true'
+fi
 
 directory=$($K get clients -r juice --fields id,clientId --format csv --noquotes | grep ",notifications-directory$" | cut -d, -f1 || true)
 if [[ -z "$directory" ]]; then

@@ -77,6 +77,7 @@ Contact addresses and device tokens are encrypted at rest under `NOTIFICATIONS_C
 | `sample-producer` | client credentials | none | send notifications as an application (from M2) |
 | `tenant-admin` | client credentials | `notifications-tenant-admin`, `platform_tenant` = `0193f0aa-0000-7000-8000-0000000000a1` | configure that one tenant's delivery (the tests' tenant) |
 | `people-test` | password (public client) | none, `platform_tenant` = the person's own attribute | sign in the person accounts (password `PEOPLE_TEST_PASSWORD`) for the person's API, `me`, which refuses a client's own token |
+| `juice-layout-demo` | code with PKCE (public client) | none, `platform_tenant` = the person's own attribute | the `juice-layout` demo app (`ng serve -c notifications`, `https://localhost:4201`), for `@juice-js/notifications`; the API allows that origin (`Cors:Origins`) |
 | `notifications-directory` | client credentials | realm-management `view-users`, `view-realm` | the identity resolver's directory `keycloak` (the app's `Identity:Directories:keycloak`): reads users, groups and realm roles |
 
 The person accounts belong to a tenant through the user attribute `platform_tenant` (declared in the realm's user profile, admin-only):

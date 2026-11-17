@@ -119,6 +119,8 @@ services:
       NOTIFICATIONS_CONTACT_KEY: ${NOTIFICATIONS_CONTACT_KEY:?run scripts/init.sh}
       NOTIFICATIONS_CONTACT_HASH_KEY: ${NOTIFICATIONS_CONTACT_HASH_KEY:?run scripts/init.sh}
       Inbox__SignalR__Redis: redis:6379
+      # The juice-layout demo app (ng serve -c notifications) calls the API and the hub from its own origin.
+      Cors__Origins__0: https://localhost:4201
       # The identity resolver's directory (phase-2-plan M16): tenants name it in their resolver settings ({"directory": "keycloak"}).
       Identity__Directories__keycloak__BaseUrl: http://keycloak:8080
       Identity__Directories__keycloak__Realm: juice

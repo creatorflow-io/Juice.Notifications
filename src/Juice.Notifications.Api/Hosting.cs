@@ -73,6 +73,8 @@ namespace Juice.Notifications.Api
             var connectionString = configuration.GetConnectionString("Notifications")
                 ?? throw new InvalidOperationException("ConnectionStrings:Notifications is required.");
             services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, connectionString));
+            // Browser apps on other origins (Cors:Origins; none by default).
+            services.AddNotificationsCors(configuration);
             // A send that is under way finishes and is recorded on shutdown (the dispatcher doesn't cancel sends): up to about 27 s for SMTP, plus
             // recording and saving. The container's stop grace period must be longer still (deploy/local: stop_grace_period).
             services.Configure<HostOptions>(host => host.ShutdownTimeout = host.ShutdownTimeout < TimeSpan.FromSeconds(45) ? TimeSpan.FromSeconds(45) : host.ShutdownTimeout);
@@ -249,6 +251,11 @@ namespace Juice.Notifications.Api
             app.UseNotificationsMessageContext();
             app.UseExceptionHandler();
             app.UseStatusCodePages();
+            // Before authentication: a preflight carries no token, and is answered here.
+            if (app.ApplicationServices.GetService<CorsSettings>() is { Origins.Count: > 0 })
+            {
+                app.UseCors(CorsSettings.Policy);
+            }
             app.UseAuthentication();
             // After authentication, so a record names its user; before authorization, so refused changes are recorded too.
             app.UseNotificationsAudit();

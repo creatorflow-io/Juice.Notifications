@@ -121,6 +121,44 @@
       ]
     },
     {
+      "clientId": "juice-layout-demo",
+      "name": "juice-layout demo app (local): signs people in with the code flow for @juice-js/notifications' bell and settings pages",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["https://localhost:4201/*"],
+      "webOrigins": ["https://localhost:4201"],
+      "attributes": { "pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "https://localhost:4201/*" },
+      "defaultClientScopes": ["juice-notifications"],
+      "protocolMappers": [
+        {
+          "name": "platform tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": { "user.attribute": "platform_tenant", "claim.name": "platform_tenant", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "subject",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": { "access.token.claim": "true", "introspection.token.claim": "true" }
+        },
+        {
+          "name": "username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": { "user.attribute": "username", "claim.name": "preferred_username", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "true" }
+        },
+        {
+          "name": "full name",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-full-name-mapper",
+          "config": { "access.token.claim": "true", "id.token.claim": "true", "userinfo.token.claim": "true" }
+        }
+      ]
+    },
+    {
       "clientId": "notifications-directory",
       "name": "Notifications identity directory (local): reads users, groups and realm roles for the identity resolver",
       "enabled": true,
