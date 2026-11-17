@@ -511,6 +511,28 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>
+    /// Recipients held together for a window (design §7.1, D19; phase-3-plan I31): those a <c>digest</c> step adds while it is open, by the
+    /// type and the step's key. When it closes it is claimed, and its members get one delivery per destination with an item each. One open
+    /// digest per type and key (a partial unique index); members join under an advisory lock that the close takes too, so none joins a digest
+    /// already planned.
+    /// </summary>
+    public sealed class Digest : Claimable, ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public required string TypeKey { get; init; }
+        /// <summary>What it groups by: <c>route</c>, <c>subscriber</c>, <c>correlation</c> or <c>type</c>.</summary>
+        public required string By { get; init; }
+        public required string Key { get; init; }
+        public DigestState State { get; set; }
+        public DateTimeOffset OpensAt { get; init; }
+        public DateTimeOffset ClosesAt { get; init; }
+        public DateTimeOffset? ClosedAt { get; set; }
+        /// <summary>The members it planned when it closed.</summary>
+        public int Members { get; set; }
+    }
+
+    /// <summary>
     /// A notification counted by a <c>throttle</c> step in a window (phase-3-plan I30): the window's count is its rows for the type and key. One
     /// per notification and step, so a step run again (a lost lease) counts once.
     /// </summary>
@@ -551,6 +573,8 @@ namespace Juice.Notifications.Data
         /// </summary>
         public required string NamedAs { get; init; }
         public int EscalationStep { get; init; }
+        /// <summary>The digest it waits in (phase-3-plan I31): it is sent with the digest's other members when that closes.</summary>
+        public Guid? DigestId { get; set; }
         public RecipientOutcome Outcome { get; set; }
         /// <summary>
         /// The rules a mandatory type went past to reach this person (design §6.4, phase-2-plan I21): <c>tenant-mute</c> (one with a wildcard),
@@ -565,6 +589,8 @@ namespace Juice.Notifications.Data
     {
         public Guid TenantId { get; init; }
         public Guid Id { get; init; } = Guid.CreateVersion7();
+        /// <summary>The digest it carries, one item per member (phase-3-plan I31); null for a single notification's delivery.</summary>
+        public Guid? DigestId { get; init; }
         public required string Channel { get; init; }
         public Guid IntegrationId { get; init; }
         /// <summary><c>cp:…</c>, <c>it:…</c>, <c>ext:…</c> or <c>inbox:…</c> (design §3).</summary>

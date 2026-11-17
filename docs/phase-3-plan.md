@@ -127,6 +127,18 @@ tests, a commit and a build-board update.
 
 - I31, I33: the `digest` step and the person's digest preference; one delivery per destination with N items.
 - Tests: proof point 3; a digest closing while a worker crashes sends once; a resolved correlation's members leave its digest.
+- *As built:* `{ "step": "digest", "windowSeconds", "by": "route" | "subscriber" | "correlation" | "type" }` must be followed by `send`, which
+  it stands for. The runner puts each waiting recipient in the open digest for its key (a route recipient by its route, a person by
+  themselves, the request's correlation, or one per type), creating it with `closes_at` = now + the window, in a short transaction per key
+  under an advisory lock, committed at once; the notification goes on past the send. A new stage, `digest`, claims a digest when it closes:
+  it marks it closed under the same lock (so nobody joins it afterwards), then plans the members still waiting in one step: mutes and
+  preferences as at a send, the delivery planner's destinations (its destination, personal-rule and render code shared, not copied),
+  then **one delivery per destination and channel** (`deliveries.digest_id`) with an item per member, its content rendered once with
+  `items` (the first 100, by acceptance) and `more`; a passthrough webhook gets an envelope with `items`. The inbox still gets an item per
+  notification. A person in quiet hours gets the digest's other deliveries when the hours end (the delivery's `next_at`; the digest
+  isn't held). Running the close again plans only members still waiting; delivery items' unique key keeps any from going twice. A digest
+  whose members all left (a resolved correlation cancels them) ends `Cancelled`. **Not built:** I33, a person's own hourly digest from a
+  `digest` preference (deferred #45): that mode still acts as `on`.
 
 ### M22: escalation (`p3-06`)
 

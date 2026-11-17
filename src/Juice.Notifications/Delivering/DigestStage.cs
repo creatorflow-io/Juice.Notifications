@@ -1,0 +1,198 @@
+using System.Text.Json;
+using Juice.Notifications.Data;
+using Juice.Notifications.Planning;
+using Juice.Notifications.Rendering;
+using Juice.Notifications.Stages;
+using Juice.Notifications.Workflows;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+
+namespace Juice.Notifications.Delivering
+{
+    /// <summary>
+    /// Closes a digest when its window ends (design §7.1, D19; phase-3-plan I31) and plans its members in one step: the tenant's mutes and the
+    /// people's preferences as they are now (as a <c>send</c> applies them), then the delivery planner's destinations, and <b>one delivery per
+    /// destination and channel</b> with one item per member, its content rendered once with every notification it carries (<c>items</c>, the
+    /// first 100, and <c>more</c>). A person's inbox still gets an item per notification: the inbox is never digested. A person in their quiet
+    /// hours gets the digest's other deliveries when the hours end (the delivery waits, not the digest).
+    /// </summary>
+    /// <remarks>
+    /// Closing takes the lock members join under, so none joins once it is closing. The close is committed on its own first; the planning is the
+    /// step's save, and a step that runs again plans the members still waiting (the delivery items' unique key keeps any from going twice).
+    /// </remarks>
+    public sealed class DigestStage(DeliveryPlannerStage planner, IChannelRegistry channels, People.MuteMatches mutes, ILogger<DigestStage> logger)
+        : IStage<Digest>
+    {
+        public const string StageName = "digest";
+
+        public string Name => StageName;
+
+        public void GiveUp(StageContext context, Digest row, string error)
+        {
+            // Its members stay waiting; the log has why. Nothing is sent from a digest that can't be planned.
+            row.State = DigestState.Cancelled;
+            context.Done(row, null);
+        }
+
+        public async Task ExecuteAsync(StageContext context, Digest row, CancellationToken ct)
+        {
+            var db = context.Db;
+            var now = context.Now;
+            if (row.State == DigestState.Cancelled)
+            {
+                context.Done(row, null);
+                return;
+            }
+            if (row.State == DigestState.Open)
+            {
+                await using var transaction = await db.Database.BeginTransactionAsync(ct);
+                var lockKey = WorkflowRunner.DigestLock(row.TenantId, row.TypeKey, row.By, row.Key);
+                await db.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({WorkflowRunner.DigestLockSpace}, hashtext({lockKey}))", ct);
+                var closed = DigestState.Closed.ToString();
+                var open = DigestState.Open.ToString();
+                await db.Database.ExecuteSqlAsync($"UPDATE notifications.digests SET state = {closed}, closed_at = {now} WHERE tenant_id = {row.TenantId} AND id = {row.Id} AND state = {open}", ct);
+                await transaction.CommitAsync(ct);
+                (row.State, row.ClosedAt) = (DigestState.Closed, now);
+            }
+            var members = await db.Recipients.Where(r => r.TenantId == row.TenantId && r.DigestId == row.Id && r.Outcome == RecipientOutcome.Pending)
+                .OrderBy(r => r.Id).ToListAsync(ct);
+            if (members.Count == 0)
+            {
+                // Everyone left (a resolved correlation) or was planned by an earlier try.
+                if (!await db.Recipients.AsNoTracking().AnyAsync(r => r.TenantId == row.TenantId && r.DigestId == row.Id && r.Outcome != RecipientOutcome.Cancelled, ct))
+                {
+                    row.State = DigestState.Cancelled;
+                }
+                context.Done(row, null);
+                return;
+            }
+            var notificationIds = members.Select(m => m.NotificationId).Distinct().ToList();
+            var requests = (await (from n in db.Notifications
+                                   join r in db.Requests on new { n.TenantId, Id = n.RequestId } equals new { r.TenantId, r.Id }
+                                   where n.TenantId == row.TenantId && notificationIds.Contains(n.Id)
+                                   select new { NotificationId = n.Id, Request = r }).AsNoTracking().ToListAsync(ct))
+                .ToDictionary(x => x.NotificationId, x => x.Request);
+            var typeIds = requests.Values.Select(r => r.TypeId).Distinct().ToList();
+            var types = await db.Types.AsNoTracking().Where(t => typeIds.Contains(t.Id)).ToDictionaryAsync(t => t.Id, ct);
+
+            // As at a send: the tenant's mutes and the people's opt-outs now. An expired request's member is cancelled.
+            foreach (var byRequest in members.GroupBy(m => m.NotificationId))
+            {
+                var request = requests[byRequest.Key];
+                var list = byRequest.ToList();
+                if (request.ExpiresAt is { } expires && expires <= now)
+                {
+                    list.ForEach(m => (m.Outcome, m.NextAt) = (RecipientOutcome.Cancelled, null));
+                    continue;
+                }
+                list.ForEach(m => (m.Outcome, m.NextAt) = (RecipientOutcome.Planned, now));
+                await People.PreferencePolicy.ApplyAsync(db, request, types[request.TypeId], list, mutes, now, ct);
+            }
+
+            // Each member's destinations, as the delivery planner reaches them.
+            var reach = new List<(NotificationRecipient Member, DeliveryPlannerStage.Destination Destination, DateTimeOffset? Until)>();
+            var allOff = new HashSet<Guid>();
+            foreach (var member in members.Where(m => m.Outcome == RecipientOutcome.Planned))
+            {
+                var type = types[requests[member.NotificationId].TypeId];
+                var destinations = await planner.DestinationsAsync(db, member, type, ct);
+                DateTimeOffset? until = null;
+                if (member.Kind == RecipientKind.Subscriber && member.SubscriberId is { } person)
+                {
+                    (destinations, var off, until) = await DeliveryPlannerStage.PersonalAsync(db, member, person, type, destinations, now, ct);
+                    if (off)
+                    {
+                        allOff.Add(member.Id);
+                    }
+                }
+                foreach (var destination in destinations)
+                {
+                    if (destination.Integration is null)
+                    {
+                        logger.LogWarning("Digest {Digest} member {Recipient} can't reach {Destination}: {Problem}", row.Id, member.Id, destination.Key, destination.Problem);
+                        continue;
+                    }
+                    reach.Add((member, destination, destination.Channel == Channels.Inbox ? null : until));
+                }
+            }
+            var memberIds = members.Select(m => m.Id).ToList();
+            var existing = (await db.DeliveryItems.AsNoTracking().Where(i => i.TenantId == row.TenantId && memberIds.Contains(i.RecipientId))
+                .Select(i => new { i.RecipientId, i.DestinationKey, i.Channel }).ToListAsync(ct)).Select(i => (i.RecipientId, i.DestinationKey, i.Channel)).ToHashSet();
+            reach.RemoveAll(r => existing.Contains((r.Member.Id, r.Destination.Key, r.Destination.Channel)));
+
+            var reached = new HashSet<Guid>(existing.Select(e => e.RecipientId));
+            var created = 0;
+            // The inbox: an item per notification. Everything else: one delivery per destination and channel for all its members.
+            var groups = reach.GroupBy(r => r.Destination.Channel == Channels.Inbox ? (r.Destination.Key, r.Destination.Channel, r.Member.Id) : (r.Destination.Key, r.Destination.Channel, Guid.Empty));
+            foreach (var group in groups)
+            {
+                var entries = group.OrderBy(e => requests[e.Member.NotificationId].AcceptedAt).ThenBy(e => e.Member.Id).ToList();
+                var destination = entries[0].Destination;
+                var carried = entries.Select(e => requests[e.Member.NotificationId]).ToList();
+                var first = carried[0];
+                var type = types[first.TypeId];
+                var isDigest = destination.Channel != Channels.Inbox;
+                var model = new RenderModel(type.Key, type.Version, type.Name, first.Priority, JsonElement.Parse(first.Data), first.Labels, first.Links,
+                    isDigest ? carried.Take(DigestRules.MaxListed).Select(r => new DigestItem(JsonElement.Parse(r.Data), r.Labels, r.Links, r.Priority, r.AcceptedAt,
+                        r.CorrelationKey)).ToList() : null,
+                    isDigest ? Math.Max(0, carried.Count - DigestRules.MaxListed) : 0);
+                var (content, template, problem, category) = await planner.RenderAsync(db, row.TenantId, type, first, destination.Channel,
+                    channels.Find(destination.Channel), model, timeoutIsFinal: row.StepFailures >= 2, ct, isDigest ? carried : null);
+                if (problem is null && destination.Problem is not null)
+                {
+                    (problem, category) = (destination.Problem, FailureCategory.Provider);
+                }
+                var until = entries.Select(e => e.Until).FirstOrDefault(u => u is not null);
+                var delivery = new Delivery
+                {
+                    TenantId = row.TenantId, DigestId = isDigest ? row.Id : null, Channel = destination.Channel, IntegrationId = destination.Integration!.Id,
+                    DestinationKey = destination.Key, DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0,
+                    Locale = template?.Locale ?? Types.TypeRules.DefaultLocale, RendererVersion = TemplateRenderer.Version, Content = content,
+                    Priority = carried.Max(r => r.Priority), Mandatory = type.Mandatory, CreatedAt = now,
+                    Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed, FailureCategory = problem is null ? null : category,
+                    LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? until ?? now : null, CompletedAt = problem is null ? null : now,
+                };
+                db.Deliveries.Add(delivery);
+                foreach (var entry in entries)
+                {
+                    db.DeliveryItems.Add(new DeliveryItem
+                    {
+                        TenantId = row.TenantId, DeliveryId = delivery.Id, RecipientId = entry.Member.Id, RequestId = requests[entry.Member.NotificationId].Id,
+                        DestinationKey = destination.Key, Channel = destination.Channel,
+                    });
+                    reached.Add(entry.Member.Id);
+                }
+                created++;
+            }
+            var planned = 0;
+            foreach (var member in members.Where(m => m.Outcome == RecipientOutcome.Planned))
+            {
+                member.NextAt = null;
+                if (reached.Contains(member.Id))
+                {
+                    planned++;
+                }
+                else
+                {
+                    member.Outcome = allOff.Contains(member.Id) ? RecipientOutcome.OptedOut : RecipientOutcome.Failed;
+                }
+            }
+            row.Members += members.Count;
+            logger.LogDebug("Digest {Digest} ({Type}, {By} {Key}) closed: {Members} members, {Planned} planned, {Deliveries} deliveries",
+                row.Id, row.TypeKey, row.By, row.Key, members.Count, planned, created);
+            var outcomes = members.GroupBy(m => m.Outcome.ToString()).Select(g => (g.Key, g.Count())).ToList();
+            context.AfterCommit.Add(() =>
+            {
+                foreach (var (outcome, count) in outcomes)
+                {
+                    Telemetry.Recipients.Add(count, new KeyValuePair<string, object?>("outcome", outcome));
+                }
+            });
+            context.Done(row, null);
+            if (created > 0)
+            {
+                context.Wakes.Add(DeliveryStageNames.Dispatcher);
+            }
+        }
+    }
+}

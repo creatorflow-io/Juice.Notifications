@@ -39,7 +39,7 @@ namespace Juice.Notifications.Delivering
     {
         public string Name => DeliveryStageNames.DeliveryPlanner;
 
-        private sealed record Destination(string Key, string Channel, Integration? Integration, string Snapshot, string? Problem);
+        internal sealed record Destination(string Key, string Channel, Integration? Integration, string Snapshot, string? Problem);
 
         /// <summary>
         /// Render timeouts tolerated on one recipient before the next is recorded as a failed delivery: a timeout can be the machine's load,
@@ -190,7 +190,7 @@ namespace Juice.Notifications.Delivering
             }
         }
 
-        private async Task<List<Destination>> DestinationsAsync(NotificationsDbContext db, NotificationRecipient row, NotificationType type, CancellationToken ct)
+        internal async Task<List<Destination>> DestinationsAsync(NotificationsDbContext db, NotificationRecipient row, NotificationType type, CancellationToken ct)
         {
             if (row.Kind == RecipientKind.Route)
             {
@@ -241,6 +241,18 @@ namespace Juice.Notifications.Delivering
         private static async Task<(List<Destination> Destinations, bool AllOff, DateTimeOffset? DeferUntil)> PersonalRulesAsync(NotificationsDbContext db,
             NotificationRecipient row, Guid subscriberId, NotificationType type, List<Destination> destinations, DateTimeOffset now, CancellationToken ct)
         {
+            var (kept, allOff, quietUntil) = await PersonalAsync(db, row, subscriberId, type, destinations, now, ct);
+            return quietUntil is { } end ? (kept.Where(d => d.Channel == Channels.Inbox).ToList(), false, end) : (kept, allOff, null);
+        }
+
+        /// <summary>
+        /// The person's rules without deciding what waits: the destinations they keep (every channel), and when their quiet hours end if their
+        /// channels other than the inbox should wait until then (none for a mandatory type, which goes past them, recorded). A digest holds its
+        /// own deliveries to that time (phase-3-plan I31); the delivery planner defers the recipient instead.
+        /// </summary>
+        internal static async Task<(List<Destination> Kept, bool AllOff, DateTimeOffset? QuietUntil)> PersonalAsync(NotificationsDbContext db,
+            NotificationRecipient row, Guid subscriberId, NotificationType type, List<Destination> destinations, DateTimeOffset now, CancellationToken ct)
+        {
             if (destinations.Count == 0)
             {
                 return (destinations, false, null);
@@ -272,7 +284,7 @@ namespace Juice.Notifications.Delivering
                 PreferencePolicy.Bypass(row, BypassedRules.QuietHours);
                 return (kept, false, null);
             }
-            return (kept.Where(d => d.Channel == Channels.Inbox).ToList(), false, end);
+            return (kept, false, end);
         }
 
         /// <summary>The tenant's integration a destination on <paramref name="channel"/> goes through: its first enabled one, by priority then key.</summary>
@@ -334,7 +346,7 @@ namespace Juice.Notifications.Delivering
         }
 
         /// <summary>One channel's content, or the problem that stopped it and its failure category.</summary>
-        private sealed record Rendered(string Content, Template? Template, string? Problem, FailureCategory? Category);
+        internal sealed record Rendered(string Content, Template? Template, string? Problem, FailureCategory? Category);
 
         /// <summary>What a delivery stores when its content couldn't be rendered: nothing to send, so a dead-letter retry refuses it.</summary>
         private const string NoContent = "";
@@ -346,8 +358,9 @@ namespace Juice.Notifications.Delivering
         /// recorded like any other failure, so the recipient's other channels still go out and history says why this one didn't. An integration on a
         /// channel no longer registered (its package removed) fails as <c>Content</c> too: nothing says what its content would be.
         /// </summary>
-        private async Task<Rendered> RenderAsync(NotificationsDbContext db, Guid tenantId, NotificationType type,
-            NotificationRequest request, string channel, ChannelDefinition? definition, RenderModel model, bool timeoutIsFinal, CancellationToken ct)
+        internal async Task<Rendered> RenderAsync(NotificationsDbContext db, Guid tenantId, NotificationType type,
+            NotificationRequest request, string channel, ChannelDefinition? definition, RenderModel model, bool timeoutIsFinal, CancellationToken ct,
+            IReadOnlyList<NotificationRequest>? digest = null)
         {
             if (definition is null)
             {
@@ -358,11 +371,22 @@ namespace Juice.Notifications.Delivering
                 .OrderBy(t => t.TenantId == null).ThenByDescending(t => t.Version).FirstOrDefaultAsync(ct);
             if (definition.Passthrough && (template is null || template.Engine == TemplateEngines.Passthrough))
             {
-                var envelope = JsonSerializer.Serialize(new
-                {
-                    id = request.Id, type = request.TypeKey, typeVersion = request.TypeVersion, occurredAt = request.AcceptedAt, tenant = request.TenantId,
-                    correlationKey = request.CorrelationKey, data = JsonElement.Parse(request.Data), links = request.Links,
-                });
+                // A digest's envelope lists every notification it carries (up to 100 of them, and how many more).
+                var envelope = digest is null
+                    ? JsonSerializer.Serialize(new
+                    {
+                        id = request.Id, type = request.TypeKey, typeVersion = request.TypeVersion, occurredAt = request.AcceptedAt, tenant = request.TenantId,
+                        correlationKey = request.CorrelationKey, data = JsonElement.Parse(request.Data), links = request.Links,
+                    })
+                    : JsonSerializer.Serialize(new
+                    {
+                        type = request.TypeKey, typeVersion = request.TypeVersion, tenant = request.TenantId, digest = true,
+                        items = digest.Take(DigestRules.MaxListed).Select(r => new
+                        {
+                            id = r.Id, occurredAt = r.AcceptedAt, correlationKey = r.CorrelationKey, data = JsonElement.Parse(r.Data), links = r.Links,
+                        }),
+                        more = Math.Max(0, digest.Count - DigestRules.MaxListed),
+                    });
                 return new Rendered(ChannelContent.Webhook(envelope, isJson: true), template, null, null);
             }
             if (template is null && definition.Content == ContentShape.Item)
@@ -405,6 +429,8 @@ namespace Juice.Notifications.Delivering
     {
         public static IServiceCollection AddDeliveryPlanning(this IServiceCollection services, StageOptions options, bool runWorkers = true)
             => Inbox.InboxRegistration.AddInboxIntegrations(services.AddBuiltInChannels()).AddSingleton(new DeliveryPlannerLimits(options.MaxStepFailures))
-                .AddStage<NotificationRecipient, DeliveryPlannerStage>(options, runWorkers);
+                .AddStage<NotificationRecipient, DeliveryPlannerStage>(options, runWorkers)
+                // Digests close on their own claims (phase-3-plan I31), planned with the delivery planner's rules.
+                .AddStage<Digest, DigestStage>(options, runWorkers);
     }
 }

@@ -544,6 +544,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("text")
                         .HasColumnName("destination_snapshot");
 
+                    b.Property<Guid?>("DigestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("digest_id");
+
                     b.Property<string>("FailureCategory")
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
@@ -633,6 +637,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .IsDescending(true, false)
                         .HasDatabaseName("ix_deliveries_claim")
                         .HasFilter("next_at IS NOT NULL");
+
+                    b.HasIndex("TenantId", "DigestId")
+                        .HasDatabaseName("ix_deliveries_digest")
+                        .HasFilter("digest_id IS NOT NULL");
 
                     b.HasIndex("TenantId", "IntegrationId")
                         .HasDatabaseName("ix_deliveries_tenant_id_integration_id");
@@ -832,6 +840,93 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_device_registrations_token");
 
                     b.ToTable("device_registrations", "notifications");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.Digest", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("By")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("by");
+
+                    b.Property<string>("ClaimedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("claimed_by");
+
+                    b.Property<DateTimeOffset?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("closed_at");
+
+                    b.Property<DateTimeOffset>("ClosesAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("closes_at");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("key");
+
+                    b.Property<DateTimeOffset?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_until");
+
+                    b.Property<int>("Members")
+                        .HasColumnType("integer")
+                        .HasColumnName("members");
+
+                    b.Property<DateTimeOffset?>("NextAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_at");
+
+                    b.Property<DateTimeOffset>("OpensAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("opens_at");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("state");
+
+                    b.Property<int>("StepFailures")
+                        .HasColumnType("integer")
+                        .HasColumnName("step_failures");
+
+                    b.Property<string>("TypeKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("type_key");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_digests");
+
+                    b.HasIndex("NextAt")
+                        .HasDatabaseName("ix_digests_due")
+                        .HasFilter("next_at IS NOT NULL");
+
+                    b.HasIndex("TenantId", "TypeKey", "By", "Key")
+                        .IsUnique()
+                        .HasDatabaseName("ix_digests_open")
+                        .HasFilter("state = 'Open'");
+
+                    b.ToTable("digests", "notifications");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.DisplayGroup", b =>
@@ -1365,6 +1460,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<Guid?>("DigestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("digest_id");
+
                     b.Property<int>("EscalationStep")
                         .HasColumnType("integer")
                         .HasColumnName("escalation_step");
@@ -1438,6 +1537,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasIndex("NextAt")
                         .HasDatabaseName("ix_notification_recipients_due")
                         .HasFilter("next_at IS NOT NULL");
+
+                    b.HasIndex("TenantId", "DigestId")
+                        .HasDatabaseName("ix_notification_recipients_digest")
+                        .HasFilter("digest_id IS NOT NULL");
 
                     b.HasIndex("TenantId", "SubscriberId")
                         .HasDatabaseName("ix_notification_recipients_tenant_id_subscriber_id");

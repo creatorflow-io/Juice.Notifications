@@ -69,6 +69,11 @@ namespace Juice.Notifications.Workflows
                             return;
                         }
                         break;
+                    case DigestStep digest:
+                        await JoinDigestAsync(db, row, request, digest, now, ct);
+                        // Its send is the digest's: past both (the declaration guarantees the send follows).
+                        row.WorkflowStep++;
+                        break;
                 }
                 row.WorkflowStep++;
             }
@@ -172,6 +177,56 @@ namespace Juice.Notifications.Workflows
             await transaction.CommitAsync(ct);
             return null;
         }
+
+        /// <summary>Advisory locks of digests: joining one and closing it take the same lock per tenant, type, grouping and key.</summary>
+        internal const int DigestLockSpace = 0x1B0E;
+
+        internal static string DigestLock(Guid tenant, string typeKey, string by, string key) => $"{tenant}:{typeKey}:{by}:{key}";
+
+        /// <summary>
+        /// Puts the notification's waiting recipients in the open digest for their key (I31), creating it (closing a window from now) if there is
+        /// none: per key, in its own short transaction under the digest's lock, committed at once, so a closing digest either has them or another
+        /// opens for them. A recipient already in one (this step run again) stays where it is.
+        /// </summary>
+        private static async Task JoinDigestAsync(NotificationsDbContext db, Notification row, NotificationRequest request, DigestStep digest, DateTimeOffset now,
+            CancellationToken ct)
+        {
+            var waiting = await db.Recipients.AsNoTracking()
+                .Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Outcome == RecipientOutcome.Pending && r.DigestId == null)
+                .Select(r => new { r.Id, r.RouteKey, r.SubscriberId, r.NamedAs }).ToListAsync(ct);
+            var open = DigestState.Open.ToString();
+            foreach (var group in waiting.GroupBy(r => Fit(digest.By switch
+            {
+                DigestKeys.Route => r.RouteKey ?? r.NamedAs,
+                DigestKeys.Subscriber => r.SubscriberId?.ToString() ?? r.NamedAs,
+                DigestKeys.Correlation => request.CorrelationKey ?? "",
+                _ => "",
+            }), StringComparer.Ordinal))
+            {
+                var key = group.Key;
+                var ids = group.Select(r => r.Id).ToList();
+                await using var transaction = await db.Database.BeginTransactionAsync(ct);
+                var lockKey = DigestLock(row.TenantId, request.TypeKey, digest.By, key);
+                await db.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({DigestLockSpace}, hashtext({lockKey}))", ct);
+                var digestId = await db.Digests.Where(d => d.TenantId == row.TenantId && d.TypeKey == request.TypeKey && d.By == digest.By && d.Key == key
+                    && d.State == DigestState.Open).Select(d => (Guid?)d.Id).SingleOrDefaultAsync(ct);
+                if (digestId is null)
+                {
+                    digestId = Guid.CreateVersion7();
+                    var closes = now + digest.Window;
+                    await db.Database.ExecuteSqlAsync($"""
+                        INSERT INTO notifications.digests (tenant_id, id, type_key, "by", key, state, opens_at, closes_at, members, version, next_at, step_failures)
+                        VALUES ({row.TenantId}, {digestId}, {request.TypeKey}, {digest.By}, {key}, {open}, {now}, {closes}, 0, 0, {closes}, 0)
+                        """, ct);
+                }
+                await db.Recipients.Where(r => r.TenantId == row.TenantId && ids.Contains(r.Id) && r.DigestId == null)
+                    .ExecuteUpdateAsync(s => s.SetProperty(r => r.DigestId, digestId), ct);
+                await transaction.CommitAsync(ct);
+            }
+        }
+
+        private static string Fit(string value)
+            => value.Length <= 200 ? value : "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
         /// <summary>What a throttle counts by, for this request: long values (a label) are hashed to fit the column.</summary>
         internal static string ThrottleKey(string by, NotificationRequest request)

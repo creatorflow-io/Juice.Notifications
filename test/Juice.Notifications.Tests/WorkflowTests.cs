@@ -39,7 +39,11 @@ namespace Juice.Notifications.Tests
         [InlineData("""[{"step":"delay","seconds":30}]""", "/workflow")] // never sends
         [InlineData("""["send"]""", "/workflow/0")]
         [InlineData("""[{"step":"wait"},{"step":"send"}]""", "/workflow/0/step")]
-        [InlineData("""[{"step":"digest"},{"step":"send"}]""", "/workflow/0/step")]
+        [InlineData("""[{"step":"escalate"},{"step":"send"}]""", "/workflow/0/step")]
+        [InlineData("""[{"step":"digest","windowSeconds":60}]""", "/workflow/0")] // holds for a send that isn't there
+        [InlineData("""[{"step":"digest","windowSeconds":60},{"step":"delay","seconds":5},{"step":"send"}]""", "/workflow/0")]
+        [InlineData("""[{"step":"digest"},{"step":"send"}]""", "/workflow/0/windowSeconds")]
+        [InlineData("""[{"step":"digest","windowSeconds":60,"by":"label"},{"step":"send"}]""", "/workflow/0/by")]
         [InlineData("""[{"step":"send","extra":1}]""", "/workflow/0/extra")]
         [InlineData("""[{"step":"delay","seconds":0},{"step":"send"}]""", "/workflow/0/seconds")]
         [InlineData("""[{"step":"delay","seconds":604801},{"step":"send"}]""", "/workflow/0/seconds")]
@@ -56,6 +60,18 @@ namespace Juice.Notifications.Tests
         [InlineData("""[{"step":"condition","when":{"all":[{"any":[{"all":[{"labels":{"a":"b"}}]}]}]}},{"step":"send"}]""", "/workflow/0/when/all/0/any/0/all")]
         public void A_bad_workflow_is_refused_where_it_is_wrong(string json, string pointer)
             => Assert.Equal(pointer, Pointers(json));
+
+        [Fact]
+        public void A_digest_holds_for_the_send_after_it()
+        {
+            var (workflow, errors) = Parse("""[{"step":"digest","windowSeconds":30,"by":"subscriber"},{"step":"send"}]""");
+            Assert.Empty(errors);
+            Assert.Equal(new DigestStep(TimeSpan.FromSeconds(30), DigestKeys.Subscriber), workflow!.Steps[0]);
+            Assert.Equal(DigestKeys.Route, Assert.IsType<DigestStep>(Parse("""[{"step":"digest","windowSeconds":30},{"step":"send"}]""").Workflow!.Steps[0]).By);
+            const string byCorrelation = """[{"step":"digest","windowSeconds":30,"by":"correlation"},{"step":"send"}]""";
+            Assert.Equal("/workflow/0/by", Pointers(byCorrelation, CorrelationRules.Optional));
+            Assert.Empty(Pointers(byCorrelation, CorrelationRules.Required));
+        }
 
         [Fact]
         public void Steps_that_read_the_correlation_need_a_type_that_carries_one()

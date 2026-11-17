@@ -37,6 +37,16 @@ namespace Juice.Notifications
     [JsonConverter(typeof(JsonStringEnumConverter<CorrelationState>))]
     public enum CorrelationState { Open, Acknowledged, Resolved, Cancelled }
 
+    /// <summary>A digest's state (phase-3-plan I31): taking members until it closes; closed (its deliveries planned); cancelled (no one left).</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter<DigestState>))]
+    public enum DigestState { Open, Closed, Cancelled }
+
+    public static class DigestRules
+    {
+        /// <summary>Notifications a digest's content lists; the rest are counted as <c>more</c> (design §7.1).</summary>
+        public const int MaxListed = 100;
+    }
+
     /// <summary>The <c>kind</c> of a recipient in a request (design §5.2). <c>route</c> and <c>address</c> are built in; the people kinds go
     /// through a resolver the tenant configures (phase-2-plan M10).</summary>
     public static class RecipientKinds

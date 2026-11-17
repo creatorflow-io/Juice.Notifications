@@ -20,6 +20,23 @@ namespace Juice.Notifications.Workflows
     /// <summary>At most <see cref="Limit"/> notifications of the type per window per key; the rest wait for the next window.</summary>
     public sealed record ThrottleStep(int Limit, TimeSpan Window, string By) : WorkflowStep(WorkflowSteps.Throttle);
 
+    /// <summary>
+    /// Holds the waiting recipients in the open digest for their key, for <see cref="Window"/>; the digest sends them when it closes, one delivery
+    /// per destination with an item each (D19). It stands for the <c>send</c> that must follow it.
+    /// </summary>
+    public sealed record DigestStep(TimeSpan Window, string By) : WorkflowStep(WorkflowSteps.Digest);
+
+    /// <summary>What a digest groups by: a route recipient by its route, a person by themselves, the correlation, or the type.</summary>
+    public static class DigestKeys
+    {
+        public const string Route = "route";
+        public const string Subscriber = "subscriber";
+        public const string Correlation = "correlation";
+        public const string Type = "type";
+
+        public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal) { Route, Subscriber, Correlation, Type };
+    }
+
     public static class WorkflowSteps
     {
         public const string Send = "send";
@@ -66,7 +83,7 @@ namespace Juice.Notifications.Workflows
             var errors = new List<FieldError>();
             if (json.ValueKind != JsonValueKind.Array || json.GetArrayLength() is 0 or > MaxSteps)
             {
-                return (null, [new FieldError("/workflow", $"A workflow is a list of 1–{MaxSteps} steps: send, delay, condition, throttle.")]);
+                return (null, [new FieldError("/workflow", $"A workflow is a list of 1–{MaxSteps} steps: send, delay, condition, throttle, digest.")]);
             }
             var steps = new List<WorkflowStep>();
             var index = 0;
@@ -85,13 +102,14 @@ namespace Juice.Notifications.Workflows
                     WorkflowSteps.Delay => ["step", "seconds"],
                     WorkflowSteps.Condition => ["step", "when"],
                     WorkflowSteps.Throttle => ["step", "limit", "windowSeconds", "by"],
+                    WorkflowSteps.Digest => ["step", "windowSeconds", "by"],
                     _ => null,
                 };
                 if (allowed is null)
                 {
-                    errors.Add(new FieldError(at + "/step", step is WorkflowSteps.Digest or WorkflowSteps.Escalate
+                    errors.Add(new FieldError(at + "/step", step is WorkflowSteps.Escalate
                         ? $"The {step} step isn't available yet."
-                        : "A step is send, delay, condition or throttle."));
+                        : "A step is send, delay, condition, throttle or digest."));
                     continue;
                 }
                 foreach (var property in element.EnumerateObject().Where(p => !allowed.Contains(p.Name)))
@@ -153,6 +171,34 @@ namespace Juice.Notifications.Workflows
                         if (limit is { } l && window is { } w && IsThrottleKey(by))
                         {
                             steps.Add(new ThrottleStep(l, TimeSpan.FromSeconds(w), by));
+                        }
+                        break;
+                    case WorkflowSteps.Digest:
+                        var digestWindow = Seconds(element, "windowSeconds", 1, (int)MaxWindow.TotalSeconds);
+                        var digestBy = element.TryGetProperty("by", out var digestByElement) && digestByElement.ValueKind == JsonValueKind.String
+                            ? digestByElement.GetString()! : DigestKeys.Route;
+                        if (digestWindow is null)
+                        {
+                            errors.Add(new FieldError(at + "/windowSeconds", $"A digest's window is 1–{(int)MaxWindow.TotalSeconds} seconds (a day)."));
+                        }
+                        if (!DigestKeys.All.Contains(digestBy))
+                        {
+                            errors.Add(new FieldError(at + "/by", "A digest groups by route, subscriber, correlation or type."));
+                        }
+                        else if (digestBy == DigestKeys.Correlation && correlation != CorrelationRules.Required)
+                        {
+                            errors.Add(new FieldError(at + "/by", "Grouping by correlation needs a type whose requests always carry a key (correlation: required)."));
+                        }
+                        // It sends what it holds: the send after it is its own (phase-3-plan I31).
+                        var next = json.GetArrayLength() > index ? json[index] : default;
+                        if (next.ValueKind != JsonValueKind.Object || !next.TryGetProperty("step", out var nextStep) || nextStep.ValueKind != JsonValueKind.String
+                            || nextStep.GetString() != WorkflowSteps.Send)
+                        {
+                            errors.Add(new FieldError(at, "A digest is followed by the send it holds its recipients for: { \"step\": \"send\" }."));
+                        }
+                        if (digestWindow is { } dw && DigestKeys.All.Contains(digestBy))
+                        {
+                            steps.Add(new DigestStep(TimeSpan.FromSeconds(dw), digestBy));
                         }
                         break;
                 }

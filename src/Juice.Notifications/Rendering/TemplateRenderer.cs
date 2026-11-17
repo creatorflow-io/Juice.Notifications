@@ -7,8 +7,17 @@ using Scriban.Runtime;
 namespace Juice.Notifications.Rendering
 {
     /// <summary>What a template sees (design §8.2): read-only, and only this. Recipient name and locale join in phase 2, digest items in phase 3.</summary>
+    /// <summary>
+    /// What a template sees: the request's <c>data</c>, <c>labels</c>, <c>links</c> and type. A digest's delivery (phase-3-plan I31) also sees
+    /// <c>items</c>, one per notification it carries (the first <see cref="DigestItem"/>s, up to 100), and <c>more</c>, how many past those;
+    /// <c>data</c> and the rest are the first item's.
+    /// </summary>
     public sealed record RenderModel(string Type, int TypeVersion, string TypeName, NotificationPriority Priority, JsonElement Data,
-        IReadOnlyDictionary<string, string> Labels, IReadOnlyDictionary<string, string> Links);
+        IReadOnlyDictionary<string, string> Labels, IReadOnlyDictionary<string, string> Links, IReadOnlyList<DigestItem>? Items = null, int More = 0);
+
+    /// <summary>One notification of a digest, as its template's <c>items</c> lists it.</summary>
+    public sealed record DigestItem(JsonElement Data, IReadOnlyDictionary<string, string> Labels, IReadOnlyDictionary<string, string> Links,
+        NotificationPriority Priority, DateTimeOffset AcceptedAt, string? CorrelationKey);
 
     /// <summary>
     /// A render that failed: the delivery fails as <c>Content</c> (<c>render_failed</c>), without failover. <see cref="Retryable"/> when it ran out
@@ -684,6 +693,19 @@ namespace Juice.Notifications.Rendering
                 ["type_name"] = model.TypeName,
                 ["priority"] = model.Priority.ToString().ToLowerInvariant(),
             };
+            if (model.Items is { } items)
+            {
+                globals["items"] = new ScriptArray(items.Select(i => new ScriptObject
+                {
+                    ["data"] = ToScript(i.Data),
+                    ["labels"] = Dictionary(i.Labels),
+                    ["links"] = Dictionary(i.Links),
+                    ["priority"] = i.Priority.ToString().ToLowerInvariant(),
+                    ["accepted_at"] = i.AcceptedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                    ["correlation_key"] = i.CorrelationKey,
+                }));
+                globals["more"] = model.More;
+            }
             return globals;
         }
 

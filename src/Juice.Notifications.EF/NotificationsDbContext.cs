@@ -60,6 +60,7 @@ namespace Juice.Notifications.Data
         public DbSet<TypeDisplayGroup> TypeDisplayGroups => Set<TypeDisplayGroup>();
         public DbSet<ThrottleEntry> ThrottleEntries => Set<ThrottleEntry>();
         public DbSet<Correlation> Correlations => Set<Correlation>();
+        public DbSet<Digest> Digests => Set<Digest>();
         public DbSet<InboxItem> InboxItems => Set<InboxItem>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
         public DbSet<Notification> Notifications => Set<Notification>();
@@ -467,6 +468,18 @@ namespace Juice.Notifications.Data
                 e.HasOne<ApplicationTenant>().WithMany().HasForeignKey(x => new { x.ApplicationId, x.TenantId }).OnDelete(DeleteBehavior.Restrict);
             });
 
+            model.Entity<Digest>(e =>
+            {
+                e.ToTable("digests");
+                TenantKey(e);
+                Claim(e);
+                e.Property(x => x.TypeKey).HasMaxLength(200);
+                e.Property(x => x.By).HasMaxLength(20);
+                e.Property(x => x.Key).HasMaxLength(500);
+                e.Property(x => x.State).HasConversion<string>().HasMaxLength(20);
+                e.HasIndex(x => new { x.TenantId, x.TypeKey, x.By, x.Key }).IsUnique().HasFilter("state = 'Open'").HasDatabaseName("ix_digests_open");
+            });
+
             model.Entity<ThrottleEntry>(e =>
             {
                 e.ToTable("throttle_entries");
@@ -493,6 +506,8 @@ namespace Juice.Notifications.Data
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Restrict);
                 // One recipient per thing named, per escalation step: planning twice can't add a second set (proof 3).
                 e.HasIndex(x => new { x.TenantId, x.NotificationId, x.EscalationStep, x.NamedAs }).IsUnique().HasDatabaseName(Constraints.RecipientNamed);
+                // A digest's members, when it closes.
+                e.HasIndex(x => new { x.TenantId, x.DigestId }).HasFilter("digest_id IS NOT NULL").HasDatabaseName("ix_notification_recipients_digest");
                 e.HasOne<Notification>().WithMany().HasForeignKey(x => new { x.TenantId, x.NotificationId }).OnDelete(DeleteBehavior.Cascade);
             });
 
@@ -501,6 +516,7 @@ namespace Juice.Notifications.Data
                 e.ToTable("deliveries");
                 TenantKey(e);
                 Claim(e);
+                e.HasIndex(x => new { x.TenantId, x.DigestId }).HasFilter("digest_id IS NOT NULL").HasDatabaseName("ix_deliveries_digest");
                 e.Property(x => x.Channel).HasMaxLength(20);
                 e.Property(x => x.DestinationKey).HasMaxLength(2100);
                 // text: an address of up to 2,000 characters plus its target and secret reference, as JSON (M5 review).
