@@ -473,8 +473,24 @@ namespace Juice.Notifications.Data
         /// resolver has failed for the plan under way, and cleared when it is planned.
         /// </summary>
         public DateTimeOffset? ResolverWaitSince { get; set; }
+        /// <summary>When the workflow's current step began waiting (a <c>delay</c>); null when it isn't (phase-3-plan I28).</summary>
+        public DateTimeOffset? StepEnteredAt { get; set; }
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    /// <summary>
+    /// A notification counted by a <c>throttle</c> step in a window (phase-3-plan I30): the window's count is its rows for the type and key. One
+    /// per notification and step, so a step run again (a lost lease) counts once.
+    /// </summary>
+    public sealed class ThrottleEntry
+    {
+        public Guid TenantId { get; init; }
+        public Guid NotificationId { get; init; }
+        public int Step { get; init; }
+        public required string TypeKey { get; init; }
+        public required string Key { get; init; }
+        public DateTimeOffset WindowStart { get; init; }
     }
 
     /// <summary>

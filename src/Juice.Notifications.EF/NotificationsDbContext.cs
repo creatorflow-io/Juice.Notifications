@@ -58,6 +58,7 @@ namespace Juice.Notifications.Data
         public DbSet<Mute> Mutes => Set<Mute>();
         public DbSet<DisplayGroup> DisplayGroups => Set<DisplayGroup>();
         public DbSet<TypeDisplayGroup> TypeDisplayGroups => Set<TypeDisplayGroup>();
+        public DbSet<ThrottleEntry> ThrottleEntries => Set<ThrottleEntry>();
         public DbSet<InboxItem> InboxItems => Set<InboxItem>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
         public DbSet<Notification> Notifications => Set<Notification>();
@@ -444,6 +445,16 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Error).HasMaxLength(2000);
                 e.HasIndex(x => new { x.TenantId, x.RequestId }).IsUnique();
                 e.HasOne<NotificationRequest>().WithMany().HasForeignKey(x => new { x.TenantId, x.RequestId }).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            model.Entity<ThrottleEntry>(e =>
+            {
+                e.ToTable("throttle_entries");
+                e.HasKey(x => new { x.TenantId, x.NotificationId, x.Step });
+                e.Property(x => x.TypeKey).HasMaxLength(200);
+                e.Property(x => x.Key).HasMaxLength(500);
+                e.HasIndex(x => new { x.TenantId, x.TypeKey, x.Key, x.WindowStart }).HasDatabaseName("ix_throttle_entries_window");
+                e.HasOne<Notification>().WithMany().HasForeignKey(x => new { x.TenantId, x.NotificationId }).OnDelete(DeleteBehavior.Cascade);
             });
 
             model.Entity<NotificationRecipient>(e =>

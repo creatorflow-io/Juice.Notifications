@@ -173,13 +173,20 @@ namespace Juice.Notifications.Types
             {
                 errors.AddRange(DataSchemas.Check(schema, "/schema"));
             }
+            var workflowJson = SendOnlyWorkflow;
             if (d.Workflow is { } unreadable && CanonicalJson.Unstorable(unreadable, "/workflow") is { } unstorable)
             {
                 Fail(unstorable.Pointer, unstorable.Message);
             }
-            else if (d.Workflow is { } workflow && CanonicalJson.Write(workflow) != SendOnlyWorkflow)
+            else if (d.Workflow is { } workflow)
             {
-                Fail("/workflow", """Phase 1 runs one workflow: [{"step":"send"}]. Omit it or send exactly that.""");
+                // Checked against the correlation rule as declared (an unknown one is refused above and checked as optional here).
+                var (_, problems) = Workflows.Workflow.Parse(workflow, CorrelationRules.All.Contains(correlation) ? correlation : CorrelationRules.Optional);
+                errors.AddRange(problems);
+                if (problems.Count == 0)
+                {
+                    workflowJson = CanonicalJson.Write(workflow);
+                }
             }
             var pointers = new Dictionary<(string, string), string>();
             var templates = CheckTemplates(d.Templates, channels, pointers, Fail);
@@ -190,7 +197,7 @@ namespace Juice.Notifications.Types
                 return (null, errors);
             }
             return (new CheckedType(d.Key!, name!, d.Category!, displayGroup, priority, d.Mandatory ?? false, d.ExternalRecipients ?? false, correlation,
-                [.. redact], d.Schema!.Value, SendOnlyWorkflow, templates, actions) { Pointers = pointers }, []);
+                [.. redact], d.Schema!.Value, workflowJson, templates, actions) { Pointers = pointers }, []);
         }
 
         public const int MaxActions = 5;

@@ -61,6 +61,9 @@ namespace Juice.Notifications.Intake
         [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9_.:-]{0,62}\z")]
         private static partial Regex LabelName();
 
+        /// <summary>A label's name as requests give it: a letter, then up to 62 letters, digits, <c>_ . : -</c>.</summary>
+        public static bool IsLabelName(string name) => LabelName().IsMatch(name);
+
         [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9_.-]{0,62}\z")]
         private static partial Regex LinkName();
 

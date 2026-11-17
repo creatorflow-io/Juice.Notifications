@@ -180,7 +180,7 @@ namespace Juice.Notifications.Planning
     /// is recorded as <c>Truncated</c>. Both records name what the request named (<c>group:sre</c>), have no subscriber, and are never due.
     /// </remarks>
     public sealed class PlannerStage(IEnumerable<IRecipientResolver> resolvers, IOptions<ResolverOptions> resolverOptions, ILogger<PlannerStage> logger,
-        IChannelRegistry channels, People.ContactCrypto crypto, People.MuteMatches mutes)
+        IChannelRegistry channels, People.ContactCrypto crypto, People.MuteMatches mutes, Workflows.WorkflowRunner workflows)
         : IStage<Notification>
     {
         public const string StageName = "planner";
@@ -200,12 +200,18 @@ namespace Juice.Notifications.Planning
         {
             var db = context.Db;
             row.UpdatedAt = context.Now;
-            if (row.State != NotificationState.Planning)
+            if (row.State is not (NotificationState.Planning or NotificationState.Running))
             {
                 context.Done(row, null);
                 return;
             }
             var request = await db.Requests.AsNoTracking().SingleAsync(r => r.TenantId == row.TenantId && r.Id == row.RequestId, ct);
+            if (row.State == NotificationState.Running)
+            {
+                // Planned already: the type's workflow goes on from its step (phase-3-plan I27).
+                await workflows.RunAsync(context, row, request, ct);
+                return;
+            }
             using var activity = Telemetry.StartStep("notifications.plan", request.TraceParent);
             activity?.SetTag("notifications.notification_id", row.Id);
             if (request.ExpiresAt is { } expires && expires <= context.Now)
@@ -350,9 +356,25 @@ namespace Juice.Notifications.Planning
                     });
                 }
             }
+            var type = await db.Types.AsNoTracking().SingleAsync(t => t.Id == request.TypeId, ct);
+            if (!workflows.For(type).IsSendOnly)
+            {
+                // A workflow: the people wait (Pending, not due) until its send step, which applies mutes and preferences as they are then. The
+                // notification runs its workflow on the next claim, at once.
+                foreach (var recipient in due)
+                {
+                    (recipient.Outcome, recipient.NextAt) = (RecipientOutcome.Pending, null);
+                }
+                db.Recipients.AddRange(due);
+                row.State = NotificationState.Running;
+                row.WorkflowStep = 0;
+                row.ResolverWaitSince = null;
+                context.Done(row, context.Now);
+                context.Wakes.Add(StageName);
+                return;
+            }
             if (due.Count > 0)
             {
-                var type = await db.Types.AsNoTracking().SingleAsync(t => t.Id == request.TypeId, ct);
                 await People.PreferencePolicy.ApplyAsync(db, request, type, due, mutes, context.Now, ct);
                 db.Recipients.AddRange(due);
                 // Those that won't hear are done here; the delivery planner counts the rest when it is through with them.
@@ -462,6 +484,7 @@ namespace Juice.Notifications.Planning
                 .ValidateOnStart();
             services.TryAddSingleton(TimeProvider.System);
             services.AddSingleton<ResolverCache>();
+            services.AddSingleton<Workflows.WorkflowRunner>();
             services.TryAddSingleton<People.MuteMatches>();
             // Contact points a source vouches for are stored encrypted, on registered channels.
             services.AddBuiltInChannels();

@@ -19,6 +19,15 @@ namespace Juice.Notifications
         Expired,
         /// <summary>Planning could not complete (for example, its type version is gone). The reason is recorded.</summary>
         Failed,
+        /// <summary>
+        /// Recipients resolved; the type's workflow is running (phase-3-plan I27): a step may be waiting. <c>Planned</c> follows when the workflow
+        /// ends. A type whose workflow is just <c>send</c> never runs: it goes from <c>Planning</c> to <c>Planned</c>.
+        /// </summary>
+        Running,
+        /// <summary>A <c>condition</c> step didn't hold; its waiting recipients were cancelled.</summary>
+        ConditionNotMet,
+        /// <summary>Its correlation was resolved or cancelled, or an admin cancelled it, before the workflow ended.</summary>
+        Cancelled,
     }
 
     /// <summary>The <c>kind</c> of a recipient in a request (design §5.2). <c>route</c> and <c>address</c> are built in; the people kinds go

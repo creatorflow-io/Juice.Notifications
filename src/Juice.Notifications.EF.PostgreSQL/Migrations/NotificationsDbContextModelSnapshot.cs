@@ -1204,6 +1204,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("state");
 
+                    b.Property<DateTimeOffset?>("StepEnteredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("step_entered_at");
+
                     b.Property<int>("StepFailures")
                         .HasColumnType("integer")
                         .HasColumnName("step_failures");
@@ -1968,6 +1972,45 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.ToTable("templates", "notifications");
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.ThrottleEntry", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("NotificationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("notification_id");
+
+                    b.Property<int>("Step")
+                        .HasColumnType("integer")
+                        .HasColumnName("step");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("key");
+
+                    b.Property<string>("TypeKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("type_key");
+
+                    b.Property<DateTimeOffset>("WindowStart")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("window_start");
+
+                    b.HasKey("TenantId", "NotificationId", "Step")
+                        .HasName("pk_throttle_entries");
+
+                    b.HasIndex("TenantId", "TypeKey", "Key", "WindowStart")
+                        .HasDatabaseName("ix_throttle_entries_window");
+
+                    b.ToTable("throttle_entries", "notifications");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.Topic", b =>
                 {
                     b.Property<Guid>("TenantId")
@@ -2343,6 +2386,16 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_templates_notification_types_type_id");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.ThrottleEntry", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.Notification", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "NotificationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_throttle_entries_notifications_tenant_id_notification_id");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.TopicSubscription", b =>
