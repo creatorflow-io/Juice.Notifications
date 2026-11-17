@@ -119,6 +119,7 @@ namespace Juice.Notifications.Api
             var runStages = configuration.GetValue("Stages:Run", true);
             services.AddPlanning(configuration.GetSection("Stages:Planner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages);
             services.Configure<Planning.ResolverOptions>(configuration.GetSection(Planning.ResolverOptions.Section));
+            services.Configure<Planning.IdentityOptions>(configuration.GetSection(Planning.IdentityOptions.Section));
             services.AddDeliveryPlanning(configuration.GetSection("Stages:DeliveryPlanner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages);
             services.Configure<Providers.DeliveryOptions>(configuration.GetSection(Providers.DeliveryOptions.Section));
             // A dispatcher lease covers connect + request timeouts with room to spare (design §11).

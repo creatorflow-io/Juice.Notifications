@@ -47,12 +47,18 @@ namespace Juice.Notifications.Stages
     }
 
     /// <summary>What a step works with: its scope's DbContext, the claim it runs under, and the clock.</summary>
-    public sealed class StageContext(NotificationsDbContext db, Claim claim, DateTimeOffset now, IServiceProvider services)
+    public sealed class StageContext(NotificationsDbContext db, Claim claim, DateTimeOffset now, IServiceProvider services, TimeSpan? lease = null)
     {
         public NotificationsDbContext Db { get; } = db;
         public Claim Claim { get; } = claim;
         public DateTimeOffset Now { get; } = now;
         public IServiceProvider Services { get; } = services;
+
+        /// <summary>
+        /// How long the claim lasts from the step's start (the stage's lease): a step that runs longer is taken over by another worker and its
+        /// work thrown away, so remote work within it must finish well before.
+        /// </summary>
+        public TimeSpan Lease { get; } = lease ?? new StageOptions().Lease;
 
         /// <summary>The stages to wake once this step commits.</summary>
         public HashSet<string> Wakes { get; } = new(StringComparer.Ordinal);
@@ -186,7 +192,7 @@ namespace Juice.Notifications.Stages
                     logger.LogInformation("{Stage} {Worker}: lease_lost before the step on {Id}", stageName, worker, claim.Id);
                     return StepResult.LeaseLost;
                 }
-                var context = new StageContext(db, claim, clock.UtcNow(), scope.ServiceProvider);
+                var context = new StageContext(db, claim, clock.UtcNow(), scope.ServiceProvider, options.Lease);
                 await stage.ExecuteAsync(context, row, ct);
                 await _faults.BeforePersistAsync(stageName, worker, claim, ct);
                 // Not stopped by the worker stopping: the step happened (a send may have gone out), so its result is recorded. Bounded, so a

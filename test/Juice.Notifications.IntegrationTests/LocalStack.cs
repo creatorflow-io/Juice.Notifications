@@ -95,7 +95,7 @@ namespace Juice.Notifications.IntegrationTests
         public static async Task<string> TokenAsync(string clientId, string secretName)
         {
             using var http = new HttpClient();
-            using var response = await http.PostAsync("http://127.0.0.1:8081/realms/juice/protocol/openid-connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+            using var response = await http.PostAsync($"{KeycloakServer}/realms/juice/protocol/openid-connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
             {
                 ["grant_type"] = "client_credentials", ["client_id"] = clientId, ["client_secret"] = Secret(secretName),
             }));
@@ -115,7 +115,7 @@ namespace Juice.Notifications.IntegrationTests
         public static async Task<string> PersonTokenAsync(string username = "ann")
         {
             using var http = new HttpClient();
-            using var response = await http.PostAsync("http://127.0.0.1:8081/realms/juice/protocol/openid-connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
+            using var response = await http.PostAsync($"{KeycloakServer}/realms/juice/protocol/openid-connect/token", new FormUrlEncodedContent(new Dictionary<string, string>
             {
                 ["grant_type"] = "password", ["client_id"] = "people-test", ["username"] = username, ["password"] = Secret("PEOPLE_TEST_PASSWORD"),
             }));
@@ -126,6 +126,71 @@ namespace Juice.Notifications.IntegrationTests
 
         /// <summary>An admin of <see cref="ProducerApp.Tenant"/> only (the realm's tenant-admin client).</summary>
         public static Task<string> TenantAdminTokenAsync() => TokenAsync("tenant-admin", "TENANT_ADMIN_CLIENT_SECRET");
+
+        /// <summary>The variable the identity directory's secret reference names; set in this process from .env.</summary>
+        public const string DirectorySecretVariable = "NOTIFICATIONS_DIRECTORY_CLIENT_SECRET";
+
+        public const string KeycloakServer = "http://127.0.0.1:8081";
+
+        private static readonly Lazy<bool> DirectoryUp = new(() =>
+        {
+            if (!Up.Value || !Env.Value.ContainsKey(DirectorySecretVariable))
+            {
+                return false;
+            }
+            try
+            {
+                // The realm as scripts/keycloak-update.sh leaves it (M16): the directory client, and cara in the other tenant.
+                return KeycloakUserIdAsync("cara").GetAwaiter().GetResult() is not null;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                // Not up to date or not answering: a skip, not an exception the Lazy would rethrow to every test.
+                return false;
+            }
+        });
+
+        /// <summary>
+        /// Skips the calling test unless the realm has the identity directory's client and people (phase-2-plan M16): a realm imported before
+        /// M16 gets them from deploy/local/scripts/init.sh then scripts/keycloak-update.sh.
+        /// </summary>
+        public static void RequireDirectory()
+        {
+            RequireAvailable();
+            if (!DirectoryUp.Value)
+            {
+                Assert.Skip("The local Keycloak has no identity directory yet: deploy/local/scripts/init.sh, then scripts/keycloak-update.sh.");
+            }
+        }
+
+        /// <summary>
+        /// Settings for a directory named <paramref name="name"/> on the local realm (through <paramref name="server"/>, the local Keycloak unless a
+        /// test puts something in between), its secret in this process's environment.
+        /// </summary>
+        public static Dictionary<string, string> DirectorySettings(string name, string server = KeycloakServer)
+        {
+            if (Env.Value.TryGetValue(DirectorySecretVariable, out var secret))
+            {
+                Environment.SetEnvironmentVariable(DirectorySecretVariable, secret);
+            }
+            return new()
+            {
+                [$"Identity:Directories:{name}:BaseUrl"] = server,
+                [$"Identity:Directories:{name}:Realm"] = "juice",
+                [$"Identity:Directories:{name}:ClientId"] = "notifications-directory",
+                [$"Identity:Directories:{name}:ClientSecretRef"] = "env:" + DirectorySecretVariable,
+            };
+        }
+
+        /// <summary>A realm user's id (the subject of their tokens), read as the directory client; null when there is none.</summary>
+        public static async Task<string?> KeycloakUserIdAsync(string username)
+        {
+            var token = await TokenAsync("notifications-directory", DirectorySecretVariable);
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            var users = await http.GetFromJsonAsync<JsonElement>($"{KeycloakServer}/admin/realms/juice/users?username={Uri.EscapeDataString(username)}&exact=true");
+            return users.ValueKind == JsonValueKind.Array && users.GetArrayLength() == 1 ? users[0].GetProperty("id").GetString() : null;
+        }
     }
 
     /// <summary>An empty database on the local PostgreSQL, created for one test class and dropped after it.</summary>

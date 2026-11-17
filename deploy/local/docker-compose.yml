@@ -58,6 +58,7 @@ services:
       SAMPLE_PRODUCER_CLIENT_SECRET: ${SAMPLE_PRODUCER_CLIENT_SECRET}
       TENANT_ADMIN_CLIENT_SECRET: ${TENANT_ADMIN_CLIENT_SECRET}
       PEOPLE_TEST_PASSWORD: ${PEOPLE_TEST_PASSWORD}
+      NOTIFICATIONS_DIRECTORY_CLIENT_SECRET: ${NOTIFICATIONS_DIRECTORY_CLIENT_SECRET:?run scripts/init.sh}
     volumes:
       - ./keycloak/juice-realm.json:/opt/keycloak/data/import/juice-realm.json:ro
     ports:
@@ -118,6 +119,12 @@ services:
       NOTIFICATIONS_CONTACT_KEY: ${NOTIFICATIONS_CONTACT_KEY:?run scripts/init.sh}
       NOTIFICATIONS_CONTACT_HASH_KEY: ${NOTIFICATIONS_CONTACT_HASH_KEY:?run scripts/init.sh}
       Inbox__SignalR__Redis: redis:6379
+      # The identity resolver's directory (phase-2-plan M16): tenants name it in their resolver settings ({"directory": "keycloak"}).
+      Identity__Directories__keycloak__BaseUrl: http://keycloak:8080
+      Identity__Directories__keycloak__Realm: juice
+      Identity__Directories__keycloak__ClientId: notifications-directory
+      Identity__Directories__keycloak__ClientSecretRef: env:NOTIFICATIONS_DIRECTORY_CLIENT_SECRET
+      NOTIFICATIONS_DIRECTORY_CLIENT_SECRET: ${NOTIFICATIONS_DIRECTORY_CLIENT_SECRET:?run scripts/init.sh}
       # NotificationRequested over RabbitMQ (phase-1-plan I5); producers publish as their own broker user (README: RabbitMQ intake).
       Intake__RabbitMQ__Enabled: "true"
       Intake__RabbitMQ__Host: rabbitmq

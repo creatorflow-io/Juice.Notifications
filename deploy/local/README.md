@@ -76,12 +76,26 @@ Contact addresses and device tokens are encrypted at rest under `NOTIFICATIONS_C
 | `notifications-admin` | client credentials | `notifications-platform-admin` | register applications, link tenants |
 | `sample-producer` | client credentials | none | send notifications as an application (from M2) |
 | `tenant-admin` | client credentials | `notifications-tenant-admin`, `platform_tenant` = `0193f0aa-0000-7000-8000-0000000000a1` | configure that one tenant's delivery (the tests' tenant) |
-| `people-test` | password (public client) | none, `platform_tenant` = `0193f0aa-0000-7000-8000-0000000000a1` | sign in the person accounts `ann` and `ben` (password `PEOPLE_TEST_PASSWORD`) for the person's API, `me`, which refuses a client's own token |
+| `people-test` | password (public client) | none, `platform_tenant` = the person's own attribute | sign in the person accounts (password `PEOPLE_TEST_PASSWORD`) for the person's API, `me`, which refuses a client's own token |
+| `notifications-directory` | client credentials | realm-management `view-users`, `view-realm` | the identity resolver's directory `keycloak` (the app's `Identity:Directories:keycloak`): reads users, groups and realm roles |
+
+The person accounts belong to a tenant through the user attribute `platform_tenant` (declared in the realm's user profile, admin-only):
+
+| Person | Tenant | Email | Group `ops` | Realm role `on-call` |
+|---|---|---|---|---|
+| `ann` | `…a1` (the tests') | verified | yes | |
+| `ben` | `…a1` | verified | | yes |
+| `dora` | `…a1` | not verified | yes | |
+| `eli` (disabled) | `…a1` | verified | yes | yes |
+| `cara` | `…b2` | verified | yes | yes |
+
+A tenant reaches them through a resolver of kind `identity` naming the directory: `PUT /api/v1/tenants/{id}/resolvers/people
+{ "kind": "identity", "settings": { "directory": "keycloak" } }`, then recipients such as `{ "kind": "group", "id": "ops", "resolver": "people" }`.
 
 Producers must authenticate as their client: the API accepts a producer token only when its `client_id` claim (set by the `juice-notifications`
 scope on client-credentials tokens only) equals its `azp`. A stack created before 11 Nov 2026 lacks that mapper and the `tenant-admin` client, and one
-created before 17 Nov 2026 lacks `people-test`, `ann` and `ben`, because Keycloak imports the realm only into an
-empty volume. Bring it up to date (safe to repeat):
+created before 17 Nov 2026 lacks `people-test`, the person accounts and the directory client (and the M16 people, group and role), because
+Keycloak imports the realm only into an empty volume. Bring it up to date (safe to repeat):
 
 ```bash
 scripts/init.sh && scripts/keycloak-update.sh

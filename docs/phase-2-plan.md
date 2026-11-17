@@ -194,6 +194,28 @@ Each milestone ends with its review loop (code-review rounds, then a confirmatio
 - Local stack: Keycloak seeded with users, groups and roles across two tenants.
 - Tests: a group expands to its members within its tenant only; an unverified email arrives as an unverified contact point; Keycloak stopped mid-plan
   follows I22.
+- *As built:* the directories are the deployment's, by name (`Identity:Directories:{name}`: `BaseUrl`, `Realm`, `ClientId`,
+  `ClientSecretRef`, `Source` = `oidc`, `TenantAttribute` = `platform_tenant`, `PageSize` 100, `MaxScanned` 10,000, `Timeout` 10 s per request and `NameBudget` 20 s per name, each at most 5 minutes). The planner gives resolvers a step deadline
+  (`ResolveContext.StepDeadline`, two thirds of the stage's lease from the step's start; `StageContext.Lease`), so a slow Keycloak or several
+  large listings can't hold a step past its lease, where another worker would take it over and repeat it: when the name's budget or the
+  step's deadline runs out, a listing keeps the people read so far and is truncated, and a name with nothing read yet is unavailable), like
+  SMTP servers: a tenant's resolver (kind `identity`) names one in its settings (`{ "directory": "keycloak" }`, nothing else), so the API can't
+  send the service account's credentials to a host of an admin's choosing. `user` is a user id (the token's `sub`), `group` a group path
+  (`ops` or `/ops`, `eng/sre`; direct members only), `role` a realm role (direct holders only, not through a group or a composite role). A person counts
+  only when enabled and their `platform_tenant` attribute is exactly this tenant; groups and roles span tenants, so the directory reads every member up to
+  `MaxScanned` (not only one past the planner's bound: the planner keeps the first by id, and Keycloak lists by username), and the name is
+  truncated only when someone is left past the limit. People come as source `oidc` with the directory's id, so
+  the person reached and the person signed in are one subscriber (I16); their email is a contact point, verified only when Keycloak says
+  `emailVerified`. A timeout, a refused connection, a 5xx or 429, and a refusal (401 after renewing the token once, 403, a 400 from the token
+  endpoint: logged at Error once a minute per directory, resource and status, since it's the account) make the directory unavailable (I22); a 404, or a 400 for a name Keycloak won't take, is
+  no one; a directory removed from the deployment makes the resolver
+  unavailable too. User lookups are cached with the expansions (I23), per tenant: each tenant naming one group reads it (deferred #44). Only a missing first
+  page means no one; a later page that is missing or not a list, or a scan-limit check that isn't one, makes the directory unavailable, so
+  people are never dropped silently. **Roles:** the service account needs realm-management `view-users` and
+  `view-realm` (a realm role's holders), not `view-users` alone as p2-d1 said; client roles would need `view-clients`, which reads every
+  client's secret, so they aren't resolved (deferred #43). Local stack: the `platform_tenant` attribute declared admin-only in the realm's user
+  profile and issued by `people-test` from the person (it was hard-coded); people in two tenants, the group `ops`, the realm role `on-call`,
+  and the client `notifications-directory` (`NOTIFICATIONS_DIRECTORY_CLIENT_SECRET`); the app's directory `keycloak`.
 
 ### M17: `@juice-js/notifications` (`p2-11`)
 

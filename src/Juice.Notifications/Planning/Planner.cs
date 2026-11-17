@@ -23,7 +23,15 @@ namespace Juice.Notifications.Planning
     /// recorded as truncated.
     /// </remarks>
     public sealed record ResolveContext(NotificationsDbContext Db, NotificationRequest Request, DateTimeOffset Now, RecipientResolverConfig? Config,
-        int MaxPeople);
+        int MaxPeople)
+    {
+        /// <summary>
+        /// Cancelled when the planner step's time for resolving is up (two thirds of its lease, from the step's start), whichever name is being
+        /// resolved: a remote resolver stops there and reports itself unavailable (or what it read, truncated), so the step finishes before
+        /// another worker can take it over. Not the worker's own token: the step still records its result.
+        /// </summary>
+        public CancellationToken StepDeadline { get; init; }
+    }
 
     /// <summary>
     /// A destination a resolver produced (design §6.1). <see cref="NamedAs"/> says what was named and is unique within a notification's step:
@@ -211,6 +219,8 @@ namespace Juice.Notifications.Planning
                 ? await db.Resolvers.AsNoTracking().Where(c => c.TenantId == row.TenantId && c.Enabled).ToListAsync(ct)
                 : [];
             var bounds = resolverOptions.Value;
+            // Resolving may take two thirds of the lease; the rest is for mapping people and saving (the lease runs from the step's start).
+            using var stepDeadline = new CancellationTokenSource(context.Lease * 2 / 3);
             var planned = new Dictionary<string, (ResolvedDestination Destination, string Resolver)>(StringComparer.Ordinal);
             // Names that couldn't be resolved now, and names that reached more people than the bound, each with its resolver.
             var unavailable = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -231,7 +241,7 @@ namespace Juice.Notifications.Planning
                 ResolveResult result;
                 try
                 {
-                    result = await resolver.ResolveAsync(spec, new ResolveContext(db, request, context.Now, config, bounds.MaxRecipients), ct);
+                    result = await resolver.ResolveAsync(spec, new ResolveContext(db, request, context.Now, config, bounds.MaxRecipients) { StepDeadline = stepDeadline.Token }, ct);
                 }
                 catch (ResolverUnavailableException ex) when (!ct.IsCancellationRequested)
                 {
@@ -439,6 +449,12 @@ namespace Juice.Notifications.Planning
             services.AddSingleton<IRecipientResolver, StaticContactPointResolver>();
             services.AddSingleton<IRecipientResolver, LocalRecipientResolver>();
             services.AddSingleton<IRecipientResolver, TopicRecipientResolver>();
+            // The identity resolver reads the deployment's directories (Identity:Directories; phase-2-plan M16).
+            services.AddSingleton<IRecipientResolver, IdentityRecipientResolver>();
+            services.TryAddSingleton<IIdentityDirectory, KeycloakIdentityDirectory>();
+            // Says which directory is wrong and how (IdentityOptions.Problem).
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<IdentityOptions>, IdentityOptionsValidation>());
+            services.AddOptions<IdentityOptions>().ValidateOnStart();
             services.AddOptions<ResolverOptions>()
                 .Validate(o => o.MaxRecipients is > 0 and <= 1_000_000 && o.WaitLimit >= TimeSpan.Zero && o.RetryMin > TimeSpan.Zero
                     && o.RetryMax >= o.RetryMin && o.CacheSeconds >= 0,
