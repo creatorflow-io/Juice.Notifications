@@ -200,10 +200,12 @@ namespace Juice.Notifications.IntegrationTests
             await DrainAsync();
             Assert.Equal(5, await SentAsync());
 
-            // Each notification counted once, in the window it went in.
+            // Each notification counted once, in the window it went in; the first window's entries were cleared on the way (a window old).
             await using var db = _database.Context();
             var entries = await db.ThrottleEntries.AsNoTracking().Where(e => e.TypeKey == type.Key && e.Key == "billing").ToListAsync(Ct);
-            Assert.Equal(ids.Order(), entries.Select(e => e.NotificationId).Order());
+            Assert.Equal(entries.Count, entries.Select(e => e.NotificationId).Distinct().Count());
+            Assert.Equal([(start.AddMinutes(1), 2), (start.AddMinutes(2), 1)],
+                entries.GroupBy(e => e.WindowStart).OrderBy(g => g.Key).Select(g => (g.Key, g.Count())));
         }
 
         /// <summary>A condition reads the correlation as it is when the step runs: resolved meanwhile, the reminder isn't sent.</summary>

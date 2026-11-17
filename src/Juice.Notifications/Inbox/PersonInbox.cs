@@ -102,7 +102,11 @@ namespace Juice.Notifications.Inbox
             }
             var now = clock.GetUtcNow();
             await RecordAsync(tenantId, item, kind, actionId, now, ct);
-            await db.InboxItems.Where(i => i.TenantId == tenantId && i.Id == itemId && i.ReadAt == null).ExecuteUpdateAsync(s => s.SetProperty(i => i.ReadAt, now), ct);
+            // Acting on it reads it, and that is its first read if nothing read it before.
+            if (await db.InboxItems.Where(i => i.TenantId == tenantId && i.Id == itemId && i.ReadAt == null).ExecuteUpdateAsync(s => s.SetProperty(i => i.ReadAt, now), ct) > 0)
+            {
+                await RecordAsync(tenantId, item, InteractionKinds.Read, "", now, ct);
+            }
             return await ViewAsync(tenantId, itemId, ct);
         }
 

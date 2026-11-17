@@ -197,7 +197,8 @@ namespace Juice.Notifications.IntegrationTests
         private static readonly StageOptions Options = new() { Batch = 10, Lease = TimeSpan.FromSeconds(30) };
         private static readonly Guid Tenant = ProducerApp.Tenant;
         private readonly ScratchDatabase _database = new();
-        private readonly ManualClock _clock = new(DateTimeOffset.UtcNow);
+        // Whole seconds: the database keeps microseconds, the clock ticks.
+        private readonly ManualClock _clock = new(new DateTimeOffset(DateTimeOffset.UtcNow.UtcTicks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond, TimeSpan.Zero));
         private readonly TcpGate _keycloak = new(new IPEndPoint(IPAddress.Loopback, 8081));
         private readonly FakePeopleResolver _staff = new();
         private ServiceProvider? _services;
