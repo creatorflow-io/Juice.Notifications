@@ -13,3 +13,4 @@ deploy/local/audit/obj/
 *.user
 src/*/Properties/launchSettings.json
 TestResults/
+samples/*/Properties/launchSettings.json
