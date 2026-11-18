@@ -174,6 +174,18 @@ tests, a commit and a build-board update.
     blocking, setWebhook), `TelegramCallbackTests`, `TelegramFlowTests` in the real host (webhook registration, linking with `/start`, a
     group target).
 - **M29 SMS: Twilio** (`p4-02`).
+  - *As built:* package `Juice.Notifications.Providers.Sms` (`AddSms`): channel `sms` (people and targets). New in the core:
+    `AddressKind.Phone` (E.164, normalized: spaces, dashes, dots, parentheses dropped) and `ContentShape.Text` (`TextContent`, the
+    template's output, at most 1,600 characters; no template, no SMS). The verification type is declared with a template for each registered
+    channel among email and SMS (`ServiceTypes.VerifyDeclarationFor`), so a deployment without SMS keeps its version. `TwilioProvider`: form
+    post to Messages, basic auth with `{accountSid}:{authToken}`, `from` or `messagingServiceSid`, `StatusCallback` when
+    `Callbacks:PublicUrl` is set. Errors: 429/20429 wait; 401/403/404, the sender or region refused: `Provider`; 21211, 21614, 21610 (STOP):
+    gone; 21612: `Destination`; other 400s `Content`. `TwilioCallbackHandler`: `X-Twilio-Signature` checked over the public URL given
+    (not what the host sees behind a proxy) and the account; delivered is a receipt, 30005 and 30006 hard bounces, 30003 soft; carrier
+    filtering (30007) and the rest are ignored. Not yet: inbound STOP replies (Twilio itself refuses later sends, 21610, which fails the point);
+    a failure that isn't the address's leaves the delivery `Accepted`. Library (juice-layout 13ef05b): `phoneNumbers` adds a phone form.
+    Tests: `TwilioProviderTests` (contract kit), `TwilioCallbackTests`, `SmsFlowTests` in the real host (a number verified by a code sent by
+    SMS through the pipeline, its receipt by signed callback).
 - **M30 Push** (`p4-03`): FCM, APNs, Web Push, the library's service worker helper.
 - **M31 Storms and bulk replay** (`p4-06`, `p4-08`).
 - **M32 Template editing** (`p4-07`).

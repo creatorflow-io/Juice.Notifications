@@ -307,7 +307,7 @@ namespace Juice.Notifications.IntegrationTests
             }
 
             var first = await PlanAsync(new ResolvedContact("email", a, false), new ResolvedContact("email", b.ToUpperInvariant(), true),
-                new ResolvedContact("sms", "+15550100", true), new ResolvedContact("email", "not an address", true));
+                new ResolvedContact("pigeon", "+15550100", true), new ResolvedContact("email", "not an address", true));
             Assert.Equal(new Dictionary<string, (string?, bool)> { [a] = (null, false), [b] = ("fake", true) }, first);
 
             var second = await PlanAsync(new ResolvedContact("email", a, true), new ResolvedContact("email", b, false));

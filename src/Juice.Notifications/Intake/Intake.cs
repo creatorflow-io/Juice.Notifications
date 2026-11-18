@@ -235,6 +235,9 @@ namespace Juice.Notifications.Intake
             }
             switch (channel.Address)
             {
+                case AddressKind.Phone:
+                    var digits = string.Concat(address.Where(c => c is not (' ' or '-' or '.' or '(' or ')')));
+                    return digits.Length is >= 8 and <= 16 && digits[0] == '+' && digits[1] is >= '1' and <= '9' && digits[1..].All(char.IsAsciiDigit) ? digits : null;
                 case AddressKind.Email:
                     var trimmed = address.Trim();
                     // A bare address only: no display name, no list, nothing MailAddress would quietly drop.

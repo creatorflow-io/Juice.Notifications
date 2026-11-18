@@ -411,6 +411,7 @@ namespace Juice.Notifications.Delivering
                     ContentShape.Message => ChannelContent.Email(rendered, type.Name),
                     ContentShape.Item => ChannelContent.Inbox(rendered, type.Key, type.Name, request.Links, type.Actions),
                     ContentShape.Chat => ChannelContent.Chat(rendered, type.Name, request.Links, type.Actions),
+                    ContentShape.Text => ChannelContent.Text(rendered),
                     _ => ChannelContent.Webhook(rendered, ChannelContent.IsJson(rendered)),
                 }, template, null, null);
             }

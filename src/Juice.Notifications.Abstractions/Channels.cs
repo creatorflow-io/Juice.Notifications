@@ -12,6 +12,8 @@ namespace Juice.Notifications
         /// entered by hand nor named in a request, and never matched by name or email (D23).
         /// </summary>
         Account,
+        /// <summary>A phone number in E.164 (<c>+84901234567</c>); spaces, dashes, dots and parentheses are dropped (phase-4-plan M29).</summary>
+        Phone,
     }
 
     /// <summary>Who a channel reaches.</summary>
@@ -40,6 +42,11 @@ namespace Juice.Notifications
         /// channel or forge a link. With no template, the type's name.
         /// </summary>
         Chat,
+        /// <summary>
+        /// A short text (<c>TextContent</c>, SMS): the template's output as plain text, at most 1,600 characters (ten SMS segments). No template, no
+        /// text: a type sends SMS only when it says what to say.
+        /// </summary>
+        Text,
     }
 
     /// <summary>

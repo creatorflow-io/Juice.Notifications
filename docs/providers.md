@@ -92,6 +92,23 @@ In the library (`@juice-js/notifications`), `linkChannels: ['slack', 'telegram']
 Chat text is plain: Slack's `<!channel>`-style mentions and links, and Markdown links in Teams, are escaped. A type with no template for a
 chat channel sends its name, its link and its actions.
 
+## SMS: Twilio (`twilio`)
+
+Package `Juice.Notifications.Providers.Sms` (`AddSms`). Channel `sms` reaches people's verified phone numbers and shared numbers (targets).
+Numbers are E.164 (`+84901234567`); spaces, dashes, dots and parentheses are dropped. A type sends SMS only with an `sms` template; its
+output is the text, up to 1,600 characters.
+
+| Field | |
+|---|---|
+| `settings.from` or `settings.messagingServiceSid` | the sender: one of the account's numbers, or a Messaging Service (`MG…`) |
+| `secretRef` | names `{accountSid}:{authToken}` |
+| target `address` | a phone number |
+
+With `Callbacks:PublicUrl` set, each message asks Twilio for status callbacks, checked with the auth token against that URL. A number
+added by a person is verified with a code by SMS (the service's verification type gains an SMS template when the channel is registered). In
+the library, `phoneNumbers: true` lets people add numbers. A number that replied STOP, an invalid one or not a mobile one fails its contact
+point; `delivered` is a receipt, and errors 30005 and 30006 hard bounces, 30003 a soft one.
+
 ## What callbacks change
 
 | Event | Delivery | Person's contact point |

@@ -28,6 +28,24 @@ namespace Juice.Notifications.People
         /// <summary>Whether a type is the service's own (under its application's key).</summary>
         public static bool IsServiceType(string typeKey) => typeKey.StartsWith(ApplicationKey + ".", StringComparison.Ordinal);
 
+        /// <summary>
+        /// The verification code's template per channel a person verifies an address on: email, and SMS when its package is registered (M29).
+        /// Channels whose accounts are linked (Slack, Telegram) need none.
+        /// </summary>
+        public static readonly IReadOnlyDictionary<string, string> VerifyTemplates = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["email"] = "Subject: Your verification code: {{ data.code }}\n\nYour verification code is {{ data.code }}. It works for {{ data.minutes }} minutes.\n\nIf you didn't add this address to your notifications, ignore this message.",
+            ["sms"] = "Your verification code is {{ data.code }}. It works for {{ data.minutes }} minutes.",
+        };
+
+        /// <summary>The verification type with a template for each registered channel in <see cref="VerifyTemplates"/>.</summary>
+        public static TypeDeclaration VerifyDeclarationFor(IChannelRegistry channels)
+            => VerifyDeclaration with
+            {
+                Templates = JsonSerializer.SerializeToElement(VerifyTemplates.Where(t => channels.Find(t.Key) is not null)
+                    .ToDictionary(t => t.Key, t => t.Value)),
+            };
+
         public static TypeDeclaration VerifyDeclaration { get; } = new(
             VerifyType, "Contact verification", "account", DisplayGroups.System, "high", Mandatory: true, ExternalRecipients: true,
             JsonElement.Parse("""
@@ -375,7 +393,8 @@ namespace Juice.Notifications.People
     /// At start, after migrations: checks the encryption keys, and provisions the service's own application and its types (<see cref="ServiceTypes"/>).
     /// An application already using the key <c>notifications</c> for another client stops the host: that key is the service's.
     /// </summary>
-    public sealed class ServiceTypesProvisioner(IServiceScopeFactory scopes, ContactCrypto crypto, TimeProvider clock, ILogger<ServiceTypesProvisioner> logger)
+    public sealed class ServiceTypesProvisioner(IServiceScopeFactory scopes, ContactCrypto crypto, IChannelRegistry channels, TimeProvider clock,
+        ILogger<ServiceTypesProvisioner> logger)
         : IHostedService
     {
         public async Task StartAsync(CancellationToken cancellationToken)
@@ -403,7 +422,7 @@ namespace Juice.Notifications.People
             {
                 try
                 {
-                    declared = await mediator.Send(new DeclareType(app.Id, app.Key, ServiceTypes.VerifyDeclaration), cancellationToken);
+                    declared = await mediator.Send(new DeclareType(app.Id, app.Key, ServiceTypes.VerifyDeclarationFor(channels)), cancellationToken);
                     break;
                 }
                 catch (Exception ex) when (tries < 3 && DbConflicts.Classify(ex) is { Kind: ConflictKind.Unique })

@@ -803,6 +803,11 @@ namespace Juice.Notifications.Rendering
                 actions is null ? null : JsonElement.Parse(actions)));
         }
 
+        public const int MaxText = 1600;
+
+        /// <summary>An SMS (phase-4-plan M29): the template's output, trimmed, at most <see cref="MaxText"/> characters.</summary>
+        public static string Text(string rendered) => JsonSerializer.Serialize(new TextContent(Cut(rendered.Replace("\r\n", "\n").Trim(), MaxText)));
+
         /// <summary>At most <paramref name="max"/> UTF-16 units, never splitting a surrogate pair (half an emoji isn't text).</summary>
         [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(text))]
         public static string? Cut(string? text, int max)
@@ -835,6 +840,9 @@ namespace Juice.Notifications.Rendering
     public sealed record EmailContent(string Subject, string Text, string Html);
 
     public sealed record WebhookContent(string ContentType, string Body);
+
+    /// <summary>An SMS delivery's content (phase-4-plan M29): plain text.</summary>
+    public sealed record TextContent(string Text);
 
     /// <summary>A chat delivery's content (phase-4-plan M27): plain text the provider escapes, a link, and the type's actions (<c>[{ id, label }]</c>).</summary>
     public sealed record ChatContent(string Title, string Text, string? Url, JsonElement? Actions);

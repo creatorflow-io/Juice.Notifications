@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- SMS (phase-4-plan I39, M29): the sms channel and Twilio, with its signed status callbacks. A host adds it with AddSms. -->
+  <PropertyGroup>
+    <Description>Juice Notifications SMS: the sms channel and the Twilio provider, with delivery status callbacks.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Juice.Notifications.Tests" />
+    <InternalsVisibleTo Include="Juice.Notifications.IntegrationTests" />
+  </ItemGroup>
+
+</Project>
