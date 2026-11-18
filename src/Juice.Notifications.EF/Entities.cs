@@ -737,6 +737,8 @@ namespace Juice.Notifications.Data
         /// <c>opt-out</c>, <c>personal-mute</c>, <c>quiet-hours</c> (<see cref="BypassedRules"/>). Empty for a normal type.
         /// </summary>
         public string[] Bypassed { get; set; } = [];
+        /// <summary>When <c>delivery.failed</c> was raised for the recipient (every destination ended without going out): once.</summary>
+        public DateTimeOffset? FailureRaisedAt { get; set; }
         public DateTimeOffset CreatedAt { get; init; }
     }
 

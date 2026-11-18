@@ -47,13 +47,35 @@ namespace Juice.Notifications.Delivering
             await SendAsync(context, row, ct);
             if (events is { Enabled: true } && row.Status == DeliveryStatus.Failed && before != DeliveryStatus.Failed)
             {
-                await FailedAsync(context, row, ct);
+                // Decided once this step has committed: two deliveries of a recipient failing at the same moment each see the other still going
+                // in their own steps, so neither would raise it. After both commit, the later check sees every one ended.
+                var (tenant, id, at) = (row.TenantId, row.Id, context.Now);
+                context.AfterCommit.Add(() => _ = FailedAfterCommitAsync(tenant, id, at));
             }
         }
 
-        private async Task FailedAsync(StageContext context, Delivery row, CancellationToken ct)
+        private async Task FailedAfterCommitAsync(Guid tenantId, Guid deliveryId, DateTimeOffset at)
         {
-            var db = context.Db;
+            try
+            {
+                await using var scope = scopes.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
+                await FailedAsync(db, tenantId, deliveryId, at, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "delivery.failed couldn't be raised for delivery {Delivery} in tenant {Tenant}", deliveryId, tenantId);
+            }
+        }
+
+        /// <summary>
+        /// <c>delivery.failed</c> for each recipient of the delivery whose every destination has now ended without going out (phase-3-plan I36):
+        /// in a transaction of its own, the recipient's row locked, so of two workers checking at once one raises it, and recorded on the
+        /// recipient (<see cref="NotificationRecipient.FailureRaisedAt"/>) so it is raised once.
+        /// </summary>
+        internal async Task FailedAsync(NotificationsDbContext db, Guid tenantId, Guid deliveryId, DateTimeOffset at, CancellationToken ct)
+        {
+            var row = await db.Deliveries.AsNoTracking().SingleAsync(d => d.TenantId == tenantId && d.Id == deliveryId, ct);
             var recipients = await (from item in db.DeliveryItems
                                     join r in db.Recipients on new { item.TenantId, Id = item.RecipientId } equals new { r.TenantId, r.Id }
                                     join n in db.Notifications on new { r.TenantId, Id = r.NotificationId } equals new { n.TenantId, n.Id }
@@ -63,21 +85,32 @@ namespace Juice.Notifications.Delivering
             DeliveryStatus[] ended = [DeliveryStatus.Failed, DeliveryStatus.Bounced, DeliveryStatus.Expired, DeliveryStatus.Cancelled];
             foreach (var x in recipients)
             {
+                await using var transaction = await db.Database.BeginTransactionAsync(ct);
+                var raised = await db.Database.SqlQuery<DateTimeOffset?>($"""
+                    SELECT failure_raised_at AS "Value" FROM notifications.notification_recipients WHERE tenant_id = {tenantId} AND id = {x.Recipient.Id} FOR UPDATE
+                    """).ToListAsync(ct);
+                if (raised is not [null])
+                {
+                    continue; // raised already (or the recipient is gone)
+                }
                 var others = await (from item in db.DeliveryItems
                                     join d in db.Deliveries on new { item.TenantId, Id = item.DeliveryId } equals new { d.TenantId, d.Id }
                                     where item.TenantId == row.TenantId && item.RecipientId == x.Recipient.Id && d.Id != row.Id
                                     select new { d.Status, d.Channel }).AsNoTracking().ToListAsync(ct);
-                if (others.Any(o => !ended.Contains(o.Status)))
+                if (row.Status != DeliveryStatus.Failed || others.Any(o => !ended.Contains(o.Status)))
                 {
-                    continue; // another destination went out or may still
+                    continue; // another destination went out or may still (or this one was retried since)
                 }
                 var channels = others.Select(o => o.Channel).Append(row.Channel).Distinct().Order(StringComparer.Ordinal).ToList();
                 await events!.RaiseAsync(db, row.TenantId, x.Request.ApplicationId, app => new Events.NotificationEvent
                 {
                     Event = Events.ProducerEventNames.DeliveryFailed, Application = app, NotificationTenantId = row.TenantId, CorrelationKey = x.Request.CorrelationKey,
                     NotificationId = x.Recipient.NotificationId, RequestId = x.Request.Id, Type = x.Request.TypeKey, RecipientId = x.Recipient.Id,
-                    SubscriberId = x.Recipient.SubscriberId, NamedAs = x.Recipient.NamedAs, Channels = channels, OccurredAt = context.Now,
+                    SubscriberId = x.Recipient.SubscriberId, NamedAs = x.Recipient.NamedAs, Channels = channels, OccurredAt = at,
                 }, ct);
+                await db.SaveChangesAsync(ct);
+                await db.Recipients.Where(r => r.TenantId == tenantId && r.Id == x.Recipient.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureRaisedAt, at), ct);
+                await transaction.CommitAsync(ct);
             }
         }
 
@@ -134,10 +167,12 @@ namespace Juice.Notifications.Delivering
                 Finish(context, row, DeliveryStatus.Expired, null, "The request expired before the delivery was sent.", context.Now);
                 return;
             }
-            // Resolved or cancelled while this one was held (retrying, or claimed as the resolve ran): it isn't sent now (phase-3-plan I32).
-            if (requests.Select(r => r.CorrelationId).OfType<Guid>().Distinct().ToList() is { Count: > 0 } correlations
-                && await db.Correlations.AsNoTracking().AnyAsync(c => c.TenantId == row.TenantId && correlations.Contains(c.Id)
-                    && (c.State == CorrelationState.Resolved || c.State == CorrelationState.Cancelled), ct))
+            // Resolved or cancelled while this one was held (retrying, or claimed as the resolve ran): it isn't sent now (phase-3-plan I32). Only
+            // when everything it carries is closed: a digest that also carries a request with no correlation, or with one still open, goes out.
+            if (requests.Count > 0 && requests.All(r => r.CorrelationId is not null)
+                && requests.Select(r => r.CorrelationId!.Value).Distinct().ToList() is var correlations
+                && await db.Correlations.AsNoTracking().CountAsync(c => c.TenantId == row.TenantId && correlations.Contains(c.Id)
+                    && (c.State == CorrelationState.Resolved || c.State == CorrelationState.Cancelled), ct) == correlations.Count)
             {
                 Finish(context, row, DeliveryStatus.Cancelled, null, "The correlation was resolved or cancelled before it was sent.", context.Now);
                 return;

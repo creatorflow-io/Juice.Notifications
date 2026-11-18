@@ -311,7 +311,8 @@ namespace Juice.Notifications.Data
             });
 
             // Requests waiting for redaction (phase-4-plan I46): the sweep reads them oldest first.
-            model.Entity<NotificationRequest>().HasIndex(x => x.AcceptedAt).HasFilter("redacted_at IS NULL").HasDatabaseName("ix_requests_unredacted");
+            model.Entity<NotificationRequest>().HasIndex(x => new { x.TypeId, x.AcceptedAt }).HasFilter("redacted_at IS NULL").HasDatabaseName("ix_requests_unredacted");
+            model.Entity<NotificationRequest>().HasIndex(x => x.TypeId).HasDatabaseName("ix_requests_type_id");
 
             model.Entity<LinkCode>(e =>
             {

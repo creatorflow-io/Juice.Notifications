@@ -130,7 +130,7 @@ namespace Juice.Notifications.Tests.ProviderContracts
 
             Assert.True(result.Verified, result.Refusal);
             var e = Assert.Single(result.Events);
-            Assert.Equal(("u:1001", CallbackKind.Link, "123456789", "ABCDEFGH"), (e.EventId, e.Kind, e.Account, e.Detail));
+            Assert.Equal(($"u:{Integration.IntegrationId:N}:1001", CallbackKind.Link, "123456789", "ABCDEFGH"), (e.EventId, e.Kind, e.Account, e.Detail));
             using var reply = JsonDocument.Parse(result.Reply!.Body);
             Assert.Equal(("sendMessage", "123456789"), (reply.RootElement.GetProperty("method").GetString(), reply.RootElement.GetProperty("chat_id").GetString()));
         }

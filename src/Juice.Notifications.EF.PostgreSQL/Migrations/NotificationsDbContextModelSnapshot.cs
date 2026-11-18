@@ -1740,6 +1740,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("escalation_step");
 
+                    b.Property<DateTimeOffset?>("FailureRaisedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("failure_raised_at");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -1924,10 +1928,6 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasKey("TenantId", "Id")
                         .HasName("pk_requests");
 
-                    b.HasIndex("AcceptedAt")
-                        .HasDatabaseName("ix_requests_unredacted")
-                        .HasFilter("redacted_at IS NULL");
-
                     b.HasIndex("TypeId")
                         .HasDatabaseName("ix_requests_type_id");
 
@@ -1940,6 +1940,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasIndex("TenantId", "CorrelationId")
                         .HasDatabaseName("ix_requests_tenant_id_correlation_id")
                         .HasFilter("correlation_id IS NOT NULL");
+
+                    b.HasIndex("TypeId", "AcceptedAt")
+                        .HasDatabaseName("ix_requests_unredacted")
+                        .HasFilter("redacted_at IS NULL");
 
                     b.HasIndex("TenantId", "ApplicationId", "CorrelationKey")
                         .HasDatabaseName("ix_requests_tenant_id_application_id_correlation_key");

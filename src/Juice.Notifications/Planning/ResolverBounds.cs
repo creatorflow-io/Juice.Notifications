@@ -123,6 +123,12 @@ namespace Juice.Notifications.Planning
                 return cached.Result;
             }
             var result = await load(ct);
+            if (result.Truncated)
+            {
+                // Cut short: by the planner step's deadline (a slow directory, so the next read may be whole) or by the listing bound. Kept, the
+                // part would stand for the whole until the entry expired; read again instead.
+                return result;
+            }
             var size = Size(result);
             if (size > MaxPeople)
             {

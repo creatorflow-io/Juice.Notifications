@@ -253,8 +253,9 @@ namespace Juice.Notifications.Workflows
                 return SendOnly;
             }
             using var document = JsonDocument.Parse(json);
-            // The correlation rule was checked at declaration; reading needn't repeat it.
-            var (workflow, errors) = Parse(document.RootElement, CorrelationRules.Optional);
+            // The correlation rule was checked at declaration; reading needn't repeat it. Required is the rule every step passes (a throttle or
+            // digest by correlation needs it), so a workflow its type accepted always reads back.
+            var (workflow, errors) = Parse(document.RootElement, CorrelationRules.Required);
             return workflow ?? throw new InvalidOperationException($"A stored workflow doesn't parse: {string.Join("; ", errors.Select(e => e.Pointer + ": " + e.Message))}");
         }
 

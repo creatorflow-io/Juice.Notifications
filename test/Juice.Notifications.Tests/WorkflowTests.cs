@@ -89,6 +89,14 @@ namespace Juice.Notifications.Tests
             Assert.Empty(Pointers(throttle, CorrelationRules.Required));
         }
 
+        /// <summary>What a type accepted reads back when it runs, the steps that need a required correlation included.</summary>
+        [Theory]
+        [InlineData("""[{"step":"throttle","limit":1,"windowSeconds":60,"by":"correlation"},{"step":"send"}]""")]
+        [InlineData("""[{"step":"digest","windowSeconds":60,"by":"correlation"},{"step":"send"}]""")]
+        [InlineData("""[{"step":"condition","when":{"any":[{"correlation":["open"]}]}},{"step":"send"}]""")]
+        public void A_stored_workflow_that_reads_the_correlation_reads_back(string json)
+            => Assert.NotEmpty(Workflow.Read(json).Steps);
+
         [Fact]
         public void A_condition_reads_labels_and_the_correlation_state_and_a_missing_one_doesnt_match()
         {

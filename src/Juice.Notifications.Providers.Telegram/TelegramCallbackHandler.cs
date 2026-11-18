@@ -7,7 +7,7 @@ namespace Juice.Notifications.Providers.Telegram
     /// <summary>
     /// The bot's webhook (phase-4-plan p4-d6, M28): Telegram sends each update with <c>X-Telegram-Bot-Api-Secret-Token</c>, the secret the
     /// integration's <c>setWebhook</c> set (<see cref="TelegramProvider.WebhookSecret"/>); anything without it is refused. Each update's id is
-    /// its event id (Telegram repeats an update until it gets a 200).
+    /// its event id, with the integration's (Telegram repeats an update until it gets a 200; each bot numbers its own).
     /// <list type="bullet">
     /// <item><c>/start CODE</c> in a private chat (the bot's deep link <c>t.me/{bot}?start=CODE</c> sends it): a link request from the person's
     /// account, their user id, which is also their private chat's id. The bot answers in the chat (through the webhook's reply).</item>
@@ -38,7 +38,7 @@ namespace Juice.Notifications.Providers.Telegram
             }
             try
             {
-                return Task.FromResult(Read(request.Body));
+                return Task.FromResult(Read(request.Body, integration.IntegrationId));
             }
             catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
             {
@@ -46,7 +46,7 @@ namespace Juice.Notifications.Providers.Telegram
             }
         }
 
-        internal static CallbackResult Read(byte[] body)
+        internal static CallbackResult Read(byte[] body, Guid integrationId)
         {
             using var json = JsonDocument.Parse(body);
             var root = json.RootElement;
@@ -54,7 +54,8 @@ namespace Juice.Notifications.Providers.Telegram
             {
                 return CallbackResult.Of();
             }
-            var eventId = "u:" + updateId;
+            // Update ids are numbered per bot, and a tenant can have several: the integration is part of the event's id.
+            var eventId = $"u:{integrationId:N}:{updateId}";
             if (root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object
                 && message.TryGetProperty("chat", out var chat) && Text(chat, "type") == "private"
                 && message.TryGetProperty("from", out var from) && !Bool(from, "is_bot") && Id(from) is { } user

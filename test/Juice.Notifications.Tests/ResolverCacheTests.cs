@@ -53,6 +53,21 @@ namespace Juice.Notifications.Tests
             Assert.Equal("p3", First(await cache.GetOrLoadAsync(Config("""{"realm":"other"}"""), "group:sre", Load, TestContext.Current.CancellationToken)));
         }
 
+        /// <summary>A listing cut short (the step's deadline, the bound) isn't kept: the next plan reads it again, whole if the directory has recovered.</summary>
+        [Fact]
+        public async Task A_truncated_expansion_is_not_remembered()
+        {
+            var cache = Cache();
+            ValueTask<ResolveResult> Partial(CancellationToken ct)
+            {
+                _loads++;
+                return ValueTask.FromResult(new ResolveResult([], Truncated: true) { People = [new ResolvedPerson("oidc", "p" + _loads)] });
+            }
+            Assert.Equal("p1", First(await cache.GetOrLoadAsync(Config(), "group:sre", Partial, TestContext.Current.CancellationToken)));
+            Assert.Equal("p2", First(await cache.GetOrLoadAsync(Config(), "group:sre", Load, TestContext.Current.CancellationToken)));
+            Assert.Equal("p2", First(await cache.GetOrLoadAsync(Config(), "group:sre", Load, TestContext.Current.CancellationToken)));
+        }
+
         [Fact]
         public async Task A_failed_load_is_not_remembered()
         {

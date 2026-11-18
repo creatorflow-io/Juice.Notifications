@@ -6,9 +6,8 @@ using Scriban.Runtime;
 
 namespace Juice.Notifications.Rendering
 {
-    /// <summary>What a template sees (design §8.2): read-only, and only this. Recipient name and locale join in phase 2, digest items in phase 3.</summary>
     /// <summary>
-    /// What a template sees: the request's <c>data</c>, <c>labels</c>, <c>links</c> and type. A digest's delivery (phase-3-plan I31) also sees
+    /// What a template sees (design §8.2), read-only: the request's <c>data</c>, <c>labels</c>, <c>links</c> and type. A digest's delivery (phase-3-plan I31) also sees
     /// <c>items</c>, one per notification it carries (the first <see cref="DigestItem"/>s, up to 100), and <c>more</c>, how many past those;
     /// <c>data</c> and the rest are the first item's.
     /// </summary>

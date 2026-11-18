@@ -280,7 +280,7 @@ namespace Juice.Notifications.Workflows
             }
         }
 
-        private static string Fit(string value)
+        internal static string Fit(string value)
             => value.Length <= 200 ? value : "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
         /// <summary>What a throttle counts by, for this request: long values (a label) are hashed to fit the column.</summary>
@@ -292,7 +292,7 @@ namespace Juice.Notifications.Workflows
                 ThrottleKeys.Correlation => request.CorrelationKey ?? "",
                 _ => request.Labels.GetValueOrDefault(by[ThrottleKeys.LabelPrefix.Length..]) ?? "",
             };
-            return value.Length <= 200 ? value : "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+            return Fit(value);
         }
     }
 }

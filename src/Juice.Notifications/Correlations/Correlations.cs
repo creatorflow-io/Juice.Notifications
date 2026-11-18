@@ -202,6 +202,7 @@ namespace Juice.Notifications.Correlations
             var recipientCancelled = RecipientOutcome.Cancelled.ToString();
             var deliveryCancelled = DeliveryStatus.Cancelled.ToString();
             var deliveryPending = DeliveryStatus.Pending.ToString();
+            var (resolved, closed) = (CorrelationState.Resolved.ToString(), CorrelationState.Cancelled.ToString());
             const string reason = "The correlation was resolved or cancelled before it was sent.";
             var recipients = await db.Database.ExecuteSqlAsync($"""
                 UPDATE notifications.notification_recipients x
@@ -224,6 +225,11 @@ namespace Juice.Notifications.Correlations
                 WHERE d.tenant_id = {tenantId} AND d.status IN ({deliveryPending}, {retrying}) AND (d.lease_until IS NULL OR d.lease_until <= {now})
                   AND EXISTS (SELECT 1 FROM notifications.delivery_items i JOIN notifications.requests r ON r.tenant_id = i.tenant_id AND r.id = i.request_id
                               WHERE i.tenant_id = d.tenant_id AND i.delivery_id = d.id AND r.correlation_id = {correlationId})
+                  -- A digest carrying another request with no correlation, or one still open, goes out: only what is wholly closed is cancelled.
+                  AND NOT EXISTS (SELECT 1 FROM notifications.delivery_items i JOIN notifications.requests r ON r.tenant_id = i.tenant_id AND r.id = i.request_id
+                                  LEFT JOIN notifications.correlations c ON c.tenant_id = r.tenant_id AND c.id = r.correlation_id
+                                  WHERE i.tenant_id = d.tenant_id AND i.delivery_id = d.id AND r.correlation_id IS DISTINCT FROM {correlationId}
+                                    AND (r.correlation_id IS NULL OR c.state NOT IN ({resolved}, {closed})))
                 """, ct);
             // Its escalations end here: nobody more is added.
             var (escalating, ended) = (EscalationState.Running.ToString(), EscalationState.Stopped.ToString());

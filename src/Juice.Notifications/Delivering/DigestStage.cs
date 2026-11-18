@@ -92,10 +92,24 @@ namespace Juice.Notifications.Delivering
             // Each member's destinations, as the delivery planner reaches them.
             var reach = new List<(NotificationRecipient Member, DeliveryPlannerStage.Destination Destination, DateTimeOffset? Until)>();
             var allOff = new HashSet<Guid>();
+            // A route's members of one type reach the same targets: looked up once per route and type, not once per member (a storm digest can
+            // carry a thousand of them).
+            var byRoute = new Dictionary<(Guid Route, Guid Type), List<DeliveryPlannerStage.Destination>>();
             foreach (var member in members.Where(m => m.Outcome == RecipientOutcome.Planned))
             {
                 var type = types[requests[member.NotificationId].TypeId];
-                var destinations = await planner.DestinationsAsync(db, member, type, ct);
+                List<DeliveryPlannerStage.Destination> destinations;
+                if (member is { Kind: RecipientKind.Route, RouteId: { } routeId })
+                {
+                    if (!byRoute.TryGetValue((routeId, type.Id), out destinations!))
+                    {
+                        byRoute[(routeId, type.Id)] = destinations = await planner.DestinationsAsync(db, member, type, ct);
+                    }
+                }
+                else
+                {
+                    destinations = await planner.DestinationsAsync(db, member, type, ct);
+                }
                 DateTimeOffset? until = null;
                 if (member.Kind == RecipientKind.Subscriber && member.SubscriberId is { } person)
                 {

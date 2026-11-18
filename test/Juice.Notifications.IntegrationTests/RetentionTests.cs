@@ -48,8 +48,9 @@ namespace Juice.Notifications.IntegrationTests
                 SchemaHash = "h", Data = data, Recipients = "[]", AcceptedAt = at,
             };
             var notification = Seed.Notification(tenantId, request.Id);
-            notification.State = finished ? NotificationState.Planned : NotificationState.Planning;
-            notification.NextAt = finished ? null : at;
+            // Unfinished: its workflow waiting (a delay), due in an hour, so no stage takes it during the test.
+            notification.State = finished ? NotificationState.Planned : NotificationState.Running;
+            notification.NextAt = finished ? null : DateTimeOffset.UtcNow.AddHours(1);
             var recipient = Seed.Recipient(tenantId, notification.Id);
             recipient.Outcome = RecipientOutcome.Planned;
             recipient.NextAt = null;

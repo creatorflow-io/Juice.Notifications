@@ -65,7 +65,10 @@ namespace Juice.Notifications.Workflows
             var notification = await db.Notifications.SingleAsync(n => n.TenantId == row.TenantId && n.Id == row.NotificationId, ct);
             if (notification.State is NotificationState.Planning or NotificationState.Running)
             {
-                context.Done(row, now + Busy);
+                // Its recipients are planned on the notification, which its own planning or workflow holds now: planning the step meanwhile would
+                // end the workflow (its later steps lost). So it waits, until the workflow's own wait ends (a delay, a throttle's next window), not
+                // polling through it: a step that falls due during a long delay runs when the delay ends (deferred.md #46).
+                context.Done(row, notification.NextAt is { } due && due > now + Busy ? due : now + Busy);
                 return;
             }
             if (notification.State != NotificationState.Planned)

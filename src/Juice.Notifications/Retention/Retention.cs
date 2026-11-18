@@ -131,14 +131,23 @@ namespace Juice.Notifications.Retention
                 await using var scope = scopes.CreateAsyncScope();
                 var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
                 var now = clock.GetUtcNow();
+                var redacting = await db.Types.AsNoTracking().Where(t => t.Redact.Length > 0).Select(t => t.Id).ToListAsync(ct);
+                if (redacting.Count == 0)
+                {
+                    return total;
+                }
                 var ready = await (from r in db.Requests
                                    join t in db.Types on r.TypeId equals t.Id
-                                   where r.RedactedAt == null && t.Redact.Length > 0
+                                   where r.RedactedAt == null && redacting.Contains(r.TypeId)
                                          && !db.Notifications.Any(n => n.TenantId == r.TenantId && n.RequestId == r.Id
                                              && (n.State == NotificationState.Planning || n.State == NotificationState.Running
                                                  || db.Recipients.Any(x => x.TenantId == n.TenantId && x.NotificationId == n.Id
                                                      && (x.Outcome == RecipientOutcome.Pending || x.NextAt != null))
                                                  || db.Escalations.Any(e => e.TenantId == n.TenantId && e.NotificationId == n.Id && e.State == EscalationState.Running)))
+                                         // And every delivery of it settled: an inbox item is written when its delivery is sent, after planning.
+                                         && !db.DeliveryItems.Any(i => i.TenantId == r.TenantId && i.RequestId == r.Id
+                                             && db.Deliveries.Any(d => d.TenantId == i.TenantId && d.Id == i.DeliveryId
+                                                 && (d.Status == DeliveryStatus.Pending || d.Status == DeliveryStatus.Sending || d.Status == DeliveryStatus.Retrying)))
                                    orderby r.AcceptedAt
                                    select new { r.TenantId, r.Id, r.Data, t.Redact }).Take(options.Value.Batch).ToListAsync(ct);
                 if (ready.Count == 0)
