@@ -100,6 +100,7 @@ namespace Juice.Notifications.Api
             services.TryAddSingleton<ITenantAccess, ClaimTenantAccess>(); // replace to answer from juice-tenants or local grants
             services.AddScoped<Configuration.ConfigurationReader>();
             services.AddScoped<Configuration.TenantSettingsReader>();
+            services.AddScoped<Types.TenantTemplateReader>();
             services.AddScoped<People.SubscriberReader>();
             services.AddScoped<People.DirectoryReader>();
             services.AddScoped<People.PreferenceReader>();

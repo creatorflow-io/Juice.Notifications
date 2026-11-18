@@ -70,6 +70,29 @@ namespace Juice.Notifications.Api
             tenant.MapDelete("/routes/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteRoute(tenantId, key), ct));
 
+            // The tenant's own templates (phase-4-plan I45): over the application's, for each type's latest version.
+            tenant.MapGet("/types", async (Guid tenantId, Types.TenantTemplateReader reader, CancellationToken ct)
+                => Results.Ok((await reader.TypesAsync(tenantId, ct)).Select(t => new TenantTypeResponse(t.Key, t.Name, t.Version, t.Application,
+                    t.Channels.Select(c => new TenantTypeChannelResponse(c.Channel, c.Declared, c.Overridden)).ToList()))));
+            tenant.MapGet("/types/{key}/templates/{channel}", async (Guid tenantId, string key, string channel, string? locale, Types.TenantTemplateReader reader,
+                CancellationToken ct) =>
+            {
+                var found = await reader.GetAsync(tenantId, key, channel, locale, ct);
+                return ApiResults.Failure(found) ?? Results.Ok(ToResponse(found.Value!));
+            });
+            tenant.MapPut("/types/{key}/templates/{channel}", (Guid tenantId, string key, string channel, PutTemplateBody body, IMediator mediator,
+                NotificationsDbContext db, CancellationToken ct)
+                => SendAsync(mediator, db, new Types.PutTenantTemplate(tenantId, key, channel, body.Locale, body.Body), ToResponse, ct));
+            tenant.MapDelete("/types/{key}/templates/{channel}", (Guid tenantId, string key, string channel, string? locale, IMediator mediator,
+                NotificationsDbContext db, CancellationToken ct)
+                => DeleteAsync(mediator, db, new Types.DeleteTenantTemplate(tenantId, key, channel, locale), ct));
+            tenant.MapPost("/templates/preview", async (Guid tenantId, PreviewBody body, Types.TenantTemplateReader reader, CancellationToken ct) =>
+            {
+                var preview = await reader.PreviewAsync(tenantId, body.Type, body.Channel, body.Body, body.Data, ct);
+                return ApiResults.Failure(preview)
+                    ?? Results.Ok(new PreviewResponse(preview.Value!.Channel, preview.Value.Content, preview.Value.Error, preview.Value.Data));
+            });
+
             // The tenant's own settings (phase-4-plan §4) and its storms (I43).
             tenant.MapGet("/settings", async (Guid tenantId, TenantSettingsReader reader, CancellationToken ct)
                 => Results.Ok(ToResponse(await reader.GetAsync(tenantId, ct))));
@@ -108,6 +131,9 @@ namespace Juice.Notifications.Api
         /// A write that raced another: two admins creating the same key, a PUT whose row changed since it read it (the definition hash is a
         /// concurrency token), or a target added to an integration being deleted (foreign key). The loser asks again and sees the current state.
         /// </summary>
+        private static TenantTemplateResponse ToResponse(Types.TenantTemplateView t)
+            => new(t.Type, t.TypeVersion, t.Channel, t.Locale, t.Application, t.Tenant, t.TenantVersion, t.UpdatedAt);
+
         private static TenantSettingsResponse ToResponse(TenantSettingsView s) => new(s.StormThreshold, s.DefaultStormThreshold, s.UpdatedAt);
 
         private static Task<IResult> SendAsync<TView, TResponse>(IMediator mediator, NotificationsDbContext db, IRequest<Outcome<TView>> command,

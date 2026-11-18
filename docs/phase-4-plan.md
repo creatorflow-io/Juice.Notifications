@@ -220,6 +220,16 @@ tests, a commit and a build-board update.
   - Tests: `StormTests` (proof point 4: a thousand notifications to two routes, each target's deliveries carry all thousand once and fewer than
     400 deliveries; bulk replay by filter, limit and more, non-admins refused).
 - **M32 Template editing** (`p4-07`).
+  - *As built:* tenant admins, under `/api/v1/tenants/{tenantId}`: `GET types` (the latest version of each type whose application is linked
+    to the tenant, with each channel's application and tenant templates), `GET/PUT/DELETE types/{key}/templates/{channel}` (`?locale`, `en`
+    by default; another only where the type declares it) and `POST templates/preview`. A tenant's template is a `templates` row with its
+    `TenantId` for the type's latest version, numbered on per channel and locale (each save is a new version; the newest is rendered first, as
+    the renderer already did); checked as a declaration's (the sandbox, size, NUL, passthrough only on passthrough channels); never on the
+    service's own types. Delete removes every version of the override. A new type version starts without the tenant's overrides (they belong to
+    the version they were written for). Preview renders the given body, or the one in effect, with the given data or a sample built from the
+    schema (examples, default, const, enum, else a value of the type), through the same channel shaping as a delivery; nothing is stored. Access
+    records audit the changes (templates aren't audited rows). Library (juice-layout bbbbdd5, fixed in 8b519a8): `…/notifications/templates`.
+    Tests: `TemplateEditingTests` (refusal, preview, the next delivery uses the override, removal restores the application's).
 - **M33 Redaction and retention** (`p4-09`).
 - **M34 Vault and Key Vault** (`p4-10`).
 - **M35 Proof points and acceptance** (`p4-g1` … `p4-g3`), then the review loop over phases 3 and 4.

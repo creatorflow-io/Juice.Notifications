@@ -80,6 +80,25 @@ namespace Juice.Notifications.Api.Contracts
     /// <summary>A code is on its way; it works until <c>expiresAt</c>, for a few tries.</summary>
     public sealed record VerificationSentResponse(DateTimeOffset ExpiresAt);
 
+    /// <summary>A type the tenant receives, at its latest version, and per channel whether its application and the tenant have a template.</summary>
+    public sealed record TenantTypeResponse(string Key, string Name, int Version, string Application, IReadOnlyList<TenantTypeChannelResponse> Channels);
+
+    public sealed record TenantTypeChannelResponse(string Channel, bool Declared, bool Overridden);
+
+    /// <summary>A channel's templates for a type version: the application's and the tenant's own (null when it has none).</summary>
+    public sealed record TenantTemplateResponse(string Type, int TypeVersion, string Channel, string Locale, string? Application, string? Tenant, int? TenantVersion,
+        DateTimeOffset? UpdatedAt);
+
+    /// <summary>A tenant's template (phase-4-plan I45): Scriban text, or <c>passthrough</c> where the channel allows it.</summary>
+    public sealed record PutTemplateBody(string? Body, string? Locale);
+
+    /// <summary>
+    /// Renders <c>body</c> (or the template in effect, without one) with <c>data</c> (or a sample from the type's schema); nothing is stored.
+    /// </summary>
+    public sealed record PreviewBody(string? Type, string? Channel, string? Body, JsonElement? Data);
+
+    public sealed record PreviewResponse(string Channel, JsonElement? Content, string? Error, JsonElement Data);
+
     /// <summary>A tenant's settings: a null field takes the deployment's default.</summary>
     public sealed record TenantSettingsBody(int? StormThreshold);
 
