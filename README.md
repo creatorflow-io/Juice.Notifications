@@ -6,6 +6,7 @@ which channels, in what words and when, then sends it, retries it and records wh
 - Design: [`docs/design.md`](docs/design.md)
 - Phase 1 plan: [`docs/phase-1-plan.md`](docs/phase-1-plan.md)
 - Deferred findings: [`docs/deferred.md`](docs/deferred.md)
+- Setting up providers (SES, SendGrid, …): [`docs/providers.md`](docs/providers.md)
 
 ## Status
 

@@ -2,6 +2,7 @@ using Juice.Notifications;
 using Juice.Notifications.Api;
 using Juice.Notifications.Data.PostgreSQL;
 using Juice.Notifications.Messaging;
+using Juice.Notifications.Providers.Email;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -11,6 +12,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddJuiceNotifications(builder.Configuration).AddPostgresClaimStore();
 // NotificationRequested over RabbitMQ (phase-1-plan I5), when Intake:RabbitMQ:Enabled is true.
 builder.Services.AddNotificationsRabbitMQIntake(builder.Configuration);
+// Email through SES and SendGrid (phase-4-plan I39, M26), with their callbacks.
+builder.Services.AddEmailProviders();
 
 // Metrics and traces (design §14) over OTLP, when the deployment names a collector (OTEL_EXPORTER_OTLP_ENDPOINT, and the other standard
 // OTEL_* variables). Traces follow a request from the producer's traceparent through the stages to the provider call.

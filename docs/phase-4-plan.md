@@ -116,6 +116,28 @@ tests, a commit and a build-board update.
     key on every attempt. A provider's suite scripts its fake per case in its API's words. `ReferenceProviderTests` runs it over a minimal JSON
     provider, the template for M26; misclassifying a case fails the suite (checked by hand).
 - **M26 Email: SES and SendGrid** (`p4-04`): providers, bounce and complaint callbacks.
+  - *As built:* package `Juice.Notifications.Providers.Email` (`AddEmailProviders`, added by the App), over the providers' HTTP APIs with no
+    SDK; one `EmailHttp` client (no redirects, pooled connections renewed every 5 minutes) that tests replace with a fake. Setup for operators:
+    [`providers.md`](providers.md).
+    **SES** (`ses`): API v2 `SendEmail`, SigV4 written here and checked against AWS's worked example; the secret is
+    `{accessKeyId}:{secretAccessKey}`; the delivery id is the message tag `delivery_id`. Throttling (429, or `ThrottlingException` in a 400) is
+    `RateLimited`; a used-up sending quota is a retryable `Provider` failure (another integration may have room); refused credentials, a
+    suspended or paused account, an unverified sender or the sandbox's unverified recipient are permanent `Provider` (fail over); a malformed
+    recipient is `Destination` with the address gone; another rejected message is `Content`. Callbacks come through SNS: the message's topic must
+    be the integration's `settings.topicArn` (SNS signs any topic's messages, so the signature alone proves nothing about who published), the
+    signature (v1 SHA1 or v2 SHA256) is checked against the certificate fetched only from `https://sns.{region}.amazonaws.com` and cached, and a
+    subscription confirmation is confirmed by visiting its link, only on SNS's host. Bounce `Permanent` is a hard bounce, `Transient` and
+    `Undetermined` soft; complaints and delivery receipts as named; others ignored.
+    **SendGrid** (`sendgrid`): v3 `mail/send` with the API key, `region: eu` for the EU host, the delivery id as the custom argument
+    `delivery_id`. 401/403 and a 400 on `from` are `Provider`; a 400 on the recipient's field is `Destination`, gone; other 400s and 413 are
+    `Content`. Callbacks: the signed event webhook (ECDSA P-256 over timestamp + body) with `settings.eventWebhookKey`; `bounce` is hard unless
+    `blocked`, `dropped` for a bounced or invalid address is hard, for a spam report or unsubscribe a complaint, as are `spamreport` and the
+    unsubscribes. Neither API takes an idempotency key, so both are non-idempotent (no answer is an unknown outcome, not repeated). Diagnostics are
+    kept with addresses masked. Neither handler checks timestamps for freshness: providers retry for hours or days, and each event applies once.
+    Not yet: SendGrid `dropped` for other reasons (spam content) leaves the delivery `Accepted`; SES `Reject` and `RenderingFailure` are ignored.
+    Tests: `SesProviderTests`, `SendGridProviderTests` (the contract kit plus what each sends), `AwsSigV4Tests`, `SesCallbackTests`,
+    `SendGridCallbackTests`, and `EmailProviderFlowTests` in the real host (the dispatcher sends through each fake API; signed callbacks mark the
+    delivery and the person's address; a forged or unsigned one is refused).
 - **M27 Chat: Slack and Teams** (`p4-01`): Slack webhook and app (channels, DMs to linked people, buttons → interactions), Teams workflow
   webhook (Adaptive Card); Slack linking (I41).
 - **M28 Telegram** (`p4-12`): channel package, chats as targets, linking.
