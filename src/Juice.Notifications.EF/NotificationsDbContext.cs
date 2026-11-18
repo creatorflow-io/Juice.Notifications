@@ -310,6 +310,9 @@ namespace Juice.Notifications.Data
                 e.HasKey(x => x.TenantId);
             });
 
+            // Requests waiting for redaction (phase-4-plan I46): the sweep reads them oldest first.
+            model.Entity<NotificationRequest>().HasIndex(x => x.AcceptedAt).HasFilter("redacted_at IS NULL").HasDatabaseName("ix_requests_unredacted");
+
             model.Entity<LinkCode>(e =>
             {
                 e.ToTable("link_codes");

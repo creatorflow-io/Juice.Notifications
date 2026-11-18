@@ -123,6 +123,7 @@ namespace Juice.Notifications.Api
             // Provider callbacks (phase-4-plan I40): anonymous, verified per provider, limited per integration.
             services.Configure<Callbacks.CallbackOptions>(configuration.GetSection(Callbacks.CallbackOptions.Section));
             services.Configure<Storms.StormOptions>(configuration.GetSection(Storms.StormOptions.Section));
+            services.Configure<Retention.RetentionOptions>(configuration.GetSection(Retention.RetentionOptions.Section));
             services.AddScoped<Callbacks.ProviderCallbacks>();
             services.AddScoped<People.ChatLinks>();
             services.AddCallbackLimits(configuration);
@@ -143,6 +144,8 @@ namespace Juice.Notifications.Api
             if (runStages)
             {
                 services.AddHostedService<People.DeviceSweep>();
+                services.AddSingleton<Retention.RetentionWorker>();
+                services.AddHostedService(sp => sp.GetRequiredService<Retention.RetentionWorker>());
             }
             services.AddSingleton<Stages.BacklogMonitor>();
             services.AddHostedService(sp => sp.GetRequiredService<Stages.BacklogMonitor>());

@@ -100,9 +100,10 @@ namespace Juice.Notifications.Api.Contracts
     public sealed record PreviewResponse(string Channel, JsonElement? Content, string? Error, JsonElement Data);
 
     /// <summary>A tenant's settings: a null field takes the deployment's default.</summary>
-    public sealed record TenantSettingsBody(int? StormThreshold);
+    public sealed record TenantSettingsBody(int? StormThreshold, int? RequestRetentionDays = null, int? ContentRetentionDays = null);
 
-    public sealed record TenantSettingsResponse(int? StormThreshold, int DefaultStormThreshold, DateTimeOffset? UpdatedAt);
+    public sealed record TenantSettingsResponse(int? StormThreshold, int DefaultStormThreshold, int? RequestRetentionDays, int DefaultRequestRetentionDays,
+        int? ContentRetentionDays, int DefaultContentRetentionDays, DateTimeOffset? UpdatedAt);
 
     /// <summary>A storm on a route (phase-4-plan I43): going while <c>endedAt</c> is null.</summary>
     public sealed record StormResponse(Guid Id, string Route, DateTimeOffset StartedAt, DateTimeOffset? EndedAt, int Peak, int Digested);

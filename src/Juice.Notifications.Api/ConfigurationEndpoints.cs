@@ -97,7 +97,7 @@ namespace Juice.Notifications.Api
             tenant.MapGet("/settings", async (Guid tenantId, TenantSettingsReader reader, CancellationToken ct)
                 => Results.Ok(ToResponse(await reader.GetAsync(tenantId, ct))));
             tenant.MapPut("/settings", (Guid tenantId, TenantSettingsBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
-                => SendAsync(mediator, db, new PutTenantSettings(tenantId, body.StormThreshold), ToResponse, ct));
+                => SendAsync(mediator, db, new PutTenantSettings(tenantId, body.StormThreshold, body.RequestRetentionDays, body.ContentRetentionDays), ToResponse, ct));
             tenant.MapGet("/storms", async (Guid tenantId, bool? all, TenantSettingsReader reader, CancellationToken ct)
                 => Results.Ok((await reader.StormsAsync(tenantId, all ?? false, ct))
                     .Select(s => new StormResponse(s.Id, s.Route, s.StartedAt, s.EndedAt, s.Peak, s.Digested))));
@@ -134,7 +134,8 @@ namespace Juice.Notifications.Api
         private static TenantTemplateResponse ToResponse(Types.TenantTemplateView t)
             => new(t.Type, t.TypeVersion, t.Channel, t.Locale, t.Application, t.Tenant, t.TenantVersion, t.UpdatedAt);
 
-        private static TenantSettingsResponse ToResponse(TenantSettingsView s) => new(s.StormThreshold, s.DefaultStormThreshold, s.UpdatedAt);
+        private static TenantSettingsResponse ToResponse(TenantSettingsView s) => new(s.StormThreshold, s.DefaultStormThreshold, s.RequestRetentionDays,
+            s.DefaultRequestRetentionDays, s.ContentRetentionDays, s.DefaultContentRetentionDays, s.UpdatedAt);
 
         private static Task<IResult> SendAsync<TView, TResponse>(IMediator mediator, NotificationsDbContext db, IRequest<Outcome<TView>> command,
             Func<TView, TResponse> map, CancellationToken ct)

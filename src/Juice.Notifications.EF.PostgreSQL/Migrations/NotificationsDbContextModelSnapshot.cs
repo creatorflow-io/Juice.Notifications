@@ -1892,6 +1892,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("recipients");
 
+                    b.Property<DateTimeOffset?>("RedactedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("redacted_at");
+
                     b.Property<string>("SchemaHash")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -1919,6 +1923,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasKey("TenantId", "Id")
                         .HasName("pk_requests");
+
+                    b.HasIndex("AcceptedAt")
+                        .HasDatabaseName("ix_requests_unredacted")
+                        .HasFilter("redacted_at IS NULL");
 
                     b.HasIndex("TypeId")
                         .HasDatabaseName("ix_requests_type_id");
@@ -2627,6 +2635,14 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
                         .HasColumnName("tenant_id");
+
+                    b.Property<int?>("ContentRetentionDays")
+                        .HasColumnType("integer")
+                        .HasColumnName("content_retention_days");
+
+                    b.Property<int?>("RequestRetentionDays")
+                        .HasColumnType("integer")
+                        .HasColumnName("request_retention_days");
 
                     b.Property<int?>("StormThreshold")
                         .HasColumnType("integer")

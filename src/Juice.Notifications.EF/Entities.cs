@@ -202,6 +202,8 @@ namespace Juice.Notifications.Data
         public Dictionary<string, string> Links { get; init; } = [];
         public DateTimeOffset? ExpiresAt { get; init; }
         public DateTimeOffset AcceptedAt { get; init; }
+        /// <summary>When the type's <c>redact</c> paths were masked in <see cref="Data"/> (after everything was rendered, phase-4-plan I46).</summary>
+        public DateTimeOffset? RedactedAt { get; set; }
         /// <summary>The producer's W3C trace context, carried to every stage.</summary>
         public string? TraceParent { get; init; }
     }
@@ -344,6 +346,10 @@ namespace Juice.Notifications.Data
     {
         public Guid TenantId { get; init; }
         public int? StormThreshold { get; set; }
+        /// <summary>Days requests, deliveries and attempts are kept (design §13.2: 90 by default).</summary>
+        public int? RequestRetentionDays { get; set; }
+        /// <summary>Days deliveries keep their rendered content (14 by default); then it is cleared, and they can't be retried.</summary>
+        public int? ContentRetentionDays { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
     }
 

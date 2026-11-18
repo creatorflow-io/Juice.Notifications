@@ -6,18 +6,25 @@ using Microsoft.EntityFrameworkCore;
 namespace Juice.Notifications.Configuration
 {
     /// <summary>A tenant's settings as the API shows them: null fields take the deployment's defaults (shown beside them).</summary>
-    public sealed record TenantSettingsView(int? StormThreshold, int DefaultStormThreshold, DateTimeOffset? UpdatedAt);
+    public sealed record TenantSettingsView(int? StormThreshold, int DefaultStormThreshold, int? RequestRetentionDays, int DefaultRequestRetentionDays,
+        int? ContentRetentionDays, int DefaultContentRetentionDays, DateTimeOffset? UpdatedAt);
 
     /// <summary>Sets a tenant's settings (phase-4-plan §4): the storm threshold (I43); a null field returns to the deployment's default.</summary>
-    public sealed record PutTenantSettings(Guid NotificationTenantId, int? StormThreshold) : MessageBase, IRequest<Outcome<TenantSettingsView>>;
+    public sealed record PutTenantSettings(Guid NotificationTenantId, int? StormThreshold, int? RequestRetentionDays = null, int? ContentRetentionDays = null)
+        : MessageBase, IRequest<Outcome<TenantSettingsView>>;
 
-    public sealed class TenantSettingsReader(NotificationsDbContext db, Microsoft.Extensions.Options.IOptions<Storms.StormOptions> storms)
+    internal static class TenantSettingsViews
+    {
+        public static TenantSettingsView View(TenantSettings? row, Storms.StormOptions storms, Retention.RetentionOptions retention)
+            => new(row?.StormThreshold, storms.Threshold, row?.RequestRetentionDays, retention.RequestDays, row?.ContentRetentionDays, retention.ContentDays,
+                row?.UpdatedAt);
+    }
+
+    public sealed class TenantSettingsReader(NotificationsDbContext db, Microsoft.Extensions.Options.IOptions<Storms.StormOptions> storms,
+        Microsoft.Extensions.Options.IOptions<Retention.RetentionOptions> retention)
     {
         public async Task<TenantSettingsView> GetAsync(Guid tenantId, CancellationToken ct)
-        {
-            var row = await db.TenantSettings.AsNoTracking().SingleOrDefaultAsync(s => s.TenantId == tenantId, ct);
-            return new TenantSettingsView(row?.StormThreshold, storms.Value.Threshold, row?.UpdatedAt);
-        }
+            => TenantSettingsViews.View(await db.TenantSettings.AsNoTracking().SingleOrDefaultAsync(s => s.TenantId == tenantId, ct), storms.Value, retention.Value);
 
         /// <summary>The tenant's storms, newest first: those still going, and with <paramref name="all"/> the ended ones of the last 30 days.</summary>
         public async Task<IReadOnlyList<Storms.StormView>> StormsAsync(Guid tenantId, bool all, CancellationToken ct)
@@ -29,7 +36,8 @@ namespace Juice.Notifications.Configuration
         }
     }
 
-    internal sealed class TenantSettingsHandler(NotificationsDbContext db, TimeProvider clock, Microsoft.Extensions.Options.IOptions<Storms.StormOptions> storms)
+    internal sealed class TenantSettingsHandler(NotificationsDbContext db, TimeProvider clock, Microsoft.Extensions.Options.IOptions<Storms.StormOptions> storms,
+        Microsoft.Extensions.Options.IOptions<Retention.RetentionOptions> retention)
         : IRequestHandler<PutTenantSettings, Outcome<TenantSettingsView>>
     {
         public const int MaxStormThreshold = 100_000;
@@ -41,6 +49,16 @@ namespace Juice.Notifications.Configuration
                 return Outcome<TenantSettingsView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",
                     [new FieldError("/stormThreshold", $"Notifications a route takes in a minute before it storms, 0 (never) to {MaxStormThreshold}, or null for the default.")]);
             }
+            if (r.RequestRetentionDays is < 1 or > 3650)
+            {
+                return Outcome<TenantSettingsView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",
+                    [new FieldError("/requestRetentionDays", "Days requests and deliveries are kept, 1 to 3650, or null for the default.")]);
+            }
+            if (r.ContentRetentionDays is < 1 or > 3650 || r.ContentRetentionDays > (r.RequestRetentionDays ?? retention.Value.RequestDays))
+            {
+                return Outcome<TenantSettingsView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",
+                    [new FieldError("/contentRetentionDays", "Days rendered content is kept, 1 to the request retention, or null for the default.")]);
+            }
             var row = await db.TenantSettings.SingleOrDefaultAsync(s => s.TenantId == r.NotificationTenantId, ct);
             if (row is null)
             {
@@ -48,8 +66,10 @@ namespace Juice.Notifications.Configuration
                 db.TenantSettings.Add(row);
             }
             row.StormThreshold = r.StormThreshold;
+            row.RequestRetentionDays = r.RequestRetentionDays;
+            row.ContentRetentionDays = r.ContentRetentionDays;
             row.UpdatedAt = clock.UtcNow();
-            return Outcome<TenantSettingsView>.Ok(new TenantSettingsView(row.StormThreshold, storms.Value.Threshold, row.UpdatedAt));
+            return Outcome<TenantSettingsView>.Ok(TenantSettingsViews.View(row, storms.Value, retention.Value));
         }
     }
 }

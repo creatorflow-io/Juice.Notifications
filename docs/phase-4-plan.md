@@ -231,6 +231,17 @@ tests, a commit and a build-board update.
     records audit the changes (templates aren't audited rows). Library (juice-layout bbbbdd5, fixed in 8b519a8): `…/notifications/templates`.
     Tests: `TemplateEditingTests` (refusal, preview, the next delivery uses the override, removal restores the application's).
 - **M33 Redaction and retention** (`p4-09`).
+  - *As built:* `RetentionWorker` (a hosted service where the stages run). **Redaction**, each `Retention:RedactInterval` (1 minute): a
+    request whose type declares `redact` paths is redacted once it is finished (its notification isn't planning or running, no recipient is
+    pending or due, no escalation running): the paths are masked (`"***"`) in its stored data (`requests.redacted_at`), and the values they held
+    (3 characters or more) in the inbox items made from it. Deliveries keep their rendered content (a retry sends it) until content retention
+    clears it; nothing logs request data, so there was nothing to mask in logs. **Retention**, each `Retention:PurgeInterval` (a day), per
+    tenant (`tenant_settings` `requestRetentionDays`, `contentRetentionDays`, through `PUT …/settings`; defaults `Retention:RequestDays` 90,
+    `ContentDays` 14; content at most the request retention): finished deliveries older than the request retention go (attempts, items,
+    inbox items with them), then requests with nothing left unfinished (notifications, recipients with them); closed digests, ended storms and
+    provider events of that age; link codes a day past expiry; and finished deliveries older than the content retention lose their content (so
+    they can't be retried). All in batches of `Retention:Batch` (1,000). Tests: `RetentionTests` (masking, an unfinished request untouched,
+    purge and content clearing by the tenant's retention, the settings' bounds), `RedactionTests`.
 - **M34 Vault and Key Vault** (`p4-10`).
 - **M35 Proof points and acceptance** (`p4-g1` … `p4-g3`), then the review loop over phases 3 and 4.
 
