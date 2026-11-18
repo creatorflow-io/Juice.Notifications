@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Push (phase-4-plan I39, I42, M30): the push channel, FCM (HTTP v1), APNs (token-based, HTTP/2) and Web Push (RFC 8291, VAPID). A host adds
+       it with AddPush. -->
+  <PropertyGroup>
+    <Description>Juice Notifications push: FCM, APNs and Web Push to the devices people's apps register, with gone tokens forgotten.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Juice.Notifications.Tests" />
+    <InternalsVisibleTo Include="Juice.Notifications.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

@@ -18,11 +18,26 @@ namespace Juice.Notifications.Tests.ProviderContracts
 
         public ConcurrentQueue<Seen> Requests { get; } = new();
 
+        /// <summary>The requests a <see cref="Route"/> answered (kept apart, so a suite counts the sends alone).</summary>
+        public ConcurrentQueue<Seen> Routed { get; } = new();
+
         /// <summary>The answer once the script is used up.</summary>
         public Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> Default { get; set; }
             = (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
 
+        private readonly List<(Func<HttpRequestMessage, bool> Match, Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> Answer)> _routes = [];
+
         public HttpClient Client() => new(this, disposeHandler: false);
+
+        /// <summary>
+        /// Always answers requests that match, before the script: an API the provider calls besides the send (an OAuth token endpoint). Such
+        /// requests are kept in <see cref="Routed"/>.
+        /// </summary>
+        public FakeHttpApi Route(Func<HttpRequestMessage, bool> match, Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> answer)
+        {
+            _routes.Add((match, answer));
+            return this;
+        }
 
         public FakeHttpApi Then(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> answer)
         {
@@ -58,8 +73,9 @@ namespace Juice.Notifications.Tests.ProviderContracts
             var headers = request.Headers.Concat(request.Content?.Headers ?? Enumerable.Empty<KeyValuePair<string, IEnumerable<string>>>())
                 .ToDictionary(h => h.Key, h => string.Join(",", h.Value), StringComparer.OrdinalIgnoreCase);
             var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct);
-            Requests.Enqueue(new Seen(request.Method, request.RequestUri!, headers, body));
-            var answer = _script.TryDequeue(out var next) ? next : Default;
+            var route = _routes.FirstOrDefault(r => r.Match(request));
+            (route.Answer is null ? Requests : Routed).Enqueue(new Seen(request.Method, request.RequestUri!, headers, body));
+            var answer = route.Answer ?? (_script.TryDequeue(out var next) ? next : Default);
             var response = await answer(request, ct);
             response.RequestMessage = request;
             return response;

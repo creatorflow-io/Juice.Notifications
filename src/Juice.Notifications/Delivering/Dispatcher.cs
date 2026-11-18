@@ -185,6 +185,26 @@ namespace Juice.Notifications.Delivering
                     return;
                 }
             }
+            else if (address.DeviceId is { } deviceId)
+            {
+                // A person's device (phase-4-plan I42), read now: one removed since planning (signed out, swept, or its token gone) isn't sent to.
+                var device = await db.Devices.AsNoTracking().SingleOrDefaultAsync(d => d.TenantId == row.TenantId && d.Id == deviceId, ct);
+                if (device is null)
+                {
+                    Finish(context, row, DeliveryStatus.Failed, FailureCategory.Destination, "The device's registration was removed before the delivery was sent.", context.Now);
+                    return;
+                }
+                try
+                {
+                    destination = crypto.Unprotect(device.Token, device.KeyId, People.ContactCrypto.DeviceContext(device.TenantId, device.Platform, device.AppId));
+                    masked = device.Platform + " device";
+                }
+                catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or FormatException)
+                {
+                    Finish(context, row, DeliveryStatus.Failed, FailureCategory.Destination, "The device's token can't be decrypted: " + ex.Message, context.Now);
+                    return;
+                }
+            }
             else
             {
                 // A secret (the integration's, or an address kept as a reference) that isn't set is a deployment problem someone can fix. It isn't
@@ -250,6 +270,10 @@ namespace Juice.Notifications.Delivering
             {
                 await MarkFailedAsync(row.TenantId, gone, result.Error, context.Now + elapsed);
             }
+            if (result is { AddressGone: true, Outcome: AttemptOutcome.PermanentFailure } && address.DeviceId is { } goneDevice)
+            {
+                await ForgetDeviceAsync(row.TenantId, goneDevice, result.Error);
+            }
             // Timed from when the send ended, so a slow failure (a timeout) still waits its whole backoff before the next one.
             await RecordAndApplyAsync(context, row, integration, attempt, result, (int)elapsed.TotalMilliseconds, context.Now + elapsed, provider);
         }
@@ -271,6 +295,21 @@ namespace Juice.Notifications.Delivering
             {
                 logger.LogWarning("Contact point {ContactPoint} in tenant {Tenant} failed: {Reason}", contactPointId, tenantId, text);
                 Telemetry.ContactPointsFailed.Add(1);
+            }
+        }
+
+        /// <summary>
+        /// The push service said the device's token is gone (unregistered, expired, the app removed): its registration is deleted, so it is never
+        /// planned again (design §9.2, phase 4 proof point 3). The app registers anew when it next starts. Its own statement, as a contact point's.
+        /// </summary>
+        private async Task ForgetDeviceAsync(Guid tenantId, Guid deviceId, string? reason)
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
+            if (await db.Devices.Where(d => d.TenantId == tenantId && d.Id == deviceId).ExecuteDeleteAsync(CancellationToken.None) > 0)
+            {
+                logger.LogInformation("Device registration {Device} in tenant {Tenant} was removed: {Reason}", deviceId, tenantId, reason);
+                Telemetry.DevicesGone.Add(1);
             }
         }
 
@@ -515,7 +554,7 @@ namespace Juice.Notifications.Delivering
             return TimeSpan.FromSeconds(delay * (0.8 + Random.Shared.NextDouble() * 0.4));
         }
 
-        private sealed record SnapshotAddress(string? Value, bool IsReference, Guid? ContactPointId = null, bool Verification = false);
+        private sealed record SnapshotAddress(string? Value, bool IsReference, Guid? ContactPointId = null, bool Verification = false, Guid? DeviceId = null);
 
         /// <summary>
         /// The address in a delivery's snapshot, as stored, as a secret reference to read at send time, or as a person's contact point to read and
@@ -535,6 +574,10 @@ namespace Juice.Notifications.Delivering
                 {
                     return new SnapshotAddress(null, false, pointId,
                         root.TryGetProperty("verification", out var verification) && verification.ValueKind == JsonValueKind.True);
+                }
+                if (root.TryGetProperty("device", out var device) && device.ValueKind == JsonValueKind.String && device.TryGetGuid(out var deviceId))
+                {
+                    return new SnapshotAddress(null, false, DeviceId: deviceId); // read and decrypted when sending
                 }
                 if (root.TryGetProperty("subscriber", out var subscriber) && subscriber.ValueKind == JsonValueKind.String && subscriber.TryGetGuid(out var subscriberId))
                 {

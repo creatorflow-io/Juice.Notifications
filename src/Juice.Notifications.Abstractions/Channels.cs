@@ -14,6 +14,11 @@ namespace Juice.Notifications
         Account,
         /// <summary>A phone number in E.164 (<c>+84901234567</c>); spaces, dashes, dots and parentheses are dropped (phase-4-plan M29).</summary>
         Phone,
+        /// <summary>
+        /// The person's devices, as their apps registered them (design §9.2, phase-4-plan I42): one delivery per device (<c>dev:{registrationId}</c>),
+        /// through the tenant's integration whose kind is the device's platform (<c>fcm</c>, <c>apns</c>, <c>webpush</c>). Never an address.
+        /// </summary>
+        Device,
     }
 
     /// <summary>Who a channel reaches.</summary>

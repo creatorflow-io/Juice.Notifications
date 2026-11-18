@@ -7,6 +7,7 @@
     <Project Path="src/Juice.Notifications.Messaging/Juice.Notifications.Messaging.csproj" />
     <Project Path="src/Juice.Notifications.Providers.Chat/Juice.Notifications.Providers.Chat.csproj" />
     <Project Path="src/Juice.Notifications.Providers.Email/Juice.Notifications.Providers.Email.csproj" />
+    <Project Path="src/Juice.Notifications.Providers.Push/Juice.Notifications.Providers.Push.csproj" />
     <Project Path="src/Juice.Notifications.Providers.Sms/Juice.Notifications.Providers.Sms.csproj" />
     <Project Path="src/Juice.Notifications.Providers.Telegram/Juice.Notifications.Providers.Telegram.csproj" />
     <Project Path="src/Juice.Notifications.Api.Contracts/Juice.Notifications.Api.Contracts.csproj" />

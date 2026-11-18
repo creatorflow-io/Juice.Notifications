@@ -187,6 +187,20 @@ tests, a commit and a build-board update.
     Tests: `TwilioProviderTests` (contract kit), `TwilioCallbackTests`, `SmsFlowTests` in the real host (a number verified by a code sent by
     SMS through the pipeline, its receipt by signed callback).
 - **M30 Push** (`p4-03`): FCM, APNs, Web Push, the library's service worker helper.
+  - *As built:* package `Juice.Notifications.Providers.Push` (`AddPush`): channel `push` (people only, chat content). New in the core:
+    `AddressKind.Device`; the delivery planner adds, for each push channel the type has a template for, one destination per registered device
+    of the person and their linked identities (`dev:{registrationId}`, one token registered twice is one), through the first enabled integration
+    of that channel whose kind is the device's platform; the dispatcher reads and decrypts the token at send time (a registration removed since
+    planning isn't sent to) and deletes the registration when a provider says the token is gone (`notifications.devices_gone`). `dev:` never
+    fails over (M25's rule), and a gone token is a permanent `Destination` failure: proof point 3. **FCM**: HTTP v1, an OAuth token from the
+    service account (a JWT to Google's token endpoint, always that one, never the key's `token_uri`), cached; collapse key the delivery id;
+    `UNREGISTERED` gone. **APNs**: HTTP/2, an ES256 provider token renewed every 50 minutes, topic the bundle id, `apns-collapse-id` the
+    delivery id; `Unregistered`, `BadDeviceToken`, `DeviceTokenNotForTopic` gone. **Web Push**: RFC 8291 `aes128gcm` and VAPID
+    (RFC 8292), `Topic` the delivery id; only the browsers' push services are called (the endpoint comes from a browser, so it could name any
+    address); 404/410 gone. The test kit's fake API gained routes (an OAuth endpoint answered apart). Library (juice-layout `3d19c60`):
+    `enableWebPush`/`disableWebPush`, device calls, and `assets/juice-push-sw.js`. Not yet: notification actions as push buttons (the link
+    only). Tests: `FcmProviderTests`, `ApnsProviderTests`, `WebPushProviderTests` (contract kit; the payload decrypted as a browser would, the
+    VAPID signature verified), `PushFlowTests` in the real host (proof point 3).
 - **M31 Storms and bulk replay** (`p4-06`, `p4-08`).
 - **M32 Template editing** (`p4-07`).
 - **M33 Redaction and retention** (`p4-09`).

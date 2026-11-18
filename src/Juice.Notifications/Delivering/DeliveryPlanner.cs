@@ -22,6 +22,9 @@ namespace Juice.Notifications.Delivering
 
         /// <summary>A person's inbox (design §3, phase-2-plan I17).</summary>
         public static string Inbox(Guid subscriberId) => $"inbox:{subscriberId}";
+
+        /// <summary>One of a person's devices (design §9.2, phase-4-plan I42): its registration's id.</summary>
+        public static string Device(Guid registrationId) => $"dev:{registrationId}";
     }
 
     /// <summary>
@@ -296,7 +299,9 @@ namespace Juice.Notifications.Delivering
         /// A person's destinations (design §6.2, §6.4): each of their contact points (and those of an identity linked into them) that is verified,
         /// not failed, and on a channel the type has a template for, through the tenant's first enabled integration for that channel. None of
         /// these rules bends for a mandatory type. The same address on two linked identities is one destination. First, always, the person's inbox
-        /// (phase-2-plan I17), through the tenant's own inbox integration, with or without an inbox template. Push devices come in phase 4.
+        /// (phase-2-plan I17), through the tenant's own inbox integration, with or without an inbox template. Then each device their apps registered,
+        /// on a push channel the type has a template for (phase-4-plan I42), through the tenant's first enabled integration of that channel whose kind
+        /// is the device's platform; one token registered by two linked identities is one destination.
         /// </summary>
         private async Task<List<Destination>> ContactDestinationsAsync(NotificationsDbContext db, NotificationRecipient row, Guid subscriberId,
             NotificationType type, CancellationToken ct)
@@ -325,6 +330,26 @@ namespace Juice.Notifications.Delivering
                     integrations[point.Channel] = integration = await FirstIntegrationAsync(db, row.TenantId, point.Channel, ct);
                 }
                 destinations.Add(PointDestination(point, integration, verification: false));
+            }
+            var pushChannels = channels.All.Where(c => c.Address == AddressKind.Device && c.Audience.HasFlag(ChannelAudience.People) && declared.Contains(c.Key))
+                .Select(c => c.Key).ToList();
+            if (pushChannels.Count > 0)
+            {
+                var devices = (await db.Devices.AsNoTracking().Where(d => d.TenantId == row.TenantId && self.Contains(d.SubscriberId))
+                    .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Select(d => new { d.Id, d.Platform, d.AppId, d.TokenHash }).ToListAsync(ct))
+                    .DistinctBy(d => (d.Platform, d.AppId, d.TokenHash)).ToList();
+                foreach (var channel in pushChannels)
+                {
+                    var byKind = await db.Integrations.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.Channel == channel && i.Enabled)
+                        .OrderBy(i => i.Priority).ThenBy(i => i.Key).ToListAsync(ct);
+                    foreach (var device in devices)
+                    {
+                        var integration = byKind.FirstOrDefault(i => i.Kind == device.Platform);
+                        destinations.Add(new Destination(DestinationKeys.Device(device.Id), channel, integration,
+                            JsonSerializer.Serialize(new { device = device.Id, platform = device.Platform, app = device.AppId }, Snapshot),
+                            integration is null ? $"The tenant has no enabled {channel} integration for {device.Platform}." : null));
+                    }
+                }
             }
             return destinations;
         }

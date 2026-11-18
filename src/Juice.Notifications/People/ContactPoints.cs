@@ -94,7 +94,7 @@ namespace Juice.Notifications.People
 
         /// <summary>Channels a person can have contact points on: registered, reaching people, with an address kind.</summary>
         public static bool TakesContactPoints(ChannelDefinition? channel)
-            => channel is not null && channel.Audience.HasFlag(ChannelAudience.People) && channel.Address != AddressKind.None;
+            => channel is not null && channel.Audience.HasFlag(ChannelAudience.People) && channel.Address is not (AddressKind.None or AddressKind.Device);
     }
 
     internal sealed class ContactPointHandlers(NotificationsDbContext db, ContactCrypto crypto, IChannelRegistry channels, TimeProvider clock) :

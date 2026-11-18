@@ -4,6 +4,7 @@ using Juice.Notifications.Data.PostgreSQL;
 using Juice.Notifications.Messaging;
 using Juice.Notifications.Providers.Chat;
 using Juice.Notifications.Providers.Email;
+using Juice.Notifications.Providers.Push;
 using Juice.Notifications.Providers.Sms;
 using Juice.Notifications.Providers.Telegram;
 using OpenTelemetry;
@@ -23,6 +24,8 @@ builder.Services.AddChatProviders();
 builder.Services.AddTelegram();
 // SMS through Twilio (phase-4-plan M29), with its status callbacks.
 builder.Services.AddSms();
+// Push (phase-4-plan M30): FCM, APNs and Web Push to the devices people's apps register.
+builder.Services.AddPush();
 
 // Metrics and traces (design §14) over OTLP, when the deployment names a collector (OTEL_EXPORTER_OTLP_ENDPOINT, and the other standard
 // OTEL_* variables). Traces follow a request from the producer's traceparent through the stages to the provider call.

@@ -109,6 +109,22 @@ added by a person is verified with a code by SMS (the service's verification typ
 the library, `phoneNumbers: true` lets people add numbers. A number that replied STOP, an invalid one or not a mobile one fails its contact
 point; `delivered` is a receipt, and errors 30005 and 30006 hard bounces, 30003 a soft one.
 
+## Push: FCM, APNs, Web Push (`fcm`, `apns`, `webpush`)
+
+Package `Juice.Notifications.Providers.Push` (`AddPush`). Channel `push` reaches the devices people's apps register
+(`POST …/me/devices`): one delivery per device, through the tenant's first enabled `push` integration whose kind is the device's platform.
+A type reaches devices when it has a `push` template (`Title: …` then the text, as a chat message). When a push service says a token is gone,
+its registration is deleted at once: no retry, no failover. Registrations not seen for 60 days are swept.
+
+| Kind | `settings` | `secretRef` names |
+|---|---|---|
+| `fcm` | `projectId` (optional: the key's project) | the service account's JSON key |
+| `apns` | `teamId`, `keyId`, `bundleId`, `environment` (`production` or `sandbox`) | the `.p8` signing key (PEM) |
+| `webpush` | `subject` (`mailto:` or `https:`), `publicKey` (VAPID, base64url) | the VAPID private key (base64url) |
+
+Web Push sends only to the browsers' push services (Google, Mozilla, Microsoft, Apple). In the library, `enableWebPush` subscribes the
+browser and registers it, and the packaged `juice-push-sw.js` shows the notification and opens its link.
+
 ## What callbacks change
 
 | Event | Delivery | Person's contact point |
