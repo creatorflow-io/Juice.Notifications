@@ -61,7 +61,7 @@ namespace Juice.Notifications.Tests
             ValueTask<ResolveResult> Partial(CancellationToken ct)
             {
                 _loads++;
-                return ValueTask.FromResult(new ResolveResult([], Truncated: true) { People = [new ResolvedPerson("oidc", "p" + _loads)] });
+                return ValueTask.FromResult(new ResolveResult([], Truncated: true) { People = [new ResolvedPerson("oidc", "p" + _loads)], Partial = true });
             }
             Assert.Equal("p1", First(await cache.GetOrLoadAsync(Config(), "group:sre", Partial, TestContext.Current.CancellationToken)));
             Assert.Equal("p2", First(await cache.GetOrLoadAsync(Config(), "group:sre", Load, TestContext.Current.CancellationToken)));

@@ -640,6 +640,7 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.LastError).HasMaxLength(2000);
                 e.Property(x => x.ProviderMessageId).HasMaxLength(500);
                 e.HasIndex(x => new { x.TenantId, x.Status, x.CreatedAt });
+                e.HasIndex(x => x.Id).HasFilter("failure_check_due").HasDatabaseName("ix_deliveries_failure_check");
                 e.HasOne<Integration>().WithMany().HasForeignKey(x => new { x.TenantId, x.IntegrationId }).OnDelete(DeleteBehavior.Restrict);
             });
 

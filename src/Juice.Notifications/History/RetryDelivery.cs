@@ -54,6 +54,10 @@ namespace Juice.Notifications.History
             delivery.LeaseUntil = null;
             delivery.NextAt = now;
             delivery.Version++;
+            delivery.FailureCheckDue = false;
+            await db.Recipients.Where(x => x.TenantId == delivery.TenantId && x.FailureRaisedAt != null
+                    && db.DeliveryItems.Any(i => i.TenantId == delivery.TenantId && i.DeliveryId == delivery.Id && i.RecipientId == x.Id))
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.FailureRaisedAt, (DateTimeOffset?)null), ct);
             return Outcome<RetriedView>.Ok(new RetriedView(delivery.Id, delivery.Status, delivery.Attempts, delivery.Replays));
         }
     }

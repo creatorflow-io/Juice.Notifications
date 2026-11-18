@@ -61,6 +61,9 @@ namespace Juice.Notifications.Planning
     /// </summary>
     public sealed record ResolveResult(IReadOnlyList<ResolvedDestination> Destinations, bool Truncated = false)
     {
+        /// <summary>Truncated because time ran out, not by a bound: an expansion cache doesn't keep it.</summary>
+        public bool Partial { get; init; }
+
         public IReadOnlyList<ResolvedPerson> People { get; init; } = [];
     }
 

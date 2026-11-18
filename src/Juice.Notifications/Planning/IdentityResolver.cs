@@ -199,10 +199,10 @@ namespace Juice.Notifications.Planning
                         return new ResolveResult([]) { People = await directory.UserAsync(name, tenant, id, context.StepDeadline, token) };
                     case RecipientKinds.Group:
                         var (members, groupTruncated) = await directory.GroupMembersAsync(name, tenant, id, context.StepDeadline, token);
-                        return new ResolveResult([], groupTruncated) { People = members };
+                        return new ResolveResult([], groupTruncated) { People = members, Partial = members is KeycloakIdentityDirectory.PartialRead };
                     default:
                         var (holders, roleTruncated) = await directory.RoleHoldersAsync(name, tenant, id, context.StepDeadline, token);
-                        return new ResolveResult([], roleTruncated) { People = holders };
+                        return new ResolveResult([], roleTruncated) { People = holders, Partial = holders is KeycloakIdentityDirectory.PartialRead };
                 }
             }, ct);
         }
@@ -288,6 +288,9 @@ namespace Juice.Notifications.Planning
                 (settings, token) => PagesAsync(directory, settings, tenantId, $"roles/{Uri.EscapeDataString(role)}/users", read, token), read.Partial, deadline, ct);
         }
 
+        /// <summary>The people a listing had read when its time ran out: not to be cached (the next read may finish).</summary>
+        internal sealed class PartialRead(IEnumerable<ResolvedPerson> people) : List<ResolvedPerson>(people);
+
         /// <summary>A listing's people so far, and how many pages they came from.</summary>
         private sealed class Progress
         {
@@ -296,7 +299,7 @@ namespace Juice.Notifications.Planning
 
             /// <summary>What was read when time ran out: truncated, if any page was; nothing to offer otherwise.</summary>
             public (bool Has, (IReadOnlyList<ResolvedPerson> People, bool Truncated) Value) Partial()
-                => Pages > 0 ? (true, (People.ToList(), true)) : (false, default);
+                => Pages > 0 ? (true, (new PartialRead(People), true)) : (false, default);
         }
 
         /// <summary>

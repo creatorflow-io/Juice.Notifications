@@ -71,14 +71,16 @@ namespace Juice.Notifications.History
             var matched = await failed.OrderBy(d => d.Id).Take(limit + 1)
                 .Select(d => new
                 {
-                    d.Id, d.Content,
+                    d.Id,
+                    // DeliveryRules.HasContent, in SQL: only whether there is content, not the content (up to 10,000 rendered emails).
+                    HasContent = d.Content != "" && d.Content != "{}",
                     Expired = db.DeliveryItems.Any(i => i.TenantId == tenant && i.DeliveryId == d.Id
                         && db.Requests.Any(q => q.TenantId == tenant && q.Id == i.RequestId && q.ExpiresAt != null && q.ExpiresAt <= now)),
                 })
                 .ToListAsync(ct);
             var more = matched.Count > limit;
             var batch = matched.Take(limit).ToList();
-            var ids = batch.Where(d => d.Content is { Length: > 0 } and not "{}" && !d.Expired).Select(d => d.Id).ToList();
+            var ids = batch.Where(d => d.HasContent && !d.Expired).Select(d => d.Id).ToList();
             var replayed = 0;
             // In chunks: one statement each, as the single retry's (status still Failed: one taken meanwhile is left as it is).
             foreach (var chunk in ids.Chunk(500))
@@ -100,7 +102,12 @@ namespace Juice.Notifications.History
                         .SetProperty(d => d.ClaimedBy, (string?)null)
                         .SetProperty(d => d.LeaseUntil, (DateTimeOffset?)null)
                         .SetProperty(d => d.NextAt, now)
-                        .SetProperty(d => d.Version, d => d.Version + 1), ct);
+                        .SetProperty(d => d.Version, d => d.Version + 1)
+                        .SetProperty(d => d.FailureCheckDue, false), ct);
+                // Replayed, they may fail again: their recipients can hear delivery.failed again.
+                await db.Recipients.Where(x => x.TenantId == tenant && x.FailureRaisedAt != null
+                        && db.DeliveryItems.Any(i => i.TenantId == tenant && chunk.Contains(i.DeliveryId) && i.RecipientId == x.Id))
+                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.FailureRaisedAt, (DateTimeOffset?)null), ct);
             }
             return Outcome<ReplayedView>.Ok(new ReplayedView(replayed, batch.Count - replayed, more));
         }

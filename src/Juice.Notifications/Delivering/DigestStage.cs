@@ -29,8 +29,14 @@ namespace Juice.Notifications.Delivering
 
         public void GiveUp(StageContext context, Digest row, string error)
         {
-            // Its members stay waiting; the log has why. Nothing is sent from a digest that can't be planned.
+            // Nothing is sent from a digest that can't be planned: its waiting members fail with it (history shows them ended, and their requests
+            // can be redacted), saved with the digest.
             row.State = DigestState.Cancelled;
+            foreach (var member in context.Db.Recipients.Where(r => r.TenantId == row.TenantId && r.DigestId == row.Id && r.Outcome == RecipientOutcome.Pending).ToList())
+            {
+                (member.Outcome, member.NextAt) = (RecipientOutcome.Failed, null);
+            }
+            logger.LogError("Digest {Digest} in tenant {Tenant} was given up, its members not sent: {Error}", row.Id, row.TenantId, error);
             context.Done(row, null);
         }
 
@@ -164,6 +170,7 @@ namespace Juice.Notifications.Delivering
                     Locale = template?.Locale ?? Types.TypeRules.DefaultLocale, RendererVersion = TemplateRenderer.Version, Content = content,
                     Priority = carried.Max(r => r.Priority), Mandatory = type.Mandatory, CreatedAt = now,
                     Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed, FailureCategory = problem is null ? null : category,
+                    FailureCheckDue = problem is not null,
                     LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? until ?? now : null, CompletedAt = problem is null ? null : now,
                 };
                 db.Deliveries.Add(delivery);

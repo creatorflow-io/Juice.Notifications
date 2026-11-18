@@ -224,6 +224,7 @@ namespace Juice.Notifications.Callbacks
         private static void End(Delivery delivery, DeliveryStatus status, FailureCategory? category, string? error, DateTimeOffset at)
         {
             delivery.Status = status;
+            delivery.FailureCheckDue = status == DeliveryStatus.Bounced; // delivery.failed, once all of the recipient's ended (FailureEvents)
             delivery.FailureCategory = category;
             delivery.LastError = error;
             delivery.CompletedAt = at;

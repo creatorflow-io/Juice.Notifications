@@ -32,87 +32,16 @@ namespace Juice.Notifications.Delivering
     /// turns out to have lost its lease (§11).
     /// </summary>
     public sealed class DispatcherStage(IEnumerable<INotificationProvider> providers, IChannelRegistry channels, IOptions<DeliveryOptions> options, IServiceScopeFactory scopes,
-        ILogger<DispatcherStage> logger, People.ContactCrypto crypto, Events.ProducerEvents? events = null, TimeProvider? clock = null,
+        ILogger<DispatcherStage> logger, People.ContactCrypto crypto, TimeProvider? clock = null,
         ISecretResolver? secrets = null) : IStage<Delivery>
     {
         public string Name => DeliveryStageNames.Dispatcher;
 
         /// <summary>
-        /// The step, then <c>delivery.failed</c> for each recipient whose every destination has now failed (design §5.4, phase-3-plan I37): this
-        /// delivery failed, and none of theirs went out or is still to go. Saved with the step.
+        /// The step. A delivery it ends is marked for <see cref="FailureEvents"/>, which raises <c>delivery.failed</c> once every destination of a
+        /// recipient has ended without going out (design §5.4, phase-3-plan I37).
         /// </summary>
-        public async Task ExecuteAsync(StageContext context, Delivery row, CancellationToken ct)
-        {
-            var before = row.Status;
-            await SendAsync(context, row, ct);
-            if (events is { Enabled: true } && row.Status == DeliveryStatus.Failed && before != DeliveryStatus.Failed)
-            {
-                // Decided once this step has committed: two deliveries of a recipient failing at the same moment each see the other still going
-                // in their own steps, so neither would raise it. After both commit, the later check sees every one ended.
-                var (tenant, id, at) = (row.TenantId, row.Id, context.Now);
-                context.AfterCommit.Add(() => _ = FailedAfterCommitAsync(tenant, id, at));
-            }
-        }
-
-        private async Task FailedAfterCommitAsync(Guid tenantId, Guid deliveryId, DateTimeOffset at)
-        {
-            try
-            {
-                await using var scope = scopes.CreateAsyncScope();
-                var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
-                await FailedAsync(db, tenantId, deliveryId, at, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "delivery.failed couldn't be raised for delivery {Delivery} in tenant {Tenant}", deliveryId, tenantId);
-            }
-        }
-
-        /// <summary>
-        /// <c>delivery.failed</c> for each recipient of the delivery whose every destination has now ended without going out (phase-3-plan I36):
-        /// in a transaction of its own, the recipient's row locked, so of two workers checking at once one raises it, and recorded on the
-        /// recipient (<see cref="NotificationRecipient.FailureRaisedAt"/>) so it is raised once.
-        /// </summary>
-        internal async Task FailedAsync(NotificationsDbContext db, Guid tenantId, Guid deliveryId, DateTimeOffset at, CancellationToken ct)
-        {
-            var row = await db.Deliveries.AsNoTracking().SingleAsync(d => d.TenantId == tenantId && d.Id == deliveryId, ct);
-            var recipients = await (from item in db.DeliveryItems
-                                    join r in db.Recipients on new { item.TenantId, Id = item.RecipientId } equals new { r.TenantId, r.Id }
-                                    join n in db.Notifications on new { r.TenantId, Id = r.NotificationId } equals new { n.TenantId, n.Id }
-                                    join q in db.Requests on new { n.TenantId, Id = n.RequestId } equals new { q.TenantId, q.Id }
-                                    where item.TenantId == row.TenantId && item.DeliveryId == row.Id
-                                    select new { Recipient = r, Request = q }).AsNoTracking().ToListAsync(ct);
-            DeliveryStatus[] ended = [DeliveryStatus.Failed, DeliveryStatus.Bounced, DeliveryStatus.Expired, DeliveryStatus.Cancelled];
-            foreach (var x in recipients)
-            {
-                await using var transaction = await db.Database.BeginTransactionAsync(ct);
-                var raised = await db.Database.SqlQuery<DateTimeOffset?>($"""
-                    SELECT failure_raised_at AS "Value" FROM notifications.notification_recipients WHERE tenant_id = {tenantId} AND id = {x.Recipient.Id} FOR UPDATE
-                    """).ToListAsync(ct);
-                if (raised is not [null])
-                {
-                    continue; // raised already (or the recipient is gone)
-                }
-                var others = await (from item in db.DeliveryItems
-                                    join d in db.Deliveries on new { item.TenantId, Id = item.DeliveryId } equals new { d.TenantId, d.Id }
-                                    where item.TenantId == row.TenantId && item.RecipientId == x.Recipient.Id && d.Id != row.Id
-                                    select new { d.Status, d.Channel }).AsNoTracking().ToListAsync(ct);
-                if (row.Status != DeliveryStatus.Failed || others.Any(o => !ended.Contains(o.Status)))
-                {
-                    continue; // another destination went out or may still (or this one was retried since)
-                }
-                var channels = others.Select(o => o.Channel).Append(row.Channel).Distinct().Order(StringComparer.Ordinal).ToList();
-                await events!.RaiseAsync(db, row.TenantId, x.Request.ApplicationId, app => new Events.NotificationEvent
-                {
-                    Event = Events.ProducerEventNames.DeliveryFailed, Application = app, NotificationTenantId = row.TenantId, CorrelationKey = x.Request.CorrelationKey,
-                    NotificationId = x.Recipient.NotificationId, RequestId = x.Request.Id, Type = x.Request.TypeKey, RecipientId = x.Recipient.Id,
-                    SubscriberId = x.Recipient.SubscriberId, NamedAs = x.Recipient.NamedAs, Channels = channels, OccurredAt = at,
-                }, ct);
-                await db.SaveChangesAsync(ct);
-                await db.Recipients.Where(r => r.TenantId == tenantId && r.Id == x.Recipient.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureRaisedAt, at), ct);
-                await transaction.CommitAsync(ct);
-            }
-        }
+        public Task ExecuteAsync(StageContext context, Delivery row, CancellationToken ct) => SendAsync(context, row, ct);
 
         /// <summary>
         /// The step itself kept failing (not a send: those are attempts): failed, visible in history and replayable. Unless a send already
@@ -594,6 +523,8 @@ namespace Juice.Notifications.Delivering
         private static void Finish(StageContext context, Delivery row, DeliveryStatus status, FailureCategory? category, string? error, DateTimeOffset at)
         {
             row.Status = status;
+            // Ended without going out: FailureEvents looks at its recipients (saved with the step, so a crash can't lose it).
+            row.FailureCheckDue = status is DeliveryStatus.Failed or DeliveryStatus.Bounced or DeliveryStatus.Expired or DeliveryStatus.Cancelled;
             row.FailureCategory = category;
             row.LastError = Truncate(error);
             row.CompletedAt = at;
@@ -684,6 +615,10 @@ namespace Juice.Notifications.Delivering
                 Batch = options.Batch, Lease = options.Lease < MinLease ? MinLease : options.Lease, Poll = options.Poll, Workers = options.Workers,
                 MaxStepFailures = options.MaxStepFailures, FailureBackoff = options.FailureBackoff, FailureBackoffMax = options.FailureBackoffMax,
             };
+            if (runWorkers)
+            {
+                services.AddHostedService<FailureEvents>();
+            }
             return services.AddStage<Delivery, DispatcherStage>(dispatcher, runWorkers);
         }
     }

@@ -757,6 +757,8 @@ namespace Juice.Notifications.Data
         /// <summary>The address when it was planned, for history. A secret address is masked.</summary>
         public required string DestinationSnapshot { get; init; }
         public int TemplateVersion { get; init; }
+        /// <summary>Ended without going out, and its recipients not yet looked at for <c>delivery.failed</c> (phase-3-plan I37).</summary>
+        public bool FailureCheckDue { get; set; }
         public required string Locale { get; init; }
         public required string RendererVersion { get; init; }
         /// <summary>The rendered body, stored before the first attempt so every attempt sends the same bytes.</summary>

@@ -14,30 +14,47 @@ namespace Juice.Notifications.Api
         public static void MapCorrelationEndpoints(this IEndpointRouteBuilder app)
         {
             var correlations = app.MapGroup("/api/v1/tenants/{tenantId:guid}/correlations").WithTags("Correlations");
-            correlations.MapGet("/{key}", async (Guid tenantId, string key, ClaimsPrincipal user, Producers producers, CorrelationLifecycle lifecycle, CancellationToken ct) =>
+            correlations.MapGet("/{key}", async (Guid tenantId, string key, HttpContext http, ClaimsPrincipal user, Producers producers, CorrelationLifecycle lifecycle, CancellationToken ct) =>
             {
                 var (caller, refusal) = await producers.ResolveAsync(user, ct, forWriting: false);
                 if (caller is null)
                 {
                     return refusal!;
                 }
-                return await lifecycle.GetAsync(tenantId, caller.Id, Key(key), ct) is { } view
+                return await lifecycle.GetAsync(tenantId, caller.Id, Key(http, key), ct) is { } view
                     ? Results.Ok(ToResponse(view))
-                    : ApiResults.NotFound($"There is no correlation {Key(key)}.");
+                    : ApiResults.NotFound($"There is no correlation {Key(http, key)}.");
             });
-            correlations.MapPost("/{key}/acknowledge", (Guid tenantId, string key, AcknowledgeCorrelationBody? body, ClaimsPrincipal user, Producers producers,
+            correlations.MapPost("/{key}/acknowledge", (Guid tenantId, string key, HttpContext http, AcknowledgeCorrelationBody? body, ClaimsPrincipal user, Producers producers,
                 CorrelationLifecycle lifecycle, CancellationToken ct)
-                => ChangeAsync(user, producers, ct, caller => lifecycle.AcknowledgeAsync(tenantId, caller, Key(key), body?.By, ct)));
-            correlations.MapPost("/{key}/resolve", (Guid tenantId, string key, ResolveCorrelationBody? body, ClaimsPrincipal user, Producers producers,
+                => ChangeAsync(user, producers, ct, caller => lifecycle.AcknowledgeAsync(tenantId, caller, Key(http, key), body?.By, ct)));
+            correlations.MapPost("/{key}/resolve", (Guid tenantId, string key, HttpContext http, ResolveCorrelationBody? body, ClaimsPrincipal user, Producers producers,
                 CorrelationLifecycle lifecycle, CancellationToken ct)
-                => ChangeAsync(user, producers, ct, caller => lifecycle.ResolveAsync(tenantId, caller, Key(key), body?.Outcome, body?.By, ct)));
-            correlations.MapPost("/{key}/cancel", (Guid tenantId, string key, CancelCorrelationBody? body, ClaimsPrincipal user, Producers producers,
+                => ChangeAsync(user, producers, ct, caller => lifecycle.ResolveAsync(tenantId, caller, Key(http, key), body?.Outcome, body?.By, ct)));
+            correlations.MapPost("/{key}/cancel", (Guid tenantId, string key, HttpContext http, CancelCorrelationBody? body, ClaimsPrincipal user, Producers producers,
                 CorrelationLifecycle lifecycle, CancellationToken ct)
-                => ChangeAsync(user, producers, ct, caller => lifecycle.CancelAsync(tenantId, caller, Key(key), body?.By, ct)));
+                => ChangeAsync(user, producers, ct, caller => lifecycle.CancelAsync(tenantId, caller, Key(http, key), body?.By, ct)));
         }
 
-        /// <summary>The key as the producer sent it: routing leaves <c>%2F</c> encoded in a segment.</summary>
-        private static string Key(string key) => Uri.UnescapeDataString(key);
+        /// <summary>
+        /// The key as the producer sent it, decoded once from the request's own target. The route value has been decoded already, all but
+        /// <c>%2F</c>, so decoding it again would turn a key's own <c>%41</c> into <c>A</c>, and undoing only <c>%2F</c> can't tell a key's
+        /// <c>%2F</c> (sent <c>%252F</c>) from a slash.
+        /// </summary>
+        private static string Key(HttpContext http, string key)
+        {
+            var raw = http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>()?.RawTarget;
+            const string marker = "/correlations/";
+            var at = raw?.IndexOf(marker, StringComparison.OrdinalIgnoreCase) ?? -1;
+            if (raw is null || at < 0)
+            {
+                // No raw target (a test server): the route value with the one sequence routing leaves encoded.
+                return key.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase);
+            }
+            var segment = raw[(at + marker.Length)..];
+            var end = segment.IndexOfAny(['/', '?']);
+            return Uri.UnescapeDataString(end < 0 ? segment : segment[..end]);
+        }
 
         private static async Task<IResult> ChangeAsync(ClaimsPrincipal user, Producers producers, CancellationToken ct,
             Func<Guid, Task<Outcome<CorrelationView>>> change)

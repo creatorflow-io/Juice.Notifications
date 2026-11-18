@@ -144,7 +144,7 @@ namespace Juice.Notifications.Delivering
                     TenantId = row.TenantId, Channel = destination.Channel, IntegrationId = destination.Integration.Id, DestinationKey = destination.Key,
                     DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0, Locale = template?.Locale ?? Types.TypeRules.DefaultLocale,
                     RendererVersion = TemplateRenderer.Version, Content = content, Priority = request.Priority, Mandatory = type.Mandatory, CreatedAt = context.Now,
-                    Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed,
+                    Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed, FailureCheckDue = problem is not null,
                     FailureCategory = problem is null ? null : category,
                     LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? context.Now : null, CompletedAt = problem is null ? null : context.Now,
                 };

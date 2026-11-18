@@ -123,10 +123,10 @@ namespace Juice.Notifications.Planning
                 return cached.Result;
             }
             var result = await load(ct);
-            if (result.Truncated)
+            if (result.Partial)
             {
-                // Cut short: by the planner step's deadline (a slow directory, so the next read may be whole) or by the listing bound. Kept, the
-                // part would stand for the whole until the entry expired; read again instead.
+                // Cut short by time (the step's deadline, the name's budget): a slow directory, so the next read may be whole. Kept, the part
+                // would stand for the whole until the entry expired. One truncated by the scan bound is the same every time, and kept.
                 return result;
             }
             var size = Size(result);

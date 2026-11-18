@@ -98,7 +98,9 @@ namespace Juice.Notifications.Workflows
         private async Task SendAsync(StageContext context, Notification row, NotificationRequest request, NotificationType type, CancellationToken ct)
         {
             var db = context.Db;
-            var waiting = await db.Recipients.Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Outcome == RecipientOutcome.Pending)
+            // Not those a digest holds (a step after "digest, send"): the digest sends them when it closes.
+            var waiting = await db.Recipients.Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Outcome == RecipientOutcome.Pending
+                    && r.DigestId == null)
                 .ToListAsync(ct);
             if (waiting.Count == 0)
             {
@@ -146,7 +148,7 @@ namespace Juice.Notifications.Workflows
         private static async Task EndAsync(StageContext context, Notification row, NotificationState state, CancellationToken ct)
         {
             var waiting = await context.Db.Recipients
-                .Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Outcome == RecipientOutcome.Pending).ToListAsync(ct);
+                .Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Outcome == RecipientOutcome.Pending && r.DigestId == null).ToListAsync(ct);
             foreach (var recipient in waiting)
             {
                 (recipient.Outcome, recipient.NextAt) = (RecipientOutcome.Cancelled, null);

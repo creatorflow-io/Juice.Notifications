@@ -561,6 +561,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("character varying(20)")
                         .HasColumnName("failure_category");
 
+                    b.Property<bool>("FailureCheckDue")
+                        .HasColumnType("boolean")
+                        .HasColumnName("failure_check_due");
+
                     b.Property<DateTimeOffset?>("FirstAttemptAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("first_attempt_at");
@@ -636,6 +640,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasKey("TenantId", "Id")
                         .HasName("pk_deliveries");
+
+                    b.HasIndex("Id")
+                        .HasDatabaseName("ix_deliveries_failure_check")
+                        .HasFilter("failure_check_due");
 
                     b.HasIndex("NextAt")
                         .HasDatabaseName("ix_deliveries_due")

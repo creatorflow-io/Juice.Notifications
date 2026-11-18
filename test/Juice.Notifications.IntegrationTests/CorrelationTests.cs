@@ -218,6 +218,23 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.CorrelationClosed), await ProblemAsync(ann.PostAsync($"{actions}/reject", null, Ct)));
         }
 
+        /// <summary>A key with a slash and its own percent sequence comes back as sent: the path is decoded once (phases 3–4 review).</summary>
+        [Fact]
+        public async Task A_key_with_a_slash_and_a_percent_sequence_is_found_as_sent()
+        {
+            LocalStack.RequireAvailable();
+            var type = await TypeAsync();
+            var key = "ops/cpu%41high:" + Guid.NewGuid().ToString("N");
+            await SendAsync(type, "nobody-" + Guid.NewGuid().ToString("N")[..6], key);
+            using var producer = people.App.Client(await LocalStack.ProducerTokenAsync());
+
+            var found = await OkAsync<CorrelationResponse>(producer.GetAsync($"{Tenant}/correlations/{Uri.EscapeDataString(key)}", Ct));
+            Assert.Equal(key, found.Key);
+            var resolved = await OkAsync<CorrelationResponse>(producer.PostAsJsonAsync($"{Tenant}/correlations/{Uri.EscapeDataString(key)}/resolve",
+                new ResolveCorrelationBody("done", null), Ct));
+            Assert.Equal(CorrelationState.Resolved, resolved.State);
+        }
+
         [Fact]
         public async Task An_unknown_key_is_not_found_and_a_bad_body_is_refused_at_the_field()
         {
