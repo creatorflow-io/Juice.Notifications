@@ -66,6 +66,9 @@ namespace Juice.Notifications.Data
         public DbSet<Interaction> Interactions => Set<Interaction>();
         public DbSet<ProviderEvent> ProviderEvents => Set<ProviderEvent>();
         public DbSet<LinkCode> LinkCodes => Set<LinkCode>();
+        public DbSet<Storm> Storms => Set<Storm>();
+        public DbSet<RouteMinute> RouteMinutes => Set<RouteMinute>();
+        public DbSet<TenantSettings> TenantSettings => Set<TenantSettings>();
         public DbSet<Escalation> Escalations => Set<Escalation>();
         public DbSet<InboxItem> InboxItems => Set<InboxItem>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
@@ -281,6 +284,30 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.TenantId, x.AddressHash });
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
                     .HasConstraintName(Constraints.ContactPointSubscriber);
+            });
+
+            model.Entity<Storm>(e =>
+            {
+                e.ToTable("storms");
+                TenantKey(e);
+                e.Property(x => x.RouteKey).HasMaxLength(63);
+                // One open storm per route: the guard's insert is ON CONFLICT DO NOTHING against it.
+                e.HasIndex(x => new { x.TenantId, x.RouteKey }).IsUnique().HasFilter("ended_at IS NULL").HasDatabaseName(Constraints.StormOpen);
+                e.HasIndex(x => new { x.TenantId, x.StartedAt });
+            });
+
+            model.Entity<RouteMinute>(e =>
+            {
+                e.ToTable("route_minutes");
+                e.HasKey(x => new { x.TenantId, x.RouteKey, x.Minute });
+                e.Property(x => x.RouteKey).HasMaxLength(63);
+                e.HasIndex(x => x.Minute);
+            });
+
+            model.Entity<TenantSettings>(e =>
+            {
+                e.ToTable("tenant_settings");
+                e.HasKey(x => x.TenantId);
             });
 
             model.Entity<LinkCode>(e =>

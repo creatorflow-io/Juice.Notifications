@@ -17,15 +17,44 @@ namespace Juice.Notifications.Api
             var deliveries = app.MapGroup("/api/v1/tenants/{tenantId:guid}/deliveries").WithTags("Delivery history");
             deliveries.MapGet("", ListAsync);
             deliveries.MapGet("/{id:guid}", GetAsync);
-            deliveries.MapPost("/{id:guid}/retry", RetryAsync).AddEndpointFilter(async (context, next) =>
+            deliveries.MapPost("/replay", ReplayAsync).AddEndpointFilter(AdminOnly);
+            deliveries.MapPost("/{id:guid}/retry", RetryAsync).AddEndpointFilter(AdminOnly);
+        }
+
+        private static async ValueTask<object?> AdminOnly(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+        {
+            var http = context.HttpContext;
+            var allowed = Guid.TryParse(http.GetRouteValue("tenantId") as string, out var tenantId)
+                && await http.RequestServices.GetRequiredService<ITenantAccess>().CanAdministerAsync(http.User, tenantId, http.RequestAborted);
+            return allowed
+                ? await next(context)
+                : ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin, "Only the tenant's admins retry deliveries.");
+        }
+
+        /// <summary>Bulk replay (phase-4-plan I44): the tenant's failed deliveries matching the filter, each as a single retry.</summary>
+        private static async Task<IResult> ReplayAsync(Guid tenantId, ReplayBody body, IMediator mediator, NotificationsDbContext db, Stages.StageNudges nudges,
+            CancellationToken ct)
+        {
+            FailureCategory? category = null;
+            if (body.Category is { } named)
             {
-                var http = context.HttpContext;
-                var allowed = Guid.TryParse(http.GetRouteValue("tenantId") as string, out var tenantId)
-                    && await http.RequestServices.GetRequiredService<ITenantAccess>().CanAdministerAsync(http.User, tenantId, http.RequestAborted);
-                return allowed
-                    ? await next(context)
-                    : ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin, "Only the tenant's admins retry deliveries.");
-            });
+                if (Enum.GetNames<FailureCategory>().FirstOrDefault(n => n.Equals(named, StringComparison.OrdinalIgnoreCase)) is not { } name)
+                {
+                    return ApiResults.Problem(StatusCodes.Status400BadRequest, ErrorCodes.InvalidRequest, $"'{named}' isn't a failure category.",
+                        [new FieldError("/category", "One of " + string.Join(", ", Enum.GetNames<FailureCategory>()) + ".")]);
+                }
+                category = Enum.Parse<FailureCategory>(name);
+            }
+            return await ApiResults.SendAsync(mediator, db, new ReplayDeliveries(tenantId, new ReplayFilter(body.Channel, body.Integration, body.Type, category,
+                    body.From, body.To, body.Limit)),
+                outcome =>
+                {
+                    if (outcome.Value!.Replayed > 0)
+                    {
+                        nudges.Wake(Planning.DeliveryStageNames.Dispatcher);
+                    }
+                    return Results.Ok(new ReplayResponse(outcome.Value.Replayed, outcome.Value.Skipped, outcome.Value.More));
+                }, _ => Task.FromResult<IResult?>(null), ct);
         }
 
         /// <summary>No application filter for a tenant admin; the producer's own application otherwise; or the refusal.</summary>

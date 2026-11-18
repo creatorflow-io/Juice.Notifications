@@ -53,6 +53,7 @@ namespace Juice.Notifications.Data
         public const string InteractionOnce = "ix_interactions_once";
         public const string ProviderEventOnce = "ix_provider_events_once";
         public const string LinkCodeOnce = "ix_link_codes_once";
+        public const string StormOpen = "ix_storms_open";
     }
 
     public enum ConflictKind

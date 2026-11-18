@@ -202,6 +202,23 @@ tests, a commit and a build-board update.
     only). Tests: `FcmProviderTests`, `ApnsProviderTests`, `WebPushProviderTests` (contract kit; the payload decrypted as a browser would, the
     VAPID signature verified), `PushFlowTests` in the real host (proof point 3).
 - **M31 Storms and bulk replay** (`p4-06`, `p4-08`).
+  - *As built (storms):* `StormGuard` counts each notification's recipients per route in one-minute buckets (`route_minutes`, an upsert
+    returning the count; rows older than an hour dropped). Past the threshold (`Storm:Threshold`, 100; a tenant's `stormThreshold` setting
+    overrides it, 0 turns it off) a route storms (`storms`, one open per route by a partial unique index): its recipients join a digest by
+    route for their type (`Storm:Window`, one minute; M21's digests close and plan them, one delivery per target carrying every member). The
+    count is the notifications reaching the route, not deliveries (deliveries are that times the route's targets). The storm ends when a count
+    finds the route under half the threshold and `Storm:CalmFor` (5 minutes) past its last high minute; it is checked as notifications
+    arrive. Where it hooks in: a type with a workflow counts and digests at its send step; a send-only type counts in the planner, and when one
+    of its routes is storming the planner hands the notification to the workflow runner's send step (one count either way). The first
+    count past the threshold still goes individually. The role `Storm:NotifyRole` (`notifications-admin`) is told once per storm by the
+    service's type `notifications.storm` (an inbox item), when the tenant has a resolver for roles; otherwise it is logged
+    (`notifications.storms` counts storms). A digest renders with the first notification's data plus `items` and `more` (passthrough lists
+    them all). New: `GET …/storms` (admin), `GET/PUT …/settings` (`tenant_settings`, audited). The load check turns storms off for its tenant.
+  - *As built (bulk replay):* `POST …/deliveries/replay` (admins): failed deliveries by channel, integration, type, failure category and
+    creation time, oldest first, `limit` 1,000 by default and at most 10,000; each as the single retry (same id and content, attempts kept, a
+    fresh budget), in statements of 500; ones without content or whose request expired are skipped; `more` says to call again.
+  - Tests: `StormTests` (proof point 4: a thousand notifications to two routes, each target's deliveries carry all thousand once and fewer than
+    400 deliveries; bulk replay by filter, limit and more, non-admins refused).
 - **M32 Template editing** (`p4-07`).
 - **M33 Redaction and retention** (`p4-09`).
 - **M34 Vault and Key Vault** (`p4-10`).
@@ -215,8 +232,8 @@ tests, a commit and a build-board update.
 |---|---|---|
 | 1 | A provider outage fails over without losing a delivery or changing its id | `A_provider_outage_fails_over_to_the_next_integration_with_the_same_delivery_id` |
 | 2 | A destination failure does not fail over | `A_destination_failure_fails_the_delivery_without_trying_another_integration` |
-| 3 | A gone push token removes its registration and is never retried | `A_gone_push_token_deletes_its_registration_without_retry_or_failover` |
-| 4 | A 1,000-notification storm reaches each route as digests | `A_storm_of_a_thousand_reaches_each_route_as_digests_and_nothing_is_lost` |
+| 3 | A gone push token removes its registration and is never retried | `A_gone_push_token_deletes_its_registration_without_retry_or_failover` (passes, M30) |
+| 4 | A 1,000-notification storm reaches each route as digests | `A_storm_of_a_thousand_reaches_each_route_as_digests_and_nothing_is_lost` (passes, M31) |
 | 5 | The claim store passes the same concurrency suite on SQL Server | moves with SQL Server (p4-d4) |
 
 ---

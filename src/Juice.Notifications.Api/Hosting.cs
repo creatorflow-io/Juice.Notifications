@@ -99,6 +99,7 @@ namespace Juice.Notifications.Api
             services.AddScoped<Producers>();
             services.TryAddSingleton<ITenantAccess, ClaimTenantAccess>(); // replace to answer from juice-tenants or local grants
             services.AddScoped<Configuration.ConfigurationReader>();
+            services.AddScoped<Configuration.TenantSettingsReader>();
             services.AddScoped<People.SubscriberReader>();
             services.AddScoped<People.DirectoryReader>();
             services.AddScoped<People.PreferenceReader>();
@@ -120,6 +121,7 @@ namespace Juice.Notifications.Api
             services.AddScoped<Correlations.CorrelationLifecycle>();
             // Provider callbacks (phase-4-plan I40): anonymous, verified per provider, limited per integration.
             services.Configure<Callbacks.CallbackOptions>(configuration.GetSection(Callbacks.CallbackOptions.Section));
+            services.Configure<Storms.StormOptions>(configuration.GetSection(Storms.StormOptions.Section));
             services.AddScoped<Callbacks.ProviderCallbacks>();
             services.AddScoped<People.ChatLinks>();
             services.AddCallbackLimits(configuration);

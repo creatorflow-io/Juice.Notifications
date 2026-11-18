@@ -180,7 +180,8 @@ namespace Juice.Notifications.Planning
     /// is recorded as <c>Truncated</c>. Both records name what the request named (<c>group:sre</c>), have no subscriber, and are never due.
     /// </remarks>
     public sealed class PlannerStage(IEnumerable<IRecipientResolver> resolvers, IOptions<ResolverOptions> resolverOptions, ILogger<PlannerStage> logger,
-        IChannelRegistry channels, People.ContactCrypto crypto, People.MuteMatches mutes, Workflows.WorkflowRunner workflows, Events.ProducerEvents events)
+        IChannelRegistry channels, People.ContactCrypto crypto, People.MuteMatches mutes, Workflows.WorkflowRunner workflows, Events.ProducerEvents events,
+        Storms.StormGuard? storms = null)
         : IStage<Notification>
     {
         public const string StageName = "planner";
@@ -388,7 +389,19 @@ namespace Juice.Notifications.Planning
                 }
             }
             var type = await db.Types.AsNoTracking().SingleAsync(t => t.Id == request.TypeId, ct);
-            if (!escalating && !workflows.For(type).IsSendOnly)
+            // Storm protection (phase-4-plan I43): a route storming now takes its recipients as a digest, which the workflow's send step does
+            // (and counts them there). Otherwise this notification counts on its routes here, and may start a storm for the ones after it.
+            var stormy = false;
+            if (!escalating && storms is not null && due.Any(r => r.RouteKey is not null))
+            {
+                var routes = due.Where(r => r.RouteKey is not null).GroupBy(r => r.RouteKey!).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+                stormy = await storms.AnyOpenAsync(db, row.TenantId, routes.Keys, ct);
+                if (!stormy && workflows.For(type).IsSendOnly)
+                {
+                    await storms.CountAsync(db, row.TenantId, routes, context.Now, context.AfterCommit, ct);
+                }
+            }
+            if (!escalating && (!workflows.For(type).IsSendOnly || stormy))
             {
                 // A workflow: the people wait (Pending, not due) until its send step, which applies mutes and preferences as they are then. The
                 // notification runs its workflow on the next claim, at once.
@@ -517,6 +530,8 @@ namespace Juice.Notifications.Planning
             services.TryAddSingleton(TimeProvider.System);
             services.AddSingleton<ResolverCache>();
             services.AddSingleton<Workflows.WorkflowRunner>();
+            services.AddOptions<Storms.StormOptions>();
+            services.AddSingleton<Storms.StormGuard>();
             // Events to producers (phase-3-plan I37): off unless Events:Enabled; the relay is the host's to run.
             services.AddOptions<Events.EventsOptions>();
             services.TryAddSingleton<Events.ProducerEvents>();

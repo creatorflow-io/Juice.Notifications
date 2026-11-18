@@ -80,6 +80,14 @@ namespace Juice.Notifications.Api.Contracts
     /// <summary>A code is on its way; it works until <c>expiresAt</c>, for a few tries.</summary>
     public sealed record VerificationSentResponse(DateTimeOffset ExpiresAt);
 
+    /// <summary>A tenant's settings: a null field takes the deployment's default.</summary>
+    public sealed record TenantSettingsBody(int? StormThreshold);
+
+    public sealed record TenantSettingsResponse(int? StormThreshold, int DefaultStormThreshold, DateTimeOffset? UpdatedAt);
+
+    /// <summary>A storm on a route (phase-4-plan I43): going while <c>endedAt</c> is null.</summary>
+    public sealed record StormResponse(Guid Id, string Route, DateTimeOffset StartedAt, DateTimeOffset? EndedAt, int Peak, int Digested);
+
     /// <summary>Asks for a code to link a chat account (phase-4-plan I41): <c>slack</c>, <c>telegram</c>.</summary>
     public sealed record LinkCodeBody(string? Channel);
 

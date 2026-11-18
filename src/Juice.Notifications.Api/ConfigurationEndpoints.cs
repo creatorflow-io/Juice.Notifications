@@ -70,6 +70,15 @@ namespace Juice.Notifications.Api
             tenant.MapDelete("/routes/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteRoute(tenantId, key), ct));
 
+            // The tenant's own settings (phase-4-plan §4) and its storms (I43).
+            tenant.MapGet("/settings", async (Guid tenantId, TenantSettingsReader reader, CancellationToken ct)
+                => Results.Ok(ToResponse(await reader.GetAsync(tenantId, ct))));
+            tenant.MapPut("/settings", (Guid tenantId, TenantSettingsBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+                => SendAsync(mediator, db, new PutTenantSettings(tenantId, body.StormThreshold), ToResponse, ct));
+            tenant.MapGet("/storms", async (Guid tenantId, bool? all, TenantSettingsReader reader, CancellationToken ct)
+                => Results.Ok((await reader.StormsAsync(tenantId, all ?? false, ct))
+                    .Select(s => new StormResponse(s.Id, s.Route, s.StartedAt, s.EndedAt, s.Peak, s.Digested))));
+
             tenant.MapGet("/allowlist", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
                 => Results.Ok((await reader.AllowlistAsync(tenantId, ct)).Select(ToResponse)));
             tenant.MapPut("/allowlist", (Guid tenantId, PutAllowlistBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
@@ -99,6 +108,8 @@ namespace Juice.Notifications.Api
         /// A write that raced another: two admins creating the same key, a PUT whose row changed since it read it (the definition hash is a
         /// concurrency token), or a target added to an integration being deleted (foreign key). The loser asks again and sees the current state.
         /// </summary>
+        private static TenantSettingsResponse ToResponse(TenantSettingsView s) => new(s.StormThreshold, s.DefaultStormThreshold, s.UpdatedAt);
+
         private static Task<IResult> SendAsync<TView, TResponse>(IMediator mediator, NotificationsDbContext db, IRequest<Outcome<TView>> command,
             Func<TView, TResponse> map, CancellationToken ct)
             => ApiResults.SendAsync(mediator, db, command, outcome => Results.Ok(map(outcome.Value!)),

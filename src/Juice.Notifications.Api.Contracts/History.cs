@@ -19,5 +19,14 @@ namespace Juice.Notifications.Api.Contracts
     public sealed record DeliveryDetailResponse(DeliveryHistoryResponse Delivery, string DestinationSnapshot, int TemplateVersion, string Locale,
         string RendererVersion, string? ProviderMessageId, IReadOnlyList<DeliveryItemResponse> Items, IReadOnlyList<DeliveryAttemptResponse> Attempts);
 
+    /// <summary>
+    /// Bulk replay's filter (phase-4-plan I44): failed deliveries of a channel, an integration (key), a type, a failure category, created in
+    /// [from, to); at most <c>limit</c> (default 1,000, up to 10,000), oldest first.
+    /// </summary>
+    public sealed record ReplayBody(string? Channel, string? Integration, string? Type, string? Category, DateTimeOffset? From, DateTimeOffset? To, int? Limit);
+
+    /// <summary>How many were put back, passed over (nothing to send, or expired), and whether more matched (call again).</summary>
+    public sealed record ReplayResponse(int Replayed, int Skipped, bool More);
+
     public sealed record RetryResponse(Guid Id, DeliveryStatus Status, int Attempts, int Replays);
 }

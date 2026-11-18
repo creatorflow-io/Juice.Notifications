@@ -24,6 +24,25 @@ namespace Juice.Notifications.People
         /// <summary>A client id no token names (the producer check also refuses this application by key).</summary>
         public const string ClientId = "urn:juice-notifications:service";
         public const string VerifyType = "notifications.contact.verify";
+        /// <summary>A route is storming (phase-4-plan I43): told to the tenant's notification admins, once per storm.</summary>
+        public const string StormType = "notifications.storm";
+
+        public static TypeDeclaration StormDeclaration { get; } = new(
+            StormType, "Notification storm", "operations", DisplayGroups.System, "high", Mandatory: false, ExternalRecipients: false,
+            JsonElement.Parse("""
+                {
+                  "type": "object",
+                  "required": ["route", "threshold", "count"],
+                  "additionalProperties": false,
+                  "properties": { "route": { "type": "string" }, "threshold": { "type": "integer" }, "count": { "type": "integer" } }
+                }
+                """),
+            CorrelationRules.None, null, null,
+            JsonElement.Parse("""
+                {
+                  "inbox": "Title: Route {{ data.route }} is storming\n{{ data.count }} notifications reached it in a minute; the threshold is {{ data.threshold }}. Until it calms down, its targets get them as a digest each minute."
+                }
+                """));
 
         /// <summary>Whether a type is the service's own (under its application's key).</summary>
         public static bool IsServiceType(string typeKey) => typeKey.StartsWith(ApplicationKey + ".", StringComparison.Ordinal);
@@ -439,6 +458,12 @@ namespace Juice.Notifications.People
             if (type.IsNew)
             {
                 logger.LogInformation("Declared the service's type {Type} v{Version}", type.Key, type.Version);
+            }
+            var storm = await mediator.Send(new DeclareType(app.Id, app.Key, ServiceTypes.StormDeclaration), cancellationToken);
+            if (storm.Value is null)
+            {
+                throw new InvalidOperationException($"The service's type {ServiceTypes.StormType} was refused: {storm.Message} "
+                    + string.Join("; ", storm.Errors?.Select(e => $"{e.Pointer}: {e.Message}") ?? []));
             }
         }
 

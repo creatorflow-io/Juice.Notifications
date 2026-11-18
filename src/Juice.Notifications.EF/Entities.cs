@@ -310,6 +310,43 @@ namespace Juice.Notifications.Data
         public Guid? ContactPointId { get; set; }
     }
 
+    /// <summary>
+    /// A storm on a route (design §14, phase-4-plan I43): more notifications reached it in a minute than the tenant's threshold. While it lasts the
+    /// route's recipients join a one-minute digest per type; it ends once the route has stayed under half the threshold for five minutes. One
+    /// open storm per route.
+    /// </summary>
+    public sealed class Storm : ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public required string RouteKey { get; init; }
+        public DateTimeOffset StartedAt { get; init; }
+        public DateTimeOffset? EndedAt { get; set; }
+        /// <summary>The last minute the route was at half the threshold or more: the storm ends five minutes after it.</summary>
+        public DateTimeOffset LastHighAt { get; set; }
+        /// <summary>The most notifications the route took in one minute during the storm.</summary>
+        public int Peak { get; set; }
+        /// <summary>Route recipients sent to digests during the storm.</summary>
+        public int Digested { get; set; }
+    }
+
+    /// <summary>Notifications that reached a route in one minute (storm counting, I43); rows older than an hour are dropped.</summary>
+    public sealed class RouteMinute
+    {
+        public Guid TenantId { get; init; }
+        public required string RouteKey { get; init; }
+        public DateTimeOffset Minute { get; init; }
+        public int Count { get; set; }
+    }
+
+    /// <summary>A tenant's own settings (phase-4-plan §4): its storm threshold; retention from M33. Null fields take the deployment's defaults.</summary>
+    public sealed class TenantSettings : Juice.Domain.IAuditable
+    {
+        public Guid TenantId { get; init; }
+        public int? StormThreshold { get; set; }
+        public DateTimeOffset UpdatedAt { get; set; }
+    }
+
     public sealed class ContactVerification
     {
         public Guid TenantId { get; init; }

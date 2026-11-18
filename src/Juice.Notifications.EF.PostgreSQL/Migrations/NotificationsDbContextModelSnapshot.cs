@@ -2327,6 +2327,34 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasAnnotation("Juice:Auditable", true);
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.RouteMinute", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("RouteKey")
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)")
+                        .HasColumnName("route_key");
+
+                    b.Property<DateTimeOffset>("Minute")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("minute");
+
+                    b.Property<int>("Count")
+                        .HasColumnType("integer")
+                        .HasColumnName("count");
+
+                    b.HasKey("TenantId", "RouteKey", "Minute")
+                        .HasName("pk_route_minutes");
+
+                    b.HasIndex("Minute")
+                        .HasDatabaseName("ix_route_minutes_minute");
+
+                    b.ToTable("route_minutes", "notifications");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.RouteTarget", b =>
                 {
                     b.Property<Guid>("TenantId")
@@ -2352,6 +2380,56 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_route_targets_tenant_id_target_id");
 
                     b.ToTable("route_targets", "notifications");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.Storm", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Digested")
+                        .HasColumnType("integer")
+                        .HasColumnName("digested");
+
+                    b.Property<DateTimeOffset?>("EndedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ended_at");
+
+                    b.Property<DateTimeOffset>("LastHighAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_high_at");
+
+                    b.Property<int>("Peak")
+                        .HasColumnType("integer")
+                        .HasColumnName("peak");
+
+                    b.Property<string>("RouteKey")
+                        .IsRequired()
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)")
+                        .HasColumnName("route_key");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_storms");
+
+                    b.HasIndex("TenantId", "RouteKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_storms_open")
+                        .HasFilter("ended_at IS NULL");
+
+                    b.HasIndex("TenantId", "StartedAt")
+                        .HasDatabaseName("ix_storms_tenant_id_started_at");
+
+                    b.ToTable("storms", "notifications");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.Subscriber", b =>
@@ -2541,6 +2619,29 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("TypeId", "Channel", "Locale", "TenantId", "Version"), false);
 
                     b.ToTable("templates", "notifications");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.TenantSettings", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<int?>("StormThreshold")
+                        .HasColumnType("integer")
+                        .HasColumnName("storm_threshold");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("TenantId")
+                        .HasName("pk_tenant_settings");
+
+                    b.ToTable("tenant_settings", "notifications");
+
+                    b.HasAnnotation("Juice:Auditable", true);
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.ThrottleEntry", b =>

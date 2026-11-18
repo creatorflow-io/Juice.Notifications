@@ -39,6 +39,8 @@ namespace Juice.Notifications.IntegrationTests
             await Ok(client.PutAsJsonAsync($"/api/v1/applications/{ProducerApp.Key}/types", new DeclareTypeBody(type, "Load", "alerts", null, null,
                 null, null, DeliveryTests.Json("""{ "type": "object" }"""), null, null, null, DeliveryTests.Json("""{ "webhook": "passthrough" }""")), Ct));
             await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/load-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
+            // It measures a delivery per request: storm protection (phase 4, 100 a minute per route) would make most of them digests.
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/settings", new TenantSettingsBody(0), Ct));
             // People: 50 local users, reached through the tenant's local resolver (phase 2).
             await Ok(admin.PutAsJsonAsync($"{Tenant}/resolvers/load-people", new PutResolverBody("local", ["user"], null, null, null), Ct));
             const int People = 50;

@@ -22,6 +22,7 @@ namespace Juice.Notifications
             description: "Names that reached more people than the bound and kept the first of them.");
         public static readonly Counter<long> ContactPointsFailed = Meter.CreateCounter<long>("notifications.contact_points_failed",
             description: "Contact points marked failed because a provider said the address doesn't exist.");
+        public static readonly Counter<long> Storms = Meter.CreateCounter<long>("notifications.storms", description: "Storms started on routes (design §14).");
         public static readonly Counter<long> DevicesGone = Meter.CreateCounter<long>("notifications.devices_gone",
             description: "Device registrations deleted because the push service said the token is gone (design §9.2).");
         public static readonly Counter<long> Deliveries = Meter.CreateCounter<long>("notifications.deliveries", description: "Deliveries finished, by channel and status.");

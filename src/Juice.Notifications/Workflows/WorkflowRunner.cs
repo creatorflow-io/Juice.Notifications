@@ -14,7 +14,7 @@ namespace Juice.Notifications.Workflows
     /// step after step, until one waits (the notification is due again when it may go on) or the workflow ends (<c>Planned</c>). The planner
     /// stage claims notifications in both <c>Planning</c> and <c>Running</c>, so there is one claimed hop per wait, crash-safe like every other.
     /// </summary>
-    public sealed class WorkflowRunner(People.MuteMatches mutes, ILogger<WorkflowRunner> logger)
+    public sealed class WorkflowRunner(People.MuteMatches mutes, ILogger<WorkflowRunner> logger, Storms.StormGuard? storms = null)
     {
         /// <summary>Parsed workflows by type version: a version's workflow never changes.</summary>
         private readonly ConcurrentDictionary<Guid, Workflow> _parsed = new();
@@ -103,6 +103,22 @@ namespace Juice.Notifications.Workflows
             if (waiting.Count == 0)
             {
                 return;
+            }
+            // Storm protection (phase-4-plan I43): a route past its threshold takes its recipients as a one-minute digest instead.
+            if (storms is not null && waiting.Any(r => r.RouteKey is not null))
+            {
+                var routes = waiting.Where(r => r.RouteKey is not null).GroupBy(r => r.RouteKey!).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+                var storming = await storms.CountAsync(db, row.TenantId, routes, context.Now, context.AfterCommit, ct);
+                if (storming.Count > 0)
+                {
+                    var digested = waiting.Where(r => r.RouteKey is { } key && storming.Contains(key)).Select(r => r.Id).ToHashSet();
+                    await JoinDigestAsync(db, row, request, new DigestStep(storms.Window, DigestKeys.Route), context.Now, ct, digested);
+                    waiting = waiting.Where(r => !digested.Contains(r.Id)).ToList();
+                    if (waiting.Count == 0)
+                    {
+                        return;
+                    }
+                }
             }
             foreach (var recipient in waiting)
             {
@@ -227,11 +243,12 @@ namespace Juice.Notifications.Workflows
         /// opens for them. A recipient already in one (this step run again) stays where it is.
         /// </summary>
         private static async Task JoinDigestAsync(NotificationsDbContext db, Notification row, NotificationRequest request, DigestStep digest, DateTimeOffset now,
-            CancellationToken ct)
+            CancellationToken ct, IReadOnlySet<Guid>? only = null)
         {
-            var waiting = await db.Recipients.AsNoTracking()
+            var waiting = (await db.Recipients.AsNoTracking()
                 .Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Outcome == RecipientOutcome.Pending && r.DigestId == null)
-                .Select(r => new { r.Id, r.RouteKey, r.SubscriberId, r.NamedAs }).ToListAsync(ct);
+                .Select(r => new { r.Id, r.RouteKey, r.SubscriberId, r.NamedAs }).ToListAsync(ct))
+                .Where(r => only is null || only.Contains(r.Id)).ToList();
             var open = DigestState.Open.ToString();
             foreach (var group in waiting.GroupBy(r => Fit(digest.By switch
             {
