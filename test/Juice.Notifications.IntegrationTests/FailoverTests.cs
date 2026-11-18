@@ -60,6 +60,7 @@ namespace Juice.Notifications.IntegrationTests
                 o.RetryBase = TimeSpan.FromSeconds(1);
                 o.RetryMax = TimeSpan.FromMinutes(1);
             });
+            services.AddSingleton<ISecretResolver>(new DownVault());
             services.AddSingleton<INotificationProvider>(_a);
             services.AddSingleton<INotificationProvider>(_b);
             services.AddSingleton<INotificationProvider>(_hook);
@@ -151,6 +152,37 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(delivery.Id, Assert.Single(_b.Seen).Delivery);
             await using var db = _database.Context();
             Assert.Equal(1, await db.Deliveries.CountAsync(Ct));
+        }
+
+        /// <summary>A vault whose path <c>down</c> can't be read now; any other reference is resolved as usual.</summary>
+        private sealed class DownVault : ISecretResolver
+        {
+            public ValueTask<string> ResolveAsync(string reference, CancellationToken ct)
+                => reference.StartsWith("vault:down", StringComparison.Ordinal)
+                    ? throw new SecretUnavailableException("Vault answered 503.")
+                    : ValueTask.FromResult(SecretReferences.Resolve(reference));
+        }
+
+        /// <summary>
+        /// <c>mail-a</c>'s secret is in a vault that can't be read (phase-4-plan I47): nothing is sent through it, each try is a retryable provider
+        /// failure, and once its attempts run out the delivery fails over to <c>mail-b</c>.
+        /// </summary>
+        [Fact]
+        public async Task An_unreadable_vault_secret_is_a_provider_failure_that_fails_over()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                await db.Integrations.Where(i => i.Id == _seed.A).ExecuteUpdateAsync(s => s.SetProperty(i => i.SecretRef, "vault:down/smtp#password"), Ct);
+            }
+            var delivery = await DeliveryAsync();
+
+            var (row, attempts) = await RunAsync(delivery.Id);
+
+            Assert.Equal((DeliveryStatus.Accepted, _seed.B, 1), (row.Status, row.IntegrationId, row.Failovers));
+            Assert.Equal(0, _a.Sends);
+            Assert.Equal(MaxAttempts, attempts.Count(a => a.IntegrationId == _seed.A && a.Category == FailureCategory.Provider && a.Error!.Contains("secret couldn't be read")));
+            Assert.Single(_b.Seen);
         }
 
         /// <summary>Retryable provider failures (a 4xx from the server, a refused connection) use up <c>mail-a</c>'s attempts, then <c>mail-b</c> gets a budget of its own.</summary>

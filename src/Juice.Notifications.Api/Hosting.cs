@@ -124,6 +124,7 @@ namespace Juice.Notifications.Api
             services.Configure<Callbacks.CallbackOptions>(configuration.GetSection(Callbacks.CallbackOptions.Section));
             services.Configure<Storms.StormOptions>(configuration.GetSection(Storms.StormOptions.Section));
             services.Configure<Retention.RetentionOptions>(configuration.GetSection(Retention.RetentionOptions.Section));
+            services.Configure<Providers.SecretsOptions>(configuration.GetSection(Providers.SecretsOptions.Section));
             services.AddScoped<Callbacks.ProviderCallbacks>();
             services.AddScoped<People.ChatLinks>();
             services.AddCallbackLimits(configuration);

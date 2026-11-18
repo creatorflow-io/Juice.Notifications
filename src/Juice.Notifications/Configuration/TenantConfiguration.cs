@@ -88,7 +88,10 @@ namespace Juice.Notifications.Configuration
             => IsSecretRef(reference, options) ? null : new FieldError(pointer, $"{what} is one only the deployment may name: {remedy}");
 
         internal static string SecretRefRule(string what, Providers.DeliveryOptions options, bool provisioned)
-            => provisioned ? $"{what} is named: env:NAME or file:/path." : $"{what} is named, never sent: env:{options.ApiSecretEnvPrefix}NAME, or file: in the deployment's secret folder.";
+            => provisioned ? $"{what} is named: env:NAME, file:/path, vault:path#field or keyvault:name."
+                : $"{what} is named, never sent: env:{options.ApiSecretEnvPrefix}NAME, or file: in the deployment's secret folder"
+                    + (options.ApiVaultPrefix is { Length: > 0 } v ? $", or vault:{v}path#field" : "")
+                    + (options.ApiKeyVaultPrefix is { Length: > 0 } k ? $", or keyvault:{k}name" : "") + ".";
 
         /// <summary>
         /// A host name, an IP address, or a network in CIDR form, in the form the send-time destination policy reads: a network is parsed the

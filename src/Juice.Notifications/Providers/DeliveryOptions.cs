@@ -21,6 +21,10 @@ namespace Juice.Notifications.Providers
         public string ApiSecretEnvPrefix { get; set; } = "NOTIFICATIONS_SECRET_";
         /// <summary>A secret reference set through the API may name only files directly in this folder; unset refuses files.</summary>
         public string? ApiSecretDirectory { get; set; }
+        /// <summary>A <c>vault:</c> reference set through the API names a path under this prefix (<c>notifications/</c>); unset refuses them.</summary>
+        public string? ApiVaultPrefix { get; set; }
+        /// <summary>A <c>keyvault:</c> reference set through the API names a secret starting with this (<c>notifications-</c>); unset refuses them.</summary>
+        public string? ApiKeyVaultPrefix { get; set; }
 
         /// <summary>
         /// The SMTP servers email integrations may use, by name. Servers are part of the deployment: an integration names one, so the API can't
@@ -44,7 +48,22 @@ namespace Juice.Notifications.Providers
     /// <summary>Secrets are referenced, never stored (design D15), and read when sending.</summary>
     public static class SecretReferences
     {
+        public const string Vault = "vault:";
+        public const string KeyVault = "keyvault:";
+
+        /// <summary>
+        /// A reference in one of its forms: <c>env:NAME</c>, <c>file:/path</c>, <c>vault:path#field</c> (HashiCorp Vault KV v2) or
+        /// <c>keyvault:name</c> (Azure Key Vault: letters, digits and dashes).
+        /// </summary>
         public static bool IsValid(string reference)
+            => IsLocal(reference)
+            || reference.StartsWith(Vault, StringComparison.Ordinal) && reference.IndexOf('#') is var hash && hash > Vault.Length && hash < reference.Length - 1
+                && !reference.Contains("..", StringComparison.Ordinal)
+            || reference.StartsWith(KeyVault, StringComparison.Ordinal) && reference.Length is > 9 and <= 136
+                && reference[KeyVault.Length..].All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
+
+        /// <summary>A reference read from the host itself (<c>env:</c>, <c>file:</c>): what the deployment's own keys, read at start, may name.</summary>
+        public static bool IsLocal(string reference)
             => reference.StartsWith("env:", StringComparison.Ordinal) && reference.Length > 4
             || reference.StartsWith("file:", StringComparison.Ordinal) && reference.Length > 5;
 
@@ -64,6 +83,16 @@ namespace Juice.Notifications.Providers
                 return options.ApiSecretEnvPrefix is { Length: > 0 } prefix && reference[4..].StartsWith(prefix, StringComparison.Ordinal)
                     && reference.Length > 4 + prefix.Length;
             }
+            if (reference.StartsWith(Vault, StringComparison.Ordinal))
+            {
+                return options.ApiVaultPrefix is { Length: > 0 } prefix && reference[Vault.Length..].StartsWith(prefix, StringComparison.Ordinal)
+                    && reference[Vault.Length..].IndexOf('#') > prefix.Length;
+            }
+            if (reference.StartsWith(KeyVault, StringComparison.Ordinal))
+            {
+                return options.ApiKeyVaultPrefix is { Length: > 0 } prefix && reference[KeyVault.Length..].StartsWith(prefix, StringComparison.Ordinal)
+                    && reference.Length > KeyVault.Length + prefix.Length;
+            }
             if (options.ApiSecretDirectory is not { Length: > 0 } directory)
             {
                 return false;
@@ -73,9 +102,13 @@ namespace Juice.Notifications.Providers
                 && string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)), Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal);
         }
 
-        /// <summary>The secret's value; throws when it isn't set.</summary>
+        /// <summary>The value of an <c>env:</c> or <c>file:</c> secret; throws when it isn't set. A vault's goes through <see cref="ISecretResolver"/>.</summary>
         public static string Resolve(string reference)
         {
+            if (!IsLocal(reference) && IsValid(reference))
+            {
+                throw new InvalidOperationException($"The secret '{reference}' is in a vault, read through the secret resolver; it isn't read here.");
+            }
             var value = reference switch
             {
                 _ when reference.StartsWith("env:", StringComparison.Ordinal) => Environment.GetEnvironmentVariable(reference[4..]),

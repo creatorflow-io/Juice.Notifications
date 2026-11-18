@@ -57,7 +57,7 @@ namespace Juice.Notifications.Callbacks
     /// recorded (with no delivery), so a repeat isn't looked for again.
     /// </summary>
     public sealed class ProviderCallbacks(NotificationsDbContext db, IEnumerable<ICallbackHandler> handlers, TimeProvider clock, ILogger<ProviderCallbacks> logger,
-        People.ChatLinks links, People.ContactCrypto crypto, Inbox.PersonInboxEditor inbox)
+        People.ChatLinks links, People.ContactCrypto crypto, Inbox.PersonInboxEditor inbox, ISecretResolver? secrets = null)
     {
         public async Task<CallbackAnswer> ReceiveAsync(string provider, Guid integrationId, CallbackRequest request, CancellationToken ct)
         {
@@ -71,7 +71,9 @@ namespace Juice.Notifications.Callbacks
             string? secret;
             try
             {
-                secret = integration.SecretRef is { } reference ? SecretReferences.Resolve(reference) : null;
+                secret = integration.SecretRef is { } reference
+                    ? secrets is not null ? await secrets.ResolveAsync(reference, ct) : SecretReferences.Resolve(reference)
+                    : null;
             }
             catch (InvalidOperationException ex)
             {

@@ -32,7 +32,8 @@ namespace Juice.Notifications.Delivering
     /// turns out to have lost its lease (§11).
     /// </summary>
     public sealed class DispatcherStage(IEnumerable<INotificationProvider> providers, IChannelRegistry channels, IOptions<DeliveryOptions> options, IServiceScopeFactory scopes,
-        ILogger<DispatcherStage> logger, People.ContactCrypto crypto, Events.ProducerEvents? events = null, TimeProvider? clock = null) : IStage<Delivery>
+        ILogger<DispatcherStage> logger, People.ContactCrypto crypto, Events.ProducerEvents? events = null, TimeProvider? clock = null,
+        ISecretResolver? secrets = null) : IStage<Delivery>
     {
         public string Name => DeliveryStageNames.Dispatcher;
 
@@ -210,9 +211,30 @@ namespace Juice.Notifications.Delivering
                 // A secret (the integration's, or an address kept as a reference) that isn't set is a deployment problem someone can fix. It isn't
                 // an attempt (nothing was sent): the step fails, so the runner tries it again with its backoff, and gives the delivery up as failed
                 // after its step-failure limit, with the reason.
-                destination = address.IsReference ? SecretReferences.Resolve(address.Value!) : address.Value!;
+                try
+                {
+                    destination = address.IsReference ? await ResolveAsync(address.Value!, ct) : address.Value!;
+                }
+                catch (SecretUnavailableException ex)
+                {
+                    await RecordAndApplyAsync(context, row, integration, attempt, SendResult.Retry(FailureCategory.Provider, "The secret address couldn't be read: " + ex.Message),
+                        0, context.Now, provider);
+                    return;
+                }
             }
-            var secret = integration.SecretRef is { } reference ? SecretReferences.Resolve(reference) : null;
+            string? secret;
+            try
+            {
+                secret = integration.SecretRef is { } reference ? await ResolveAsync(reference, ct) : null;
+            }
+            catch (SecretUnavailableException ex)
+            {
+                // A vault that can't be read now (phase-4-plan I47): nothing was sent, and another integration may have its secret within reach, so
+                // a provider failure: retried, then failed over.
+                await RecordAndApplyAsync(context, row, integration, attempt, SendResult.Retry(FailureCategory.Provider, "The integration's secret couldn't be read: " + ex.Message),
+                    0, context.Now, provider);
+                return;
+            }
 
             // The producer's trace continues here, so the provider call (a webhook's HTTP request carries it on) links back to the request.
             using var activity = Telemetry.StartStep("notifications.dispatch", origin?.TraceParent, ActivityKind.Client);
@@ -599,6 +621,9 @@ namespace Juice.Notifications.Delivering
             }
         }
 
+        private ValueTask<string> ResolveAsync(string reference, CancellationToken ct)
+            => secrets is not null ? secrets.ResolveAsync(reference, ct) : ValueTask.FromResult(SecretReferences.Resolve(reference));
+
         private static string? Truncate(string? error) => error is { Length: > 2000 } ? error[..2000] : error;
     }
 
@@ -611,6 +636,7 @@ namespace Juice.Notifications.Delivering
         {
             services.AddBuiltInChannels();
             services.AddContactEncryption();
+            services.AddSecretResolver();
             services.AddSingleton<WebhookProvider>();
             services.AddSingleton<INotificationProvider>(sp => sp.GetRequiredService<WebhookProvider>());
             services.AddSingleton<INotificationProvider, SmtpProvider>();

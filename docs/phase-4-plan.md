@@ -243,6 +243,17 @@ tests, a commit and a build-board update.
     they can't be retried). All in batches of `Retention:Batch` (1,000). Tests: `RetentionTests` (masking, an unfinished request untouched,
     purge and content clearing by the tenant's retention, the settings' bounds), `RedactionTests`.
 - **M34 Vault and Key Vault** (`p4-10`).
+  - *As built:* `ISecretResolver` (`SecretResolver`, `AddSecretResolver` with the dispatcher): `env:` and `file:` as before;
+    `vault:path#field` (KV v2 `v1/{mount}/data/{path}`, a token or AppRole login, `X-Vault-Namespace`) and `keyvault:name` (`secrets/{name}`
+    `api-version=7.4`; client credentials or the managed identity through the instance metadata endpoint), values cached `Secrets:CacheFor`
+    (5 minutes), sign-in tokens until shortly before they expire (a 401/403 drops the token). A 404 or a missing field is unset (as before:
+    the step fails and is retried); an error, no answer, or a refusal is `SecretUnavailableException`, which the dispatcher records as a
+    retryable `Provider` attempt (nothing sent), so the delivery fails over once its attempts are used (`FailoverTests`). Callbacks and the
+    callback registration endpoint read through it too (an unavailable vault answers 503). Through the API, `vault:` and `keyvault:` are
+    allowed only under `Delivery:ApiVaultPrefix` and `Delivery:ApiKeyVaultPrefix` (unset by default: none), as `env:` is under its prefix;
+    as with `env:`, the prefix isn't per tenant. Keys the service reads at start (contact encryption, the identity resolver's client secret)
+    stay `env:`/`file:` (`SecretReferences.IsLocal`). Setup: [`providers.md`](providers.md#secrets). Tests: `SecretResolverTests`,
+    `FailoverTests.An_unreadable_vault_secret_is_a_provider_failure_that_fails_over`.
 - **M35 Proof points and acceptance** (`p4-g1` … `p4-g3`), then the review loop over phases 3 and 4.
 
 ---

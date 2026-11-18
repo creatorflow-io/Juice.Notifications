@@ -93,7 +93,7 @@ namespace Juice.Notifications.Planning
             {
                 return "Realm and ClientId are required";
             }
-            if (!Providers.SecretReferences.IsValid(ClientSecretRef))
+            if (!Providers.SecretReferences.IsLocal(ClientSecretRef))
             {
                 return "ClientSecretRef is a secret reference: env:NAME or file:/path";
             }

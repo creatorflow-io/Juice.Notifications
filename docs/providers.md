@@ -7,6 +7,26 @@ path reachable from the internet. Callbacks are anonymous and checked per provid
 
 The phase 1 providers (`smtp`, `webhook`) are described in [`design.md`](design.md) §9.
 
+## Secrets
+
+A `secretRef` (and a target's `addressRef`) names where a secret is; the value is read when it is used, never stored:
+
+| Form | Where | Through the API |
+|---|---|---|
+| `env:NAME` | an environment variable | names starting with `Delivery:ApiSecretEnvPrefix` (`NOTIFICATIONS_SECRET_`) |
+| `file:/path` | a file (trimmed) | files directly in `Delivery:ApiSecretDirectory` |
+| `vault:path#field` | HashiCorp Vault, KV v2 | paths starting with `Delivery:ApiVaultPrefix` (unset: none) |
+| `keyvault:name` | Azure Key Vault | names starting with `Delivery:ApiKeyVaultPrefix` (unset: none) |
+
+The deployment's own configuration (provisioning files) may name any. Vault values are kept 5 minutes (`Secrets:CacheFor`). A vault that
+can't be read when sending is a provider failure: retried, then failed over to the tenant's next integration. A secret a vault doesn't have
+is unset, as an empty variable is. The service's own keys (contact encryption, the identity resolver's client secret) stay `env:` or `file:`.
+
+- **Vault** (`Secrets:Vault`): `Address`, `Mount` (`secret`), optional `Namespace`; sign-in with `TokenRef`, or AppRole with `RoleId` and
+  `SecretIdRef` (its token kept until a minute before its lease ends).
+- **Key Vault** (`Secrets:KeyVault`): `VaultUri`; the managed identity by default (`ClientId` for a user-assigned one), or client
+  credentials with `TenantId`, `ClientId` and `ClientSecretRef`.
+
 ## Email: Amazon SES (`ses`)
 
 Package `Juice.Notifications.Providers.Email` (`AddEmailProviders`). Sends with SES API v2 `SendEmail`, signed with SigV4.

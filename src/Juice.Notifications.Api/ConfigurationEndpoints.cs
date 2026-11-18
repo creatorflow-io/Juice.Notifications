@@ -24,7 +24,8 @@ namespace Juice.Notifications.Api
                 => DeleteAsync(mediator, db, new DeleteIntegration(tenantId, key), ct));
             // A provider told where its callbacks go (Telegram's setWebhook; phase-4-plan M28): the deployment's public URL for this integration.
             tenant.MapPost("/integrations/{key}/callbacks", async (Guid tenantId, string key, NotificationsDbContext db, IEnumerable<INotificationProvider> providers,
-                IEnumerable<ICallbackHandler> handlers, Microsoft.Extensions.Options.IOptions<Callbacks.CallbackOptions> callbacks, CancellationToken ct) =>
+                IEnumerable<ICallbackHandler> handlers, Microsoft.Extensions.Options.IOptions<Callbacks.CallbackOptions> callbacks, Providers.ISecretResolver secrets,
+                CancellationToken ct) =>
             {
                 var integration = await db.Integrations.AsNoTracking().SingleOrDefaultAsync(i => i.TenantId == tenantId && i.Key == key, ct);
                 if (integration is null)
@@ -46,7 +47,7 @@ namespace Juice.Notifications.Api
                 string? secret;
                 try
                 {
-                    secret = integration.SecretRef is { } reference ? Providers.SecretReferences.Resolve(reference) : null;
+                    secret = integration.SecretRef is { } reference ? await secrets.ResolveAsync(reference, ct) : null;
                 }
                 catch (InvalidOperationException ex)
                 {

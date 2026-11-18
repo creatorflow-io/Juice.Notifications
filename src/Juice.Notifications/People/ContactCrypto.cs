@@ -40,7 +40,7 @@ namespace Juice.Notifications.People
         /// <summary>The problem with these options, or null when they're fine (checked at start).</summary>
         public string? Problem()
         {
-            if (KeyRef is null || !SecretReferences.IsValid(KeyRef) || HashKeyRef is null || !SecretReferences.IsValid(HashKeyRef))
+            if (KeyRef is null || !SecretReferences.IsLocal(KeyRef) || HashKeyRef is null || !SecretReferences.IsLocal(HashKeyRef))
             {
                 return "Encryption:KeyRef and Encryption:HashKeyRef are required secret references (env:NAME or file:/path) to base64 32-byte keys.";
             }
@@ -52,7 +52,7 @@ namespace Juice.Notifications.People
             {
                 return $"Encryption:PreviousKeyRefs names the current key id {KeyId}.";
             }
-            return PreviousKeyRefs.FirstOrDefault(p => !KeyIdPattern().IsMatch(p.Key) || !SecretReferences.IsValid(p.Value))
+            return PreviousKeyRefs.FirstOrDefault(p => !KeyIdPattern().IsMatch(p.Key) || !SecretReferences.IsLocal(p.Value))
                 is { Key: { } bad } ? $"Encryption:PreviousKeyRefs:{bad} is a key id with a secret reference." : null;
         }
     }
