@@ -80,6 +80,12 @@ namespace Juice.Notifications.Api.Contracts
     /// <summary>A code is on its way; it works until <c>expiresAt</c>, for a few tries.</summary>
     public sealed record VerificationSentResponse(DateTimeOffset ExpiresAt);
 
+    /// <summary>Asks for a code to link a chat account (phase-4-plan I41): <c>slack</c>, <c>telegram</c>.</summary>
+    public sealed record LinkCodeBody(string? Channel);
+
+    /// <summary>The code to send the tenant's bot from the account to link, until <see cref="ExpiresAt"/>; once used, the account is a contact point.</summary>
+    public sealed record LinkCodeResponse(string Channel, string Code, DateTimeOffset ExpiresAt);
+
     /// <summary>A Web Push subscription as the browser's <c>PushSubscription.toJSON()</c> gives it, keys flattened.</summary>
     public sealed record WebPushSubscriptionBody(string? Endpoint, string? P256dh, string? Auth);
 

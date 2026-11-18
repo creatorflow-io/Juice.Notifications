@@ -92,6 +92,12 @@ namespace Juice.Notifications.People
                 return Outcome<ContactPointView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",
                     [new FieldError("/channel", $"A contact point's channel is one of: {allowed}.")]);
             }
+            if (channel!.Address == AddressKind.Account)
+            {
+                // Never entered by hand (phase-4-plan I41, D23): the bot hears a code from the account, which proves it is the person's.
+                return Outcome<ContactPointView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",
+                    [new FieldError("/channel", $"A {channel.Key} account is linked through the bot: ask for a link code (POST …/me/links) and send it to the bot.")]);
+            }
             if (RequestRules.NormalizeAddress(channel!, r.Address) is not { } address)
             {
                 return Outcome<ContactPointView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",

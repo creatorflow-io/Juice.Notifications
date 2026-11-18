@@ -107,6 +107,13 @@ namespace Juice.Notifications.Api
                         ? ApiResults.Problem(StatusCodes.Status422UnprocessableEntity, ErrorCodes.VerificationExpired, "No code is waiting for this address.")
                         : null), ct));
 
+            // Chat accounts are linked, never typed (phase-4-plan I41): a code for the person to send the bot.
+            me.MapPost("/links", async (Guid tenantId, LinkCodeBody body, HttpContext http, ChatLinks links, CancellationToken ct) =>
+            {
+                var issued = await links.IssueAsync(tenantId, Me(http), body.Channel, ct);
+                return ApiResults.Failure(issued) ?? Results.Ok(new LinkCodeResponse(issued.Value!.Channel, issued.Value.Code, issued.Value.ExpiresAt));
+            });
+
             // Device registrations for push (design §9.2): the app registers on start and removes its registration on sign-out.
             me.MapGet("/devices", async (Guid tenantId, HttpContext http, DeviceRegistry devices, CancellationToken ct)
                 => Results.Ok((await devices.ListAsync(tenantId, Me(http), ct)).Select(ToResponse)));

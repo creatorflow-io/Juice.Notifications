@@ -394,6 +394,11 @@ namespace Juice.Notifications.Delivering
                 // The inbox always has something to show, so a mandatory type always reaches the person (phase-2-plan I17).
                 return new Rendered(ChannelContent.Inbox(null, type.Key, type.Name, request.Links, type.Actions), null, null, null);
             }
+            if (template is null && definition.Content == ContentShape.Chat)
+            {
+                // A chat target hears every type a route sends it: with no template of its own, the type's name, its link and actions.
+                return new Rendered(ChannelContent.Chat(null, type.Name, request.Links, type.Actions), null, null, null);
+            }
             if (template is null)
             {
                 return new Rendered(NoContent, null, $"The type {type.Key} v{type.Version} has no {channel} template.", FailureCategory.Content);
@@ -405,6 +410,7 @@ namespace Juice.Notifications.Delivering
                 {
                     ContentShape.Message => ChannelContent.Email(rendered, type.Name),
                     ContentShape.Item => ChannelContent.Inbox(rendered, type.Key, type.Name, request.Links, type.Actions),
+                    ContentShape.Chat => ChannelContent.Chat(rendered, type.Name, request.Links, type.Actions),
                     _ => ChannelContent.Webhook(rendered, ChannelContent.IsJson(rendered)),
                 }, template, null, null);
             }

@@ -179,8 +179,8 @@ namespace Juice.Notifications.Intake
                         }
                         if (NormalizeAddress(channel, r.Address) is not { } address)
                         {
-                            invalid.Add(new FieldError(at + "/address", channel.Address == AddressKind.None
-                                ? $"The {channel.Key} channel takes no addresses in a request; use a route."
+                            invalid.Add(new FieldError(at + "/address", channel.Address is AddressKind.None or AddressKind.Account
+                                ? $"The {channel.Key} channel takes no addresses in a request; use a route{(channel.Address == AddressKind.Account ? ", or name the person" : "")}."
                                 : $"The address isn't a valid {channel.Address.ToString().ToLowerInvariant()} address."));
                             break;
                         }

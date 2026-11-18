@@ -48,12 +48,16 @@ namespace Juice.Notifications.Callbacks
     /// <item><b>bounced</b> (hard): the delivery is <c>Bounced</c> (<c>Destination</c>) and a person's contact point fails;</item>
     /// <item><b>soft bounce</b>: a working contact point is marked bouncing (still used); the delivery stays as the provider retries it;</item>
     /// <item><b>complaint</b>: the contact point fails, so nothing more is sent to it until the person verifies it again;</item>
-    /// <item><b>interaction</b>: recorded; applied from M27 (chat buttons).</item>
+    /// <item><b>interaction</b> (a chat button, M27): the person whose linked account pressed it acts on their inbox item for the same
+    /// notification, as if in the inbox (the action must be the item's, its correlation open); no linked person, or no item, and it is only
+    /// recorded;</item>
+    /// <item><b>link</b> (M27): a link code the bot heard makes the account that sent it the person's verified contact point (<see cref="People.ChatLinks"/>).</item>
     /// </list>
     /// A delivery is found by our id, or by the provider's message id through this integration. An event for a delivery we don't have is still
     /// recorded (with no delivery), so a repeat isn't looked for again.
     /// </summary>
-    public sealed class ProviderCallbacks(NotificationsDbContext db, IEnumerable<ICallbackHandler> handlers, TimeProvider clock, ILogger<ProviderCallbacks> logger)
+    public sealed class ProviderCallbacks(NotificationsDbContext db, IEnumerable<ICallbackHandler> handlers, TimeProvider clock, ILogger<ProviderCallbacks> logger,
+        People.ChatLinks links, People.ContactCrypto crypto, Inbox.PersonInboxEditor inbox)
     {
         public async Task<CallbackAnswer> ReceiveAsync(string provider, Guid integrationId, CallbackRequest request, CancellationToken ct)
         {
@@ -107,6 +111,11 @@ namespace Juice.Notifications.Callbacks
             {
                 return false;
             }
+            if (e.Kind == CallbackKind.Interaction)
+            {
+                // Acting opens a transaction of its own and records once (a second press writes nothing), so it goes first.
+                await ActAsync(integration, e, ct);
+            }
             await using var tx = await db.Database.BeginTransactionAsync(ct);
             var delivery = e.DeliveryId is { } id
                 ? await db.Deliveries.SingleOrDefaultAsync(d => d.TenantId == tenant && d.Id == id, ct)
@@ -123,6 +132,10 @@ namespace Juice.Notifications.Callbacks
             if (delivery is not null)
             {
                 await ApplyAsync(delivery, e, now, ct);
+            }
+            if (e.Kind == CallbackKind.Link && !await links.RedeemAsync(tenant, integration.Channel, e.Detail, e.Account, ct))
+            {
+                logger.LogInformation("The {Provider} bot of integration {Integration} heard a message that links nothing.", provider, integration.Key);
             }
             try
             {
@@ -168,6 +181,40 @@ namespace Juice.Notifications.Callbacks
                 case CallbackKind.Complained:
                     await MarkContactPointAsync(delivery, ContactHealth.Failed, "The person complained about a message: " + (detail ?? "reported as spam."), now, ct);
                     break;
+            }
+        }
+
+        /// <summary>
+        /// A chat button (M27): the people whose verified contact point on the integration's channel is the account that pressed it act on their
+        /// inbox item for the delivery's notification. The answer is only logged: the provider has its 200 either way.
+        /// </summary>
+        private async Task ActAsync(Integration integration, CallbackEvent e, CancellationToken ct)
+        {
+            var tenant = integration.TenantId;
+            if (e.DeliveryId is not { } deliveryId || e.ActionId is not { Length: > 0 } actionId || e.Account is not { Length: > 0 } account)
+            {
+                return;
+            }
+            var hash = crypto.ContactHash(tenant, integration.Channel, account);
+            var people = await db.ContactPoints.AsNoTracking()
+                .Where(c => c.TenantId == tenant && c.Channel == integration.Channel && c.AddressHash == hash && c.VerifiedAt != null)
+                .Select(c => c.SubscriberId).ToListAsync(ct);
+            var requests = db.DeliveryItems.Where(i => i.TenantId == tenant && i.DeliveryId == deliveryId).Select(i => i.RequestId);
+            var deliveries = db.DeliveryItems.Where(i => i.TenantId == tenant && requests.Contains(i.RequestId)).Select(i => i.DeliveryId);
+            var item = people.Count == 0 ? null : await db.InboxItems.AsNoTracking()
+                .Where(i => i.TenantId == tenant && people.Contains(i.SubscriberId) && deliveries.Contains(i.DeliveryId))
+                .OrderBy(i => i.Id).Select(i => new { i.Id, i.SubscriberId }).FirstOrDefaultAsync(ct);
+            if (item is null)
+            {
+                logger.LogInformation("A {Channel} action {Action} on delivery {Delivery} in tenant {Tenant} came from {Who}, so nothing was done.",
+                    integration.Channel, actionId, deliveryId, tenant, people.Count == 0 ? "an account no one linked" : "someone with no inbox item for it");
+                return;
+            }
+            var acted = await inbox.ActAsync(tenant, item.SubscriberId, item.Id, actionId, ct);
+            if (acted.Value is null)
+            {
+                logger.LogInformation("A {Channel} action {Action} on inbox item {Item} in tenant {Tenant} was refused: {Reason}", integration.Channel, actionId,
+                    item.Id, tenant, acted.Message);
             }
         }
 

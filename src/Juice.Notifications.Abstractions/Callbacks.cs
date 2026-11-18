@@ -20,8 +20,16 @@ namespace Juice.Notifications
         SoftBounced,
         /// <summary>The person reported it as spam or unsubscribed through the provider: the contact point fails.</summary>
         Complained,
-        /// <summary>A button pressed in a chat message (phase-4-plan I40, M27).</summary>
+        /// <summary>
+        /// A button pressed in a chat message (phase-4-plan I40, M27): <see cref="CallbackEvent.ActionId"/> by <see cref="CallbackEvent.Account"/>
+        /// on <see cref="CallbackEvent.DeliveryId"/>; the person whose account it is acts on their inbox item for that notification.
+        /// </summary>
         Interaction,
+        /// <summary>
+        /// A person sent the bot a link code (phase-4-plan I41): <see cref="CallbackEvent.Detail"/> is the code, <see cref="CallbackEvent.Account"/>
+        /// the chat account that sent it, which becomes their verified contact point.
+        /// </summary>
+        Link,
     }
 
     /// <summary>

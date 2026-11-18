@@ -1427,6 +1427,64 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.ToTable("interactions", "notifications");
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.LinkCode", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("channel");
+
+                    b.Property<string>("CodeHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("code_hash");
+
+                    b.Property<Guid?>("ContactPointId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("contact_point_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<Guid>("SubscriberId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subscriber_id");
+
+                    b.Property<DateTimeOffset?>("UsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("used_at");
+
+                    b.HasKey("TenantId", "Id")
+                        .HasName("pk_link_codes");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("ix_link_codes_expires_at");
+
+                    b.HasIndex("TenantId", "CodeHash")
+                        .IsUnique()
+                        .HasDatabaseName("ix_link_codes_once");
+
+                    b.HasIndex("TenantId", "SubscriberId", "CreatedAt")
+                        .HasDatabaseName("ix_link_codes_tenant_id_subscriber_id_created_at");
+
+                    b.ToTable("link_codes", "notifications");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.LocalGroup", b =>
                 {
                     b.Property<Guid>("TenantId")
@@ -2807,6 +2865,16 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_interactions_inbox_items_tenant_id_inbox_item_id");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.LinkCode", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.Subscriber", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubscriberId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_link_codes_subscribers_tenant_id_subscriber_id");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.LocalGroupMember", b =>

@@ -790,6 +790,19 @@ namespace Juice.Notifications.Rendering
                 actions is null ? null : JsonElement.Parse(actions)));
         }
 
+        /// <summary>
+        /// A chat message (phase-4-plan M27): as an inbox item, a first line <c>Title: …</c> gives the title (otherwise the type's name), the rest
+        /// is the text; the link is the request's <c>links.self</c>; the type's actions as declared. Plain text: providers escape it.
+        /// </summary>
+        public static string Chat(string? rendered, string fallbackTitle, IReadOnlyDictionary<string, string>? links, string? actions)
+        {
+            var (title, text) = Header(rendered ?? "", "Title:", fallbackTitle);
+            var url = links?.GetValueOrDefault("self") is { } self && Uri.TryCreate(self, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp) && self.Length <= MaxUrl ? self : null;
+            return JsonSerializer.Serialize(new ChatContent(Cut(title, MaxTitle), Cut(text.TrimEnd(), MaxBody), url,
+                actions is null ? null : JsonElement.Parse(actions)));
+        }
+
         /// <summary>At most <paramref name="max"/> UTF-16 units, never splitting a surrogate pair (half an emoji isn't text).</summary>
         [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(text))]
         public static string? Cut(string? text, int max)
@@ -822,6 +835,9 @@ namespace Juice.Notifications.Rendering
     public sealed record EmailContent(string Subject, string Text, string Html);
 
     public sealed record WebhookContent(string ContentType, string Body);
+
+    /// <summary>A chat delivery's content (phase-4-plan M27): plain text the provider escapes, a link, and the type's actions (<c>[{ id, label }]</c>).</summary>
+    public sealed record ChatContent(string Title, string Text, string? Url, JsonElement? Actions);
 
     /// <summary>An inbox delivery's content: what its item shows, and the type's actions (<c>[{ id, label }]</c>).</summary>
     public sealed record InboxContent(string Type, string Title, string Body, string? Url, JsonElement? Actions);

@@ -121,6 +121,7 @@ namespace Juice.Notifications.Api
             // Provider callbacks (phase-4-plan I40): anonymous, verified per provider, limited per integration.
             services.Configure<Callbacks.CallbackOptions>(configuration.GetSection(Callbacks.CallbackOptions.Section));
             services.AddScoped<Callbacks.ProviderCallbacks>();
+            services.AddScoped<People.ChatLinks>();
             services.AddCallbackLimits(configuration);
 
             // The pipeline stages (design §4.1). Their workers run unless Stages:Run is false (a host that only takes requests).

@@ -141,7 +141,7 @@ namespace Juice.Notifications.IntegrationTests
         public static TheoryData<string, string, string> BadDeclarations => new()
         {
             { "key outside the namespace", """{ "key": "other.thing" }""", "/key" },
-            { "unknown channel", """{ "templates": { "slack": "x" } }""", "/templates/slack" },
+            { "unknown channel", """{ "templates": { "pigeon": "x" } }""", "/templates/pigeon" },
             { "passthrough on email", """{ "templates": { "email": "passthrough" } }""", "/templates/email" },
             { "template that doesn't parse", """{ "templates": { "email": "{{ if }}" } }""", "/templates/email" },
             { "locale without en", """{ "templates": { "email": { "vi": "x" } } }""", "/templates/email" },

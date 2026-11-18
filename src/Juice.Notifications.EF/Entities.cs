@@ -292,6 +292,24 @@ namespace Juice.Notifications.Data
     }
 
     /// <summary>The code outstanding for a contact point (phase-2-plan I20): one at a time, hashed, a few tries, a short life.</summary>
+    /// <summary>
+    /// A one-time code a person sends a chat bot to link their account there (phase-4-plan I41): stored as a keyed hash, unique per tenant, valid
+    /// for 15 minutes, used once. The account that sends it becomes the person's verified contact point on the channel.
+    /// </summary>
+    public sealed class LinkCode : ITenantOwned
+    {
+        public Guid TenantId { get; init; }
+        public Guid Id { get; init; } = Guid.CreateVersion7();
+        public Guid SubscriberId { get; init; }
+        public required string Channel { get; init; }
+        public required string CodeHash { get; init; }
+        public DateTimeOffset CreatedAt { get; init; }
+        public DateTimeOffset ExpiresAt { get; init; }
+        public DateTimeOffset? UsedAt { get; set; }
+        /// <summary>The contact point the code made, once used.</summary>
+        public Guid? ContactPointId { get; set; }
+    }
+
     public sealed class ContactVerification
     {
         public Guid TenantId { get; init; }

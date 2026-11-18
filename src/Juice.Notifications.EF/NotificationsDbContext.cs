@@ -65,6 +65,7 @@ namespace Juice.Notifications.Data
         public DbSet<ProducerEvent> ProducerEvents => Set<ProducerEvent>();
         public DbSet<Interaction> Interactions => Set<Interaction>();
         public DbSet<ProviderEvent> ProviderEvents => Set<ProviderEvent>();
+        public DbSet<LinkCode> LinkCodes => Set<LinkCode>();
         public DbSet<Escalation> Escalations => Set<Escalation>();
         public DbSet<InboxItem> InboxItems => Set<InboxItem>();
         public DbSet<NotificationRequest> Requests => Set<NotificationRequest>();
@@ -280,6 +281,18 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.TenantId, x.AddressHash });
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
                     .HasConstraintName(Constraints.ContactPointSubscriber);
+            });
+
+            model.Entity<LinkCode>(e =>
+            {
+                e.ToTable("link_codes");
+                TenantKey(e);
+                e.Property(x => x.Channel).HasMaxLength(20);
+                e.Property(x => x.CodeHash).HasMaxLength(64);
+                e.HasIndex(x => new { x.TenantId, x.CodeHash }).IsUnique().HasDatabaseName(Constraints.LinkCodeOnce);
+                e.HasIndex(x => new { x.TenantId, x.SubscriberId, x.CreatedAt });
+                e.HasIndex(x => x.ExpiresAt);
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade);
             });
 
             model.Entity<ContactVerification>(e =>

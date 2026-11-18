@@ -2,6 +2,7 @@ using Juice.Notifications;
 using Juice.Notifications.Api;
 using Juice.Notifications.Data.PostgreSQL;
 using Juice.Notifications.Messaging;
+using Juice.Notifications.Providers.Chat;
 using Juice.Notifications.Providers.Email;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -14,6 +15,8 @@ builder.Services.AddJuiceNotifications(builder.Configuration).AddPostgresClaimSt
 builder.Services.AddNotificationsRabbitMQIntake(builder.Configuration);
 // Email through SES and SendGrid (phase-4-plan I39, M26), with their callbacks.
 builder.Services.AddEmailProviders();
+// Slack and Teams (phase-4-plan M27): the slack and teams channels, their providers, and the Slack app's callbacks.
+builder.Services.AddChatProviders();
 
 // Metrics and traces (design §14) over OTLP, when the deployment names a collector (OTEL_EXPORTER_OTLP_ENDPOINT, and the other standard
 // OTEL_* variables). Traces follow a request from the producer's traceparent through the stages to the provider call.

@@ -7,6 +7,11 @@ namespace Juice.Notifications
         None,
         /// <summary>An email address, lowercased.</summary>
         Email,
+        /// <summary>
+        /// An account on a chat service (a Slack user, a Telegram chat), linked by the person through the service's bot (phase-4-plan I41): never
+        /// entered by hand nor named in a request, and never matched by name or email (D23).
+        /// </summary>
+        Account,
     }
 
     /// <summary>Who a channel reaches.</summary>
@@ -29,6 +34,12 @@ namespace Juice.Notifications
         /// type's name), and the link is the request's <c>links.self</c>.
         /// </summary>
         Item,
+        /// <summary>
+        /// A chat message (<c>ChatContent</c>): a title, a text body and a link, as the inbox item's; and the type's actions, as buttons where the
+        /// provider can take their answer. The text is plain: each provider escapes it for its own markup, so no data value can mention a whole
+        /// channel or forge a link. With no template, the type's name.
+        /// </summary>
+        Chat,
     }
 
     /// <summary>

@@ -70,7 +70,7 @@ namespace Juice.Notifications.Providers.Email
             {
                 return "settings.region is an AWS region, such as eu-west-1.";
             }
-            if (!ProviderHttp.IsAddress(s.From))
+            if (!EmailAddresses.IsAddress(s.From))
             {
                 return "settings.from is the sender's bare email address, an identity verified in SES.";
             }
@@ -96,7 +96,7 @@ namespace Juice.Notifications.Providers.Email
             {
                 return SendResult.Permanent(FailureCategory.Provider, "The SES integration's secret isn't {accessKeyId}:{secretAccessKey}.");
             }
-            if (!ProviderHttp.IsRecipient(delivery.Destination))
+            if (!EmailAddresses.IsRecipient(delivery.Destination))
             {
                 return SendResult.Permanent(FailureCategory.Destination, "The destination isn't an email address.");
             }

@@ -140,6 +140,25 @@ tests, a commit and a build-board update.
     delivery and the person's address; a forged or unsigned one is refused).
 - **M27 Chat: Slack and Teams** (`p4-01`): Slack webhook and app (channels, DMs to linked people, buttons → interactions), Teams workflow
   webhook (Adaptive Card); Slack linking (I41).
+  - *As built:* package `Juice.Notifications.Providers.Chat` (`AddChatProviders`, added by the App) defines channels `slack` (people and
+    targets) and `teams` (targets). New in the core: `ContentShape.Chat` (`ChatContent`: title, plain text, link, actions; with no template, the
+    type's name), `AddressKind.Account` (a chat account: never in a request, never added by hand, only linked), `ITargetAddresses` (a provider
+    checks its own target addresses: Slack channel ids; webhook URLs only by reference), and `ProviderHttp` moved from the email package so
+    every HTTP provider shares it. **Slack app** (`slack`): `chat.postMessage`, secret `{botToken}:{signingSecret}`; errors come as
+    `200 {"ok":false}`: `ratelimited` waits, a person or channel not found or deactivated is gone, a channel without the bot or archived is
+    `Destination`, refused blocks are `Content`, token and scope errors `Provider`. Success is `Delivered`. Text is escaped (`&`, `<`,
+    `>`) so data can't mention `@channel` or forge links; buttons are `act:{actionId}` with the delivery id as value. **Slack webhooks**
+    (`slack-webhook`): `hooks.slack.com` only, link button only; a person's delivery through one fails over (`Provider`). **Teams**
+    (`teams-workflow`): an Adaptive Card 1.4 to a Logic Apps or Power Platform URL; `](` broken with a zero-width space so data can't forge a
+    Markdown link. **Callbacks**: `SlackCallbackHandler` checks `v0` signatures and a 5-minute window; `block_actions` become interactions,
+    applied by `ProviderCallbacks` as the linked person's action on their inbox item for the same request (`PersonInboxEditor.ActAsync`: same
+    checks, recorded once, the producer hears it); `url_verification` is answered; a direct message becomes a link request. **Linking** (I41):
+    `link_codes` (keyed hash, unique per tenant; 15 minutes; 10 an hour per person; a new code ends the person's outstanding one);
+    `POST …/me/links`; `ChatLinks.RedeemAsync` upserts a verified contact point (`verifiedBy: link`) with an update statement, as a
+    source's contacts are written, within the contact point limit. Not yet: the library's "link Slack" control (with Telegram's, M28); a reply
+    in Slack after linking or pressing; updating the Slack message once decided. Tests: `SlackProviderTests`, `SlackWebhookProviderTests`,
+    `TeamsWorkflowProviderTests` (contract kit), `SlackCallbackTests`, `ChatFlowTests` in the real host (linking, a button acting on the
+    inbox item, posting to a channel target).
 - **M28 Telegram** (`p4-12`): channel package, chats as targets, linking.
 - **M29 SMS: Twilio** (`p4-02`).
 - **M30 Push** (`p4-03`): FCM, APNs, Web Push, the library's service worker helper.

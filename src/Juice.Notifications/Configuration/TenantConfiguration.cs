@@ -428,10 +428,11 @@ namespace Juice.Notifications.Configuration
                 return ConfigManaged<TargetView>("target " + r.Key);
             }
             string? address = null;
-            if (r.Address is not null && (address = ConfigurationRules.Address(integration.Channel, r.Address)) is null)
+            var own = providers.FirstOrDefault(p => p.Channel == integration.Channel && p.Kind == integration.Kind) as ITargetAddresses;
+            if (r.Address is not null && (address = own is not null ? own.NormalizeTarget(r.Address) : ConfigurationRules.Address(integration.Channel, r.Address)) is null)
             {
-                return Invalid<TargetView>(new FieldError("/address", integration.Channel == Channels.Email
-                    ? "The address is a bare email address." : "The address is an absolute http or https URL without credentials."));
+                return Invalid<TargetView>(new FieldError("/address", own?.TargetRule ?? (integration.Channel == Channels.Email
+                    ? "The address is a bare email address." : "The address is an absolute http or https URL without credentials.")));
             }
             // Through the API, a secret address sent back as it is stored is no new one (a client that PUTs back what it read).
             var sentAddressRef = !r.Provisioned && existing is not null && r.AddressRef == existing.AddressRef ? null : r.AddressRef;

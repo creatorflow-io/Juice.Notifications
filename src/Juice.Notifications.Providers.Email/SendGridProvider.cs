@@ -73,7 +73,7 @@ namespace Juice.Notifications.Providers.Email
             {
                 return "settings is an object with from and optionally fromName, region and eventWebhookKey.";
             }
-            if (!ProviderHttp.IsAddress(s.From))
+            if (!EmailAddresses.IsAddress(s.From))
             {
                 return "settings.from is the sender's bare email address, a sender identity verified in SendGrid.";
             }
@@ -107,7 +107,7 @@ namespace Juice.Notifications.Providers.Email
             {
                 return SendResult.Permanent(FailureCategory.Provider, "The SendGrid integration has no API key (secretRef).");
             }
-            if (!ProviderHttp.IsRecipient(delivery.Destination))
+            if (!EmailAddresses.IsRecipient(delivery.Destination))
             {
                 return SendResult.Permanent(FailureCategory.Destination, "The destination isn't an email address.");
             }

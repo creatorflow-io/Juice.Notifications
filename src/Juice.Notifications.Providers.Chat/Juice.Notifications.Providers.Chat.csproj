@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Chat: the slack and teams channels, the Slack app and webhooks, Teams workflow webhooks (phase-4-plan I39, M27), and the Slack app's
+       callbacks (buttons, account linking). A host adds them with AddChatProviders. -->
+  <PropertyGroup>
+    <Description>Juice Notifications chat providers: Slack (app and incoming webhooks, buttons, account linking) and Microsoft Teams workflow webhooks.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Juice.Notifications.Tests" />
+    <InternalsVisibleTo Include="Juice.Notifications.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

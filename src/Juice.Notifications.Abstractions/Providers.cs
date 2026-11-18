@@ -55,4 +55,17 @@ namespace Juice.Notifications
 
         Task<SendResult> SendAsync(RenderedDelivery delivery, IntegrationContext integration, CancellationToken ct);
     }
+
+    /// <summary>
+    /// A provider whose shared targets have addresses of its own kind (a Slack channel id), checked when a target is saved instead of the
+    /// channel's rule (email addresses, http URLs).
+    /// </summary>
+    public interface ITargetAddresses
+    {
+        /// <summary>The address as stored, or null when it isn't one this provider sends to.</summary>
+        string? NormalizeTarget(string address);
+
+        /// <summary>What a target's address is, for the refusal.</summary>
+        string TargetRule { get; }
+    }
 }

@@ -43,6 +43,38 @@ Each message carries the custom argument `delivery_id`. To receive events, set t
 `https://{public url}/api/v1/callbacks/sendgrid/{integrationId}`, select *Delivered*, *Bounced*, *Dropped*, *Spam reports* and
 *Unsubscribes*, turn on the signed event webhook, and copy its verification key to `settings.eventWebhookKey`.
 
+## Chat: Slack (`slack`, `slack-webhook`)
+
+Package `Juice.Notifications.Providers.Chat` (`AddChatProviders`). Channel `slack` reaches channels (targets) and people (linked accounts).
+
+**The Slack app** (`slack`) posts with `chat.postMessage`, to channels and as direct messages, with the type's actions as buttons.
+
+| Field | |
+|---|---|
+| `secretRef` | names a value `{botToken}:{signingSecret}`: the bot token (`xoxb-…`, scopes `chat:write`, `im:history`) and the app's signing secret |
+| target `address` | a channel's id (`C…` or `G…`); invite the app to the channel |
+
+In the app's settings, set both *Interactivity* and *Event Subscriptions* (bot event `message.im`) to
+`https://{public url}/api/v1/callbacks/slack/{integrationId}`; Slack's URL check is answered. Each call is checked with the signing secret
+and refused when its timestamp is more than five minutes off.
+
+- **Buttons**: a press by a person who linked their Slack account acts on their inbox item for the same notification, as in the inbox (the
+  action must still be open). A press from an account no one linked does nothing.
+- **Linking**: a person asks for a code (`POST /api/v1/tenants/{tenantId}/me/links` with `{"channel": "slack"}`; 15 minutes, used once)
+  and sends it to the app in a direct message. That account becomes their verified Slack contact point. Slack accounts can't be added by hand.
+
+**Incoming webhooks** (`slack-webhook`) post to the one channel each was made for: a target whose `addressRef` names the webhook's URL
+(`https://hooks.slack.com/…`, a secret). A link button, no answering buttons.
+
+## Chat: Microsoft Teams (`teams-workflow`)
+
+Channel `teams` reaches channels only. Create a Teams workflow "Post to a channel when a webhook request is received" and give a target
+`addressRef` naming its URL (a secret; `*.logic.azure.com` or `*.api.powerplatform.com`). Messages are Adaptive Cards with the title,
+the text and a link. The Teams bot, with buttons and direct messages, comes later (phase-4-plan p4-d2).
+
+Chat text is plain: Slack's `<!channel>`-style mentions and links, and Markdown links in Teams, are escaped. A type with no template for a
+chat channel sends its name, its link and its actions.
+
 ## What callbacks change
 
 | Event | Delivery | Person's contact point |
