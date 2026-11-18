@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Telegram (phase-4-plan I39, M28): a channel package with its definition, its rendering of chat content (HTML), the Bot API provider,
+       and the bot's webhook (buttons, account linking with /start). A host adds it with AddTelegram. -->
+  <PropertyGroup>
+    <Description>Juice Notifications Telegram channel: the Bot API provider, group and channel chats as targets, linked personal chats, and buttons.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Juice.Notifications.Tests" />
+    <InternalsVisibleTo Include="Juice.Notifications.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

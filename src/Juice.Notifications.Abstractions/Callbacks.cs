@@ -78,3 +78,16 @@ namespace Juice.Notifications
         Task<CallbackResult> ReadAsync(CallbackRequest request, IntegrationContext integration, CancellationToken ct);
     }
 }
+
+namespace Juice.Notifications
+{
+    /// <summary>
+    /// A provider that must be told where its callbacks go (Telegram's <c>setWebhook</c>), rather than set up in the provider's own console: an
+    /// admin calls <c>POST /api/v1/tenants/{tenantId}/integrations/{key}/callbacks</c> once the deployment's <c>Callbacks:PublicUrl</c> is set.
+    /// </summary>
+    public interface ICallbackRegistration
+    {
+        /// <summary>Points the provider at <paramref name="url"/>; null when done, else why not (shown to the admin).</summary>
+        Task<string?> RegisterCallbacksAsync(IntegrationContext integration, Uri url, CancellationToken ct);
+    }
+}

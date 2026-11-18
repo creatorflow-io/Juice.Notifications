@@ -72,6 +72,23 @@ Channel `teams` reaches channels only. Create a Teams workflow "Post to a channe
 `addressRef` naming its URL (a secret; `*.logic.azure.com` or `*.api.powerplatform.com`). Messages are Adaptive Cards with the title,
 the text and a link. The Teams bot, with buttons and direct messages, comes later (phase-4-plan p4-d2).
 
+## Chat: Telegram (`telegram`)
+
+Package `Juice.Notifications.Providers.Telegram` (`AddTelegram`). Channel `telegram` reaches group and channel chats (targets) and people's
+own chats (linked).
+
+| Field | |
+|---|---|
+| `secretRef` | names the bot's token, from BotFather |
+| target `address` | a chat's id (`-100…` for a group or channel) or a public channel's `@name`; add the bot (an admin in a channel) |
+
+Set `Callbacks:PublicUrl`, then register the bot's webhook: `POST /api/v1/tenants/{tenantId}/integrations/{key}/callbacks`. The service
+calls `setWebhook` with its URL and a secret token derived from the bot token, and refuses updates without it. A person links their chat by
+sending `/start CODE` to the bot. The library's contact points page shows the code, and opens the bot with it when `telegramBot` is
+configured. Buttons press as in Slack; the bot answers in the chat.
+
+In the library (`@juice-js/notifications`), `linkChannels: ['slack', 'telegram']` shows the linking controls.
+
 Chat text is plain: Slack's `<!channel>`-style mentions and links, and Markdown links in Teams, are escaped. A type with no template for a
 chat channel sends its name, its link and its actions.
 

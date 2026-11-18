@@ -160,6 +160,19 @@ tests, a commit and a build-board update.
     `TeamsWorkflowProviderTests` (contract kit), `SlackCallbackTests`, `ChatFlowTests` in the real host (linking, a button acting on the
     inbox item, posting to a channel target).
 - **M28 Telegram** (`p4-12`): channel package, chats as targets, linking.
+  - *As built:* package `Juice.Notifications.Providers.Telegram` (`AddTelegram`): the `telegram` channel (people and targets, chat content),
+    `TelegramProvider` (`sendMessage` in HTML parse mode, `&<>` escaped, the title bold, inline buttons with `callback_data`
+    `a:{delivery:N}:{action}` when it fits 64 bytes, an Open button for https links). Targets: a chat id or a public channel's `@name`.
+    Errors: 429 waits; 401/404 (a bad token) `Provider`; blocked by the person, deactivated, or chat not found: gone; removed from a group or no
+    rights: `Destination`; other 400s `Content`. The token is in the URL, so a transport error's text is scrubbed of it. New
+    `ICallbackRegistration` (Abstractions) and `POST …/integrations/{key}/callbacks` (admin): Telegram's `setWebhook` with the public URL and
+    a secret token derived from the bot token and the integration (HMAC; no second secret), `allowed_updates` message and callback_query.
+    `TelegramCallbackHandler` refuses updates without that token; `/start CODE` in a private chat links the sender (their user id is their
+    chat's), and the bot answers through the webhook's reply; a button press is an interaction (applied as M27's), its spinner answered. Event
+    ids are update ids. Library (juice-layout `dev/notifications-inbox`, a4012ae): the contact points page lists chat accounts apart and links
+    them with a code (`linkChannels`, `telegramBot` for the deep link). Tests: `TelegramProviderTests` (contract kit, HTML, buttons,
+    blocking, setWebhook), `TelegramCallbackTests`, `TelegramFlowTests` in the real host (webhook registration, linking with `/start`, a
+    group target).
 - **M29 SMS: Twilio** (`p4-02`).
 - **M30 Push** (`p4-03`): FCM, APNs, Web Push, the library's service worker helper.
 - **M31 Storms and bulk replay** (`p4-06`, `p4-08`).

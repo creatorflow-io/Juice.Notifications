@@ -11,6 +11,7 @@
     <ProjectReference Include="..\Juice.Notifications.Messaging\Juice.Notifications.Messaging.csproj" />
     <ProjectReference Include="..\Juice.Notifications.Providers.Chat\Juice.Notifications.Providers.Chat.csproj" />
     <ProjectReference Include="..\Juice.Notifications.Providers.Email\Juice.Notifications.Providers.Email.csproj" />
+    <ProjectReference Include="..\Juice.Notifications.Providers.Telegram\Juice.Notifications.Providers.Telegram.csproj" />
   </ItemGroup>
 
   <ItemGroup>

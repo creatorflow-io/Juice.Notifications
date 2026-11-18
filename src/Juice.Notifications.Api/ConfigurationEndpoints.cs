@@ -2,6 +2,7 @@ using Juice.MediatR;
 using Juice.Notifications.Api.Contracts;
 using Juice.Notifications.Configuration;
 using Juice.Notifications.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Juice.Notifications.Api
 {
@@ -21,6 +22,40 @@ namespace Juice.Notifications.Api
                 => SendAsync(mediator, db, new PutIntegration(tenantId, key, body.Channel, body.Kind, body.Settings, body.SecretRef, body.Priority, body.Enabled), ToResponse, ct));
             tenant.MapDelete("/integrations/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteIntegration(tenantId, key), ct));
+            // A provider told where its callbacks go (Telegram's setWebhook; phase-4-plan M28): the deployment's public URL for this integration.
+            tenant.MapPost("/integrations/{key}/callbacks", async (Guid tenantId, string key, NotificationsDbContext db, IEnumerable<INotificationProvider> providers,
+                IEnumerable<ICallbackHandler> handlers, Microsoft.Extensions.Options.IOptions<Callbacks.CallbackOptions> callbacks, CancellationToken ct) =>
+            {
+                var integration = await db.Integrations.AsNoTracking().SingleOrDefaultAsync(i => i.TenantId == tenantId && i.Key == key, ct);
+                if (integration is null)
+                {
+                    return ApiResults.NotFound($"There is no integration '{key}'.");
+                }
+                if (providers.FirstOrDefault(p => p.Channel == integration.Channel && p.Kind == integration.Kind) is not ICallbackRegistration registration)
+                {
+                    return ApiResults.Problem(StatusCodes.Status422UnprocessableEntity, ErrorCodes.CallbacksNotRegistered,
+                        $"A {integration.Kind} integration's callbacks are set up in the provider's own console (see docs/providers.md).");
+                }
+                // The path segment is the provider's handler's: what the callback endpoint finds it by.
+                var path = handlers.FirstOrDefault(h => h.Handles(integration.Kind))?.Provider ?? integration.Kind;
+                if (callbacks.Value.UrlFor(path, integration.Id) is not { } url)
+                {
+                    return ApiResults.Problem(StatusCodes.Status422UnprocessableEntity, ErrorCodes.PublicUrlUnset,
+                        "The deployment's Callbacks:PublicUrl isn't set, so there is no address to give the provider.");
+                }
+                string? secret;
+                try
+                {
+                    secret = integration.SecretRef is { } reference ? Providers.SecretReferences.Resolve(reference) : null;
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return ApiResults.Problem(StatusCodes.Status422UnprocessableEntity, ErrorCodes.ProviderRefused, ex.Message);
+                }
+                var refusal = await registration.RegisterCallbacksAsync(new IntegrationContext(integration.Id, integration.Key, integration.Kind, integration.Settings,
+                    secret), url, ct);
+                return refusal is null ? Results.NoContent() : ApiResults.Problem(StatusCodes.Status502BadGateway, ErrorCodes.ProviderRefused, refusal);
+            });
             tenant.MapPut("/integrations/{key}/targets/{targetKey}", (Guid tenantId, string key, string targetKey, PutTargetBody body, IMediator mediator,
                 NotificationsDbContext db, CancellationToken ct)
                 => SendAsync(mediator, db, new PutTarget(tenantId, key, targetKey, body.Address, body.AddressRef, body.Enabled), ToResponse, ct));

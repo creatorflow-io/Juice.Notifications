@@ -4,6 +4,7 @@ using Juice.Notifications.Data.PostgreSQL;
 using Juice.Notifications.Messaging;
 using Juice.Notifications.Providers.Chat;
 using Juice.Notifications.Providers.Email;
+using Juice.Notifications.Providers.Telegram;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -17,6 +18,8 @@ builder.Services.AddNotificationsRabbitMQIntake(builder.Configuration);
 builder.Services.AddEmailProviders();
 // Slack and Teams (phase-4-plan M27): the slack and teams channels, their providers, and the Slack app's callbacks.
 builder.Services.AddChatProviders();
+// Telegram (phase-4-plan M28): the telegram channel, the Bot API provider and the bot's webhook.
+builder.Services.AddTelegram();
 
 // Metrics and traces (design §14) over OTLP, when the deployment names a collector (OTEL_EXPORTER_OTLP_ENDPOINT, and the other standard
 // OTEL_* variables). Traces follow a request from the producer's traceparent through the stages to the provider call.

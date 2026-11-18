@@ -96,5 +96,14 @@ namespace Juice.Notifications
         public const string DisplayGroupLimit = "display_group_limit";
         /// <summary>One of the three groups every tenant has: renamed and reordered, never deleted.</summary>
         public const string DisplayGroupBuiltIn = "display_group_built_in";
+
+        // Provider callbacks (phase-4-plan M28)
+
+        /// <summary>The integration's provider is set up in its own console, not told where its callbacks go by the service.</summary>
+        public const string CallbacksNotRegistered = "callbacks_not_registered";
+        /// <summary>The deployment's <c>Callbacks:PublicUrl</c> isn't set, so there is no address to give the provider.</summary>
+        public const string PublicUrlUnset = "public_url_unset";
+        /// <summary>The provider refused, or couldn't be reached; the detail says what it answered.</summary>
+        public const string ProviderRefused = "provider_refused";
     }
 }
