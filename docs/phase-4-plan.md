@@ -255,6 +255,8 @@ tests, a commit and a build-board update.
     stay `env:`/`file:` (`SecretReferences.IsLocal`). Setup: [`providers.md`](providers.md#secrets). Tests: `SecretResolverTests`,
     `FailoverTests.An_unreadable_vault_secret_is_a_provider_failure_that_fails_over`.
 - **M35 Proof points and acceptance** (`p4-g1` … `p4-g3`), then the review loop over phases 3 and 4.
+  - *Done 18 Nov 2026:* [`phase-4-acceptance.md`](phase-4-acceptance.md): proof points 1–4 green, the load check unchanged (p95 0.11 s), the
+    demo `deploy/local/scripts/demo-phase4.sh`.
 
 ---
 

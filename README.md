@@ -10,7 +10,7 @@ which channels, in what words and when, then sends it, retries it and records wh
 
 ## Status
 
-Phase 1 (core) is in progress. Working end to end today:
+Phases 1 to 4 are accepted ([`docs/phase-4-acceptance.md`](docs/phase-4-acceptance.md)); SQL Server is phase 4b. Phase 1 brought:
 
 - applications, versioned notification types (JSON Schema 2020-12 data, Scriban templates in a sandbox) and HTTP intake with idempotency;
 - tenant configuration: integrations, targets, routes and the outbound allowlist, for platform admins and the tenant's own admins;
