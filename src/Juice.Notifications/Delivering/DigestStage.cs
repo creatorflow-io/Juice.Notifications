@@ -27,6 +27,18 @@ namespace Juice.Notifications.Delivering
 
         public string Name => StageName;
 
+        /// <summary>
+        /// Closing an open digest: the lock members join under (<see cref="WorkflowRunner.DigestLock"/>), then the close, run in their own
+        /// transaction and committed at once, by a step (async) and by a give-up (sync) alike.
+        /// </summary>
+        private static (FormattableString Lock, FormattableString Close) Closing(Digest row, DateTimeOffset now)
+        {
+            var lockKey = WorkflowRunner.DigestLock(row.TenantId, row.TypeKey, row.By, row.Key);
+            var (closed, open) = (DigestState.Closed.ToString(), DigestState.Open.ToString());
+            return ($"SELECT pg_advisory_xact_lock({WorkflowRunner.DigestLockSpace}, hashtext({lockKey}))",
+                $"UPDATE notifications.digests SET state = {closed}, closed_at = {now} WHERE tenant_id = {row.TenantId} AND id = {row.Id} AND state = {open}");
+        }
+
         public void GiveUp(StageContext context, Digest row, string error)
         {
             // Nothing is sent from a digest that can't be planned: its waiting members fail with it (history shows them ended, and their requests
@@ -36,13 +48,12 @@ namespace Juice.Notifications.Delivering
             if (row.State == DigestState.Open)
             {
                 var db = context.Db;
+                var (lockStatement, close) = Closing(row, context.Now);
                 using var transaction = db.Database.BeginTransaction();
-                var lockKey = WorkflowRunner.DigestLock(row.TenantId, row.TypeKey, row.By, row.Key);
-                db.Database.ExecuteSql($"SELECT pg_advisory_xact_lock({WorkflowRunner.DigestLockSpace}, hashtext({lockKey}))");
-                var (closed, open, now) = (DigestState.Closed.ToString(), DigestState.Open.ToString(), context.Now);
-                db.Database.ExecuteSql($"UPDATE notifications.digests SET state = {closed}, closed_at = {now} WHERE tenant_id = {row.TenantId} AND id = {row.Id} AND state = {open}");
+                db.Database.ExecuteSql(lockStatement);
+                db.Database.ExecuteSql(close);
                 transaction.Commit();
-                row.ClosedAt ??= now;
+                row.ClosedAt = context.Now;
             }
             row.State = DigestState.Cancelled;
             foreach (var member in context.Db.Recipients.Where(r => r.TenantId == row.TenantId && r.DigestId == row.Id && r.Outcome == RecipientOutcome.Pending).ToList())
@@ -64,12 +75,10 @@ namespace Juice.Notifications.Delivering
             }
             if (row.State == DigestState.Open)
             {
+                var (lockStatement, close) = Closing(row, now);
                 await using var transaction = await db.Database.BeginTransactionAsync(ct);
-                var lockKey = WorkflowRunner.DigestLock(row.TenantId, row.TypeKey, row.By, row.Key);
-                await db.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({WorkflowRunner.DigestLockSpace}, hashtext({lockKey}))", ct);
-                var closed = DigestState.Closed.ToString();
-                var open = DigestState.Open.ToString();
-                await db.Database.ExecuteSqlAsync($"UPDATE notifications.digests SET state = {closed}, closed_at = {now} WHERE tenant_id = {row.TenantId} AND id = {row.Id} AND state = {open}", ct);
+                await db.Database.ExecuteSqlAsync(lockStatement, ct);
+                await db.Database.ExecuteSqlAsync(close, ct);
                 await transaction.CommitAsync(ct);
                 (row.State, row.ClosedAt) = (DigestState.Closed, now);
             }

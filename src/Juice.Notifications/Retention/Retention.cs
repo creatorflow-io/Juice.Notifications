@@ -122,6 +122,12 @@ namespace Juice.Notifications.Retention
             }
         }
 
+        /// <summary>
+        /// A delivery not yet settled: an inbox item can still be written from it. Redaction waits for none of a request's to be in one, both
+        /// when it picks requests and again under the request's lock.
+        /// </summary>
+        private static readonly DeliveryStatus[] InFlight = [DeliveryStatus.Pending, DeliveryStatus.Sending, DeliveryStatus.Retrying];
+
         /// <summary>Redacts finished requests, a batch at a time, until none is left; the number redacted.</summary>
         public async Task<int> RedactAsync(CancellationToken ct)
         {
@@ -147,7 +153,7 @@ namespace Juice.Notifications.Retention
                                          // And every delivery of it settled: an inbox item is written when its delivery is sent, after planning.
                                          && !db.DeliveryItems.Any(i => i.TenantId == r.TenantId && i.RequestId == r.Id
                                              && db.Deliveries.Any(d => d.TenantId == i.TenantId && d.Id == i.DeliveryId
-                                                 && (d.Status == DeliveryStatus.Pending || d.Status == DeliveryStatus.Sending || d.Status == DeliveryStatus.Retrying)))
+                                                 && InFlight.Contains(d.Status)))
                                    orderby r.AcceptedAt
                                    select new { r.TenantId, r.Id, r.Data, t.Redact }).Take(options.Value.Batch).ToListAsync(ct);
                 if (ready.Count == 0)
@@ -167,7 +173,7 @@ namespace Juice.Notifications.Retention
                         """).ToListAsync(ct);
                     if (await db.DeliveryItems.AnyAsync(i => i.TenantId == request.TenantId && i.RequestId == request.Id
                             && db.Deliveries.Any(d => d.TenantId == i.TenantId && d.Id == i.DeliveryId
-                                && (d.Status == DeliveryStatus.Pending || d.Status == DeliveryStatus.Sending || d.Status == DeliveryStatus.Retrying)), ct))
+                                && InFlight.Contains(d.Status)), ct))
                     {
                         await transaction.RollbackAsync(ct);
                         continue; // put back meanwhile: redacted once it settles again

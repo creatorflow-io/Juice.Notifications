@@ -151,27 +151,30 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
-        /// A person in quiet hours has only their inbox delivery so far: its failure raises nothing while the rest of their channels wait to be
-        /// planned; once settled (the planner marks the inbox again), it is raised (phases 3–4 review, round 3).
+        /// A person in quiet hours has only their inbox delivery so far: its failure raises nothing while more can be planned for them, and the
+        /// delivery keeps its mark. Whatever settles them (here a correlation closed: cancelled) needs to mark nothing: the event is raised then
+        /// (phases 3–4 review, rounds 3 and 4).
         /// </summary>
-        [Fact]
-        public async Task Delivery_failed_waits_until_nothing_more_can_be_planned_for_the_person()
+        [Theory]
+        [InlineData(RecipientOutcome.Planned)]
+        [InlineData(RecipientOutcome.Cancelled)]
+        public async Task Delivery_failed_waits_until_nothing_more_can_be_planned_for_the_person(RecipientOutcome settled)
         {
             LocalStack.RequireAvailable();
             var (recipient, inbox) = await FailedInboxAsync(RecipientOutcome.Deferred, Seed.Now.AddHours(8));
             var failures = Failures();
 
-            await failures.RunOnceAsync(Ct);
+            Assert.Equal(0, await failures.RunOnceAsync(Ct));
             await using var db = _database.Context();
             Assert.False(await db.ProducerEvents.AnyAsync(Ct));
-            Assert.False((await db.Deliveries.AsNoTracking().SingleAsync(d => d.Id == inbox.Id, Ct)).FailureCheckDue);
+            Assert.True((await db.Deliveries.AsNoTracking().SingleAsync(d => d.Id == inbox.Id, Ct)).FailureCheckDue);
 
-            // The quiet hours end and the planner settles them with nothing more to send: it marks the failed inbox again.
-            await db.Recipients.Where(r => r.Id == recipient.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.Outcome, RecipientOutcome.Planned)
+            // The quiet hours end (planned, nothing more to send) or the correlation closes (cancelled): only the recipient changes.
+            await db.Recipients.Where(r => r.Id == recipient.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.Outcome, settled)
                 .SetProperty(r => r.NextAt, (DateTimeOffset?)null), Ct);
-            await db.Deliveries.Where(d => d.Id == inbox.Id).ExecuteUpdateAsync(s => s.SetProperty(d => d.FailureCheckDue, true), Ct);
-            await failures.RunOnceAsync(Ct);
+            Assert.Equal(1, await failures.RunOnceAsync(Ct));
             Assert.Equal("brokered.notification.delivery.failed", ProducerEvents.Read((await db.ProducerEvents.AsNoTracking().SingleAsync(Ct)).Payload).EventName);
+            Assert.False((await db.Deliveries.AsNoTracking().SingleAsync(d => d.Id == inbox.Id, Ct)).FailureCheckDue);
         }
 
         /// <summary>
