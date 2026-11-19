@@ -105,10 +105,11 @@ unless the owner says otherwise.
     names are null for now (no tenant directory is configured anywhere yet). **Keycloak**: the client asks for `openid juice-notifications`
     (the local realm has no profile or email scope); people `tess` and `paul`. **Console** (`console/`, from Observability's workspace and
     lock file, Angular 22.2): the menu links tenant pages through `go/{page}` (a guard sends them to the tenant being worked in, kept in
-    session storage), so one menu serves every tenant; the app runs sign-in first and the pages' guards after it, in order, so the access
-    read never goes out without a token. Switching tenant keeps the page and drops the query and any row id. The bell asks for the inbox once
-    before sign-in completes and is refused (the library's behaviour, also in the juice-layout demo); the journeys count refusals after
-    sign-in. The overview is a placeholder until M37's read. Journeys: `signin.mjs` (tess lands in her tenant with no switcher and the bell;
+    session storage), so one menu serves every tenant; the access read waits for a valid token (so a guard beside sign-in never asks
+    without one), keeps only an answer that grants something, for 5 minutes, and `allTenants` lets a platform admin open any tenant's link.
+    Switching tenant keeps the page and drops the query, fragment, matrix parameters and any row id. The token's allowed URLs include the
+    API's origin: the bell calls it by its full URL (review round 1 found its calls went without a token). The first, signed-out page load
+    is refused (the bell asks before the redirect); the journeys count refusals from the return from Keycloak. The overview is a placeholder until M37's read. Journeys: `signin.mjs` (tess lands in her tenant with no switcher and the bell;
     paul switches between two tenants, linking the sample application to `…b2` first), `no-access.mjs` (ann at the home, a tenant's deep
     link and a menu link).
 - **M37 Investigate** (`p4c-03`, `p4c-04`): the overview, deliveries (retry, bulk replay), notifications with recipients (closes deferred #36),
