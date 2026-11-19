@@ -202,5 +202,34 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.All(await db.Recipients.AsNoTracking().ToListAsync(Ct), r => Assert.Equal(RecipientOutcome.Failed, r.Outcome));
             }
         }
+
+        /// <summary>
+        /// A worker that loaded a digest open, whose close then finds it closed by another (its claim lost), stops there: nothing of it is
+        /// saved, so it can't plan the members alongside the owner or cancel a digest the owner is sending (phases 3–4 review, round 5).
+        /// </summary>
+        [Fact]
+        public async Task A_stale_worker_whose_close_finds_the_digest_closed_saves_nothing()
+        {
+            LocalStack.RequireAvailable();
+            await NotificationAsync(1);
+            await DrainAsync<Notification, PlannerStage>("planner");
+            await using var scope = _services!.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
+            var digest = await db.Digests.SingleAsync(Ct);
+            var context = new StageContext(db, new Claim(digest.TenantId, digest.Id, digest.Version), _clock.GetUtcNow(), scope.ServiceProvider);
+            await using (var owner = _database.Context())
+            {
+                // Another worker claimed it since, and closed it (the claim moves the version).
+                await owner.Digests.ExecuteUpdateAsync(s => s.SetProperty(d => d.State, DigestState.Closed).SetProperty(d => d.Version, d => d.Version + 1), Ct);
+            }
+            var stage = scope.ServiceProvider.GetRequiredService<DigestStage>();
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => stage.ExecuteAsync(context, digest, Ct));
+            Assert.Throws<InvalidOperationException>(() => stage.GiveUp(context, digest, "test"));
+            await using var check = _database.Context();
+            Assert.Equal(DigestState.Closed, (await check.Digests.AsNoTracking().SingleAsync(Ct)).State);
+            Assert.All(await check.Recipients.AsNoTracking().ToListAsync(Ct), r => Assert.Equal(RecipientOutcome.Pending, r.Outcome));
+            Assert.Equal(0, await check.Deliveries.CountAsync(Ct));
+        }
     }
 }

@@ -753,19 +753,25 @@ namespace Juice.Notifications.Data
     /// </summary>
     public static class RecipientPlanning
     {
-        /// <summary>The outcomes that can still be planned for, whatever <c>next_at</c> says.</summary>
-        public static readonly RecipientOutcome[] StillPlannedOutcomes = [RecipientOutcome.Pending, RecipientOutcome.Deferred];
+        private static readonly RecipientOutcome[] Outcomes = [RecipientOutcome.Pending, RecipientOutcome.Deferred];
+        private static readonly string[] Names = Outcomes.Select(o => o.ToString()).ToArray();
 
-        /// <summary>The same, as stored (for SQL parameters: <c>outcome = ANY(…)</c>).</summary>
-        public static readonly string[] StillPlannedNames = StillPlannedOutcomes.Select(o => o.ToString()).ToArray();
+        /// <summary>The outcomes that can still be planned for, whatever <c>next_at</c> says (a copy: the set itself can't be changed).</summary>
+        public static RecipientOutcome[] StillPlannedOutcomes => [.. Outcomes];
+
+        /// <summary>The same, as stored (for SQL parameters: <c>outcome = ANY(…)</c>; a copy).</summary>
+        public static string[] StillPlannedNames => [.. Names];
 
         /// <summary>
         /// Settled, as a SQL predicate over <c>notification_recipients</c> with literals (no parameters), so a query that repeats it can use the
         /// partial index whose filter it is.
         /// </summary>
-        public static readonly string SettledSql = $"next_at IS NULL AND outcome NOT IN ({string.Join(", ", StillPlannedNames.Select(n => $"'{n}'"))})";
+        public static readonly string SettledSql = $"next_at IS NULL AND outcome NOT IN ({string.Join(", ", Names.Select(n => $"'{n}'"))})";
 
-        public static bool CanStillBePlanned(RecipientOutcome outcome, DateTimeOffset? nextAt) => nextAt is not null || StillPlannedOutcomes.Contains(outcome);
+        public static bool CanStillBePlanned(RecipientOutcome outcome, DateTimeOffset? nextAt) => nextAt is not null || Outcomes.Contains(outcome);
+
+        /// <summary>The same over the stored outcome: an outcome this build doesn't know is taken as settled, as <see cref="SettledSql"/> takes it.</summary>
+        public static bool CanStillBePlanned(string outcome, DateTimeOffset? nextAt) => nextAt is not null || Names.Contains(outcome, StringComparer.Ordinal);
     }
 
     /// <summary>One send of one destination on one channel, through one integration. Its id never changes across retries (design D6).</summary>

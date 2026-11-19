@@ -73,13 +73,13 @@ namespace Juice.Notifications.Delivering
                 }
                 after = last;
             }
-            while (await RecipientsAsync(ct) == Batch)
+            while ((await RecipientsAsync(ct)).Taken == Batch)
             {
             }
         }
 
         /// <summary>One batch of marked deliveries and one of settled marked recipients; how many recipients it checked.</summary>
-        public async Task<int> RunOnceAsync(CancellationToken ct) => (await DeliveriesAsync(null, ct)).Checked + await RecipientsAsync(ct);
+        public async Task<int> RunOnceAsync(CancellationToken ct) => (await DeliveriesAsync(null, ct)).Checked + (await RecipientsAsync(ct)).Checked;
 
         private sealed record Page(int Taken, int Checked, Guid? Last);
 
@@ -121,7 +121,11 @@ namespace Juice.Notifications.Delivering
                 var later = new List<Guid>();
                 foreach (var recipient in locked)
                 {
-                    if (RecipientPlanning.CanStillBePlanned(Enum.Parse<RecipientOutcome>(recipient.Outcome), recipient.NextAt))
+                    if (recipient.FailureRaisedAt is not null)
+                    {
+                        continue; // reported already: nothing to check now or later
+                    }
+                    if (RecipientPlanning.CanStillBePlanned(recipient.Outcome, recipient.NextAt))
                     {
                         later.Add(recipient.Id); // the mark moves to them: checked once they settle
                     }
@@ -159,8 +163,11 @@ namespace Juice.Notifications.Delivering
             ORDER BY id LIMIT {Batch} FOR UPDATE SKIP LOCKED
             """;
 
-        /// <summary>One batch of settled recipients whose check waited for them (from their partial index); how many it took.</summary>
-        private async Task<int> RecipientsAsync(CancellationToken ct)
+        /// <summary>
+        /// One batch of settled recipients whose check waited for them (from their partial index): how many it took, and how many of them it
+        /// checked (none with events off: their marks are only cleared).
+        /// </summary>
+        private async Task<(int Taken, int Checked)> RecipientsAsync(CancellationToken ct)
         {
             await using var scope = scopes.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
@@ -168,7 +175,7 @@ namespace Juice.Notifications.Delivering
             var due = await db.Database.SqlQueryRaw<LockedRecipient>(DueRecipients).ToListAsync(ct);
             if (due.Count == 0)
             {
-                return 0;
+                return (0, 0);
             }
             if (events.Enabled)
             {
@@ -184,7 +191,7 @@ namespace Juice.Notifications.Delivering
                 await db.Recipients.Where(r => r.TenantId == tenant.Key && ids.Contains(r.Id)).ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureCheckDue, false), ct);
             }
             await transaction.CommitAsync(ct);
-            return due.Count;
+            return (due.Count, events.Enabled ? due.Count : 0);
         }
 
         private sealed record MarkedRow(Guid TenantId, Guid Id);

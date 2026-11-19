@@ -259,5 +259,47 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(1, await failures.RunOnceAsync(Ct));
             Assert.Single(await db.ProducerEvents.AsNoTracking().ToListAsync(Ct));
         }
+
+        /// <summary>
+        /// A drain pages past a whole batch it has to keep (every recipient held) to the deliveries behind it, and takes the settled recipients
+        /// whose check waited, in one go (phases 3–4 review, round 5); the held ones are taken on the next drain.
+        /// </summary>
+        [Fact]
+        public async Task A_drain_pages_past_a_held_batch_and_takes_the_recipients_whose_check_waited()
+        {
+            LocalStack.RequireAvailable();
+            var held = new List<(NotificationRecipient Recipient, Delivery Inbox)>();
+            for (var i = 0; i < 100; i++)
+            {
+                held.Add(await FailedInboxAsync(RecipientOutcome.Planned, null));
+            }
+            await Task.Delay(5, Ct); // the rest after them in id order (version 7 ids)
+            var free = await FailedInboxAsync(RecipientOutcome.Planned, null);
+            var waited = await FailedInboxAsync(RecipientOutcome.Planned, null);
+            await using var db = _database.Context();
+            // Its check waited for it to settle: the mark on the recipient, not the delivery.
+            await db.Deliveries.Where(d => d.Id == waited.Inbox.Id).ExecuteUpdateAsync(s => s.SetProperty(d => d.FailureCheckDue, false), Ct);
+            await db.Recipients.Where(r => r.Id == waited.Recipient.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureCheckDue, true), Ct);
+            var failures = Failures();
+
+            await using (var other = _database.Context())
+            {
+                await using var transaction = await other.Database.BeginTransactionAsync(Ct);
+                var ids = held.Select(h => h.Recipient.Id).ToArray();
+                await other.Database.ExecuteSqlAsync($"SELECT 1 FROM notifications.notification_recipients WHERE id = ANY({ids}) FOR UPDATE", Ct);
+                await failures.DrainAsync(Ct).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+                await transaction.RollbackAsync(Ct);
+            }
+            var raised = await db.ProducerEvents.AsNoTracking().Select(e => e.Payload).ToListAsync(Ct);
+            Assert.Equal(2, raised.Count);
+            Assert.Contains(raised, p => p.Contains(free.Recipient.Id.ToString()));
+            Assert.Contains(raised, p => p.Contains(waited.Recipient.Id.ToString()));
+            Assert.Equal(100, await db.Deliveries.CountAsync(d => d.FailureCheckDue, Ct));
+            Assert.False(await db.Recipients.AnyAsync(r => r.FailureCheckDue, Ct));
+
+            await failures.DrainAsync(Ct);
+            Assert.Equal(102, await db.ProducerEvents.CountAsync(Ct));
+            Assert.False(await db.Deliveries.AnyAsync(d => d.FailureCheckDue, Ct));
+        }
     }
 }

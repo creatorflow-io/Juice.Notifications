@@ -29,24 +29,16 @@ namespace Juice.Notifications.Delivering
 
         /// <summary>
         /// Closes an open digest: under the lock members join under (<see cref="WorkflowRunner.DigestLock"/>), in its own transaction committed
-        /// at once, so none joins once it is closing. The row then reads as stored: closed now, or as it was if it was closed already.
-        /// Synchronous for a give-up (the runner's hook is); <see cref="CloseAsync"/> for a step.
+        /// at once, so none joins once it is closing. Synchronous for a give-up (the runner's hook is); <see cref="CloseAsync"/> for a step.
         /// </summary>
         private static void Close(NotificationsDbContext db, Digest row, DateTimeOffset now)
         {
             var (lockStatement, close) = Closing(row, now);
             using var transaction = db.Database.BeginTransaction();
             db.Database.ExecuteSql(lockStatement);
-            var closed = db.Database.ExecuteSql(close) == 1;
+            var updated = db.Database.ExecuteSql(close);
             transaction.Commit();
-            if (closed)
-            {
-                (row.State, row.ClosedAt) = (DigestState.Closed, now);
-            }
-            else
-            {
-                db.Entry(row).Reload(); // closed already: its own close time stays
-            }
+            Closed(row, now, updated);
         }
 
         /// <inheritdoc cref="Close"/>
@@ -55,16 +47,23 @@ namespace Juice.Notifications.Delivering
             var (lockStatement, close) = Closing(row, now);
             await using var transaction = await db.Database.BeginTransactionAsync(ct);
             await db.Database.ExecuteSqlAsync(lockStatement, ct);
-            var closed = await db.Database.ExecuteSqlAsync(close, ct) == 1;
+            var updated = await db.Database.ExecuteSqlAsync(close, ct);
             await transaction.CommitAsync(ct);
-            if (closed)
+            Closed(row, now, updated);
+        }
+
+        /// <summary>
+        /// The close's result on the row. None updated: the row the step loaded (open, at its claimed version) was closed by another worker since,
+        /// which only happens once this claim is lost. The step stops there, its row neither read back nor saved: the runner's version check
+        /// then reports the lost lease, and nothing of this worker's lands over the owner's.
+        /// </summary>
+        private static void Closed(Digest row, DateTimeOffset now, int updated)
+        {
+            if (updated != 1)
             {
-                (row.State, row.ClosedAt) = (DigestState.Closed, now);
+                throw new InvalidOperationException($"Digest {row.Id} was closed by another worker since this one claimed it; its claim is lost.");
             }
-            else
-            {
-                await db.Entry(row).ReloadAsync(ct); // closed already: its own close time stays
-            }
+            (row.State, row.ClosedAt) = (DigestState.Closed, now);
         }
 
         private static (FormattableString Lock, FormattableString Close) Closing(Digest row, DateTimeOffset now)
@@ -106,11 +105,6 @@ namespace Juice.Notifications.Delivering
             if (row.State == DigestState.Open)
             {
                 await CloseAsync(db, row, now, ct);
-                if (row.State == DigestState.Cancelled)
-                {
-                    context.Done(row, null); // given up meanwhile, as it reads now
-                    return;
-                }
             }
             var members = await db.Recipients.Where(r => r.TenantId == row.TenantId && r.DigestId == row.Id && r.Outcome == RecipientOutcome.Pending)
                 .OrderBy(r => r.Id).ToListAsync(ct);
