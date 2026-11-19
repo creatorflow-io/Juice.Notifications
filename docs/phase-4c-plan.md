@@ -130,7 +130,8 @@ unless the owner says otherwise.
     widenings the pages need: `GET …/notifications/{id}` answers the tenant's admins for any application (naming it, new field
     `application`), and a correlation's read and its acknowledge, resolve and cancel take `?application=` from an admin (keys are per
     application), who acts as themselves: `by` is their name from the token (`NotificationsAudit.Caller`), whatever the body says; a
-    producer is unchanged. **Pages**: overview (tiles and tables linking to the lists they count, read again every 30 s), deliveries (filters
+    producer is unchanged. Owner decision (19 November): tenant admins keep acknowledge, resolve and cancel on the correlation page
+    (not read-only). **Pages**: overview (tiles and tables linking to the lists they count, read again every 30 s), deliveries (filters
     in the URL; with the filter on failed, "Replay" sends the same filter capped at the moment the list was read, up to 10,000), a delivery
     (attempts, items, retry), notifications, a notification (each recipient's outcome and one sentence of why), correlations, a
     correlation (`correlations/{application}/{key}`; acknowledge, resolve with an outcome, cancel), storms (current, or past too). Styles
