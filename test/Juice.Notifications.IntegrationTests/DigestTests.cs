@@ -166,5 +166,41 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.Equal([DigestState.Closed, DigestState.Open], (await db.Digests.AsNoTracking().OrderBy(d => d.OpensAt).ThenBy(d => d.Id).ToListAsync(Ct)).Select(d => d.State));
             }
         }
+
+        /// <summary>
+        /// A digest given up while open closes under the lock members join under before it reads its members (phases 3–4 review, round 3): a
+        /// notification joining at that moment either is among the members it fails, or finds the digest closed and opens the next one; none is
+        /// left waiting in a digest that never sends.
+        /// </summary>
+        [Fact]
+        public async Task A_digest_given_up_while_open_takes_the_joining_lock_and_fails_every_member()
+        {
+            LocalStack.RequireAvailable();
+            await NotificationAsync(1);
+            await DrainAsync<Notification, PlannerStage>("planner");
+            await using (var joining = _database.Context())
+            {
+                await using var transaction = await joining.Database.BeginTransactionAsync(Ct);
+                var open = await joining.Digests.AsNoTracking().SingleAsync(Ct);
+                var key = Workflows.WorkflowRunner.DigestLock(Tenant, open.TypeKey, open.By, open.Key);
+                await joining.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({Workflows.WorkflowRunner.DigestLockSpace}, hashtext({key}))", Ct);
+
+                await using var scope = _services!.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
+                var digest = await db.Digests.SingleAsync(Ct);
+                var context = new StageContext(db, new Claim(digest.TenantId, digest.Id, digest.Version), _clock.GetUtcNow(), scope.ServiceProvider);
+                var givingUp = Task.Run(() => scope.ServiceProvider.GetRequiredService<DigestStage>().GiveUp(context, digest, "test"), Ct);
+                await Task.Delay(500, Ct);
+                Assert.False(givingUp.IsCompleted); // waits for the joining notification
+                await transaction.CommitAsync(Ct);
+                await givingUp;
+                await db.SaveChangesAsync(Ct);
+            }
+            await using (var db = _database.Context())
+            {
+                Assert.Equal(DigestState.Cancelled, (await db.Digests.AsNoTracking().SingleAsync(Ct)).State);
+                Assert.All(await db.Recipients.AsNoTracking().ToListAsync(Ct), r => Assert.Equal(RecipientOutcome.Failed, r.Outcome));
+            }
+        }
     }
 }

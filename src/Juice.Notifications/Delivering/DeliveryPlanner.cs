@@ -63,6 +63,10 @@ namespace Juice.Notifications.Delivering
             // is changed: one held or finished keeps its outcome. Synchronous because the runner's hook is; it runs once per row given up.
             if (row.Outcome is RecipientOutcome.Planned or RecipientOutcome.Deferred)
             {
+                if (row.Outcome == RecipientOutcome.Deferred)
+                {
+                    EndedFailures(context.Db, row).ToList().ForEach(d => d.FailureCheckDue = true);
+                }
                 row.Outcome = Deliveries(context.Db, row).Any() ? RecipientOutcome.Planned : RecipientOutcome.Failed;
             }
             context.Done(row, null);
@@ -77,6 +81,17 @@ namespace Juice.Notifications.Delivering
             => db.DeliveryItems.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.RecipientId == row.Id);
 
         /// <summary>A recipient's outcome once delivery planning is through with it (Planned: it has deliveries).</summary>
+        /// <summary>
+        /// A deferred person's deliveries that already failed or bounced (their inbox, during quiet hours) and aren't marked: <c>delivery.failed</c>
+        /// waits until a person is settled (<see cref="FailureEvents"/>), so settling them marks these again, in the same save, for it to look.
+        /// </summary>
+        private static IQueryable<Delivery> EndedFailures(NotificationsDbContext db, NotificationRecipient row)
+            => db.Deliveries.Where(d => d.TenantId == row.TenantId && (d.Status == DeliveryStatus.Failed || d.Status == DeliveryStatus.Bounced) && !d.FailureCheckDue
+                && db.DeliveryItems.Any(i => i.TenantId == row.TenantId && i.DeliveryId == d.Id && i.RecipientId == row.Id));
+
+        private static async Task MarkEndedFailuresAsync(NotificationsDbContext db, NotificationRecipient row, CancellationToken ct)
+            => (await EndedFailures(db, row).ToListAsync(ct)).ForEach(d => d.FailureCheckDue = true);
+
         private static void Counted(StageContext context, NotificationRecipient row)
             => context.AfterCommit.Add(() => Telemetry.Recipients.Add(1, new KeyValuePair<string, object?>("outcome", row.Outcome.ToString())));
 
@@ -96,6 +111,10 @@ namespace Juice.Notifications.Delivering
             if (request.ExpiresAt is { } expires && expires <= context.Now)
             {
                 // A deferred one already has its inbox item, if any: it stays planned and history shows how that went. Its held channels won't go now.
+                if (row.Outcome == RecipientOutcome.Deferred)
+                {
+                    await MarkEndedFailuresAsync(db, row, ct);
+                }
                 row.Outcome = row.Outcome == RecipientOutcome.Deferred && await Deliveries(db, row).AnyAsync(ct) ? RecipientOutcome.Planned : RecipientOutcome.Cancelled;
                 context.Done(row, null);
                 Counted(context, row);
@@ -173,6 +192,10 @@ namespace Juice.Notifications.Delivering
                     context.Wakes.Add(DeliveryStageNames.Dispatcher);
                 }
                 return;
+            }
+            if (row.Outcome == RecipientOutcome.Deferred)
+            {
+                await MarkEndedFailuresAsync(db, row, ct); // their quiet hours ended: settled now
             }
             if (created == 0 && existing.Count == 0)
             {

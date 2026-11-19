@@ -154,10 +154,25 @@ namespace Juice.Notifications.Retention
                 {
                     return total;
                 }
+                var redacted = 0;
                 foreach (var request in ready)
                 {
                     var (data, values) = Redaction.Apply(request.Data, request.Redact);
                     await using var transaction = await db.Database.BeginTransactionAsync(ct);
+                    // The request locked, then its deliveries looked at again: a retry or replay holds the request (shared) until it commits, so
+                    // one that put a delivery back after the read above is seen pending here, and one after this commits sees it redacted
+                    // (History.DeliveryRules.Redacted) and leaves its inbox delivery failed.
+                    await db.Database.SqlQuery<Guid>($"""
+                        SELECT id AS "Value" FROM notifications.requests WHERE tenant_id = {request.TenantId} AND id = {request.Id} FOR UPDATE
+                        """).ToListAsync(ct);
+                    if (await db.DeliveryItems.AnyAsync(i => i.TenantId == request.TenantId && i.RequestId == request.Id
+                            && db.Deliveries.Any(d => d.TenantId == i.TenantId && d.Id == i.DeliveryId
+                                && (d.Status == DeliveryStatus.Pending || d.Status == DeliveryStatus.Sending || d.Status == DeliveryStatus.Retrying)), ct))
+                    {
+                        await transaction.RollbackAsync(ct);
+                        continue; // put back meanwhile: redacted once it settles again
+                    }
+                    redacted++;
                     await db.Requests.Where(r => r.TenantId == request.TenantId && r.Id == request.Id && r.RedactedAt == null)
                         .ExecuteUpdateAsync(s => s.SetProperty(r => r.Data, data).SetProperty(r => r.RedactedAt, now), ct);
                     if (values.Count > 0)
@@ -177,8 +192,12 @@ namespace Juice.Notifications.Retention
                     }
                     await transaction.CommitAsync(ct);
                 }
-                total += ready.Count;
-                Telemetry.Redacted.Add(ready.Count);
+                total += redacted;
+                Telemetry.Redacted.Add(redacted);
+                if (redacted == 0)
+                {
+                    return total; // every one of the batch was put back meanwhile: the next pass takes them
+                }
             }
         }
 

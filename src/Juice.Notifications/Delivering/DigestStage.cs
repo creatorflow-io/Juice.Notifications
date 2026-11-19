@@ -30,7 +30,20 @@ namespace Juice.Notifications.Delivering
         public void GiveUp(StageContext context, Digest row, string error)
         {
             // Nothing is sent from a digest that can't be planned: its waiting members fail with it (history shows them ended, and their requests
-            // can be redacted), saved with the digest.
+            // can be redacted), saved with the digest. An open one is closed first under the lock members join under, committed on its own as a
+            // close is: none joins after its members are read, so none is left waiting in a digest that will never send. (Synchronous: the
+            // runner's hook is.)
+            if (row.State == DigestState.Open)
+            {
+                var db = context.Db;
+                using var transaction = db.Database.BeginTransaction();
+                var lockKey = WorkflowRunner.DigestLock(row.TenantId, row.TypeKey, row.By, row.Key);
+                db.Database.ExecuteSql($"SELECT pg_advisory_xact_lock({WorkflowRunner.DigestLockSpace}, hashtext({lockKey}))");
+                var (closed, open, now) = (DigestState.Closed.ToString(), DigestState.Open.ToString(), context.Now);
+                db.Database.ExecuteSql($"UPDATE notifications.digests SET state = {closed}, closed_at = {now} WHERE tenant_id = {row.TenantId} AND id = {row.Id} AND state = {open}");
+                transaction.Commit();
+                row.ClosedAt ??= now;
+            }
             row.State = DigestState.Cancelled;
             foreach (var member in context.Db.Recipients.Where(r => r.TenantId == row.TenantId && r.DigestId == row.Id && r.Outcome == RecipientOutcome.Pending).ToList())
             {

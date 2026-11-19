@@ -95,6 +95,7 @@ namespace Juice.Notifications.IntegrationTests
                 var request = Seed.Request(Tenant, _apps.WithBroker, type.Id, Guid.NewGuid().ToString("N"));
                 var notification = Seed.Notification(Tenant, request.Id);
                 var recipient = Seed.Recipient(Tenant, notification.Id);
+                recipient.Outcome = RecipientOutcome.Planned; // planned and through: nothing more to plan for them
                 var (e, s) = (Make("email", email, email == DeliveryStatus.Failed), Make("sms", sms, false));
                 db.AddRange(request, notification, recipient, e, s,
                     new DeliveryItem { TenantId = Tenant, DeliveryId = e.Id, RecipientId = recipient.Id, RequestId = request.Id, DestinationKey = e.DestinationKey, Channel = "email" },
@@ -122,6 +123,80 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal("brokered.notification.delivery.failed", ProducerEvents.Read(row.Payload).EventName);
             Assert.Contains("\"email\"", row.Payload);
             Assert.Contains("\"sms\"", row.Payload);
+        }
+
+        /// <summary>One person's recipient with one failed inbox delivery, marked, in the given outcome.</summary>
+        private async Task<(NotificationRecipient Recipient, Delivery Inbox)> FailedInboxAsync(RecipientOutcome outcome, DateTimeOffset? nextAt)
+        {
+            await using var db = _database.Context();
+            var type = Seed.Type(_apps.WithBroker, "brokered.held." + Guid.NewGuid().ToString("N")[..6]);
+            var integration = Seed.Integration(Tenant, "held-" + Guid.NewGuid().ToString("N")[..6]);
+            var request = Seed.Request(Tenant, _apps.WithBroker, type.Id, Guid.NewGuid().ToString("N"));
+            var notification = Seed.Notification(Tenant, request.Id);
+            var recipient = Seed.Recipient(Tenant, notification.Id);
+            (recipient.Outcome, recipient.NextAt) = (outcome, nextAt);
+            var inbox = new Delivery
+            {
+                TenantId = Tenant, Channel = Channels.Inbox, IntegrationId = integration.Id, DestinationKey = $"inbox:{Guid.NewGuid()}", DestinationSnapshot = "{}",
+                Locale = "en", RendererVersion = "test", Content = "{}", CreatedAt = Seed.Now, Status = DeliveryStatus.Failed, FailureCheckDue = true,
+            };
+            db.AddRange(type, integration, request, notification, recipient, inbox,
+                new DeliveryItem { TenantId = Tenant, DeliveryId = inbox.Id, RecipientId = recipient.Id, RequestId = request.Id, DestinationKey = inbox.DestinationKey, Channel = Channels.Inbox });
+            if (!await db.ApplicationTenants.AnyAsync(t => t.ApplicationId == _apps.WithBroker && t.TenantId == Tenant, Ct))
+            {
+                db.Add(new ApplicationTenant { ApplicationId = _apps.WithBroker, TenantId = Tenant, LinkedAt = Seed.Now });
+            }
+            await db.SaveChangesAsync(Ct);
+            return (recipient, inbox);
+        }
+
+        /// <summary>
+        /// A person in quiet hours has only their inbox delivery so far: its failure raises nothing while the rest of their channels wait to be
+        /// planned; once settled (the planner marks the inbox again), it is raised (phases 3–4 review, round 3).
+        /// </summary>
+        [Fact]
+        public async Task Delivery_failed_waits_until_nothing_more_can_be_planned_for_the_person()
+        {
+            LocalStack.RequireAvailable();
+            var (recipient, inbox) = await FailedInboxAsync(RecipientOutcome.Deferred, Seed.Now.AddHours(8));
+            var failures = Failures();
+
+            await failures.RunOnceAsync(Ct);
+            await using var db = _database.Context();
+            Assert.False(await db.ProducerEvents.AnyAsync(Ct));
+            Assert.False((await db.Deliveries.AsNoTracking().SingleAsync(d => d.Id == inbox.Id, Ct)).FailureCheckDue);
+
+            // The quiet hours end and the planner settles them with nothing more to send: it marks the failed inbox again.
+            await db.Recipients.Where(r => r.Id == recipient.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.Outcome, RecipientOutcome.Planned)
+                .SetProperty(r => r.NextAt, (DateTimeOffset?)null), Ct);
+            await db.Deliveries.Where(d => d.Id == inbox.Id).ExecuteUpdateAsync(s => s.SetProperty(d => d.FailureCheckDue, true), Ct);
+            await failures.RunOnceAsync(Ct);
+            Assert.Equal("brokered.notification.delivery.failed", ProducerEvents.Read((await db.ProducerEvents.AsNoTracking().SingleAsync(Ct)).Payload).EventName);
+        }
+
+        /// <summary>
+        /// A recipient another transaction holds (a retry, another instance's worker) is passed over, not waited for: its delivery keeps the
+        /// mark and is checked on a later pass, so two workers can't deadlock over it.
+        /// </summary>
+        [Fact]
+        public async Task A_held_recipient_is_passed_over_and_its_delivery_keeps_the_mark()
+        {
+            LocalStack.RequireAvailable();
+            var (recipient, inbox) = await FailedInboxAsync(RecipientOutcome.Planned, null);
+            var failures = Failures();
+            await using (var other = _database.Context())
+            {
+                await using var transaction = await other.Database.BeginTransactionAsync(Ct);
+                await other.Database.ExecuteSqlAsync($"SELECT 1 FROM notifications.notification_recipients WHERE id = {recipient.Id} FOR UPDATE", Ct);
+                Assert.Equal(0, await failures.RunOnceAsync(Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct));
+                await transaction.RollbackAsync(Ct);
+            }
+            await using var db = _database.Context();
+            Assert.True((await db.Deliveries.AsNoTracking().SingleAsync(d => d.Id == inbox.Id, Ct)).FailureCheckDue);
+            Assert.False(await db.ProducerEvents.AnyAsync(Ct));
+
+            Assert.Equal(1, await failures.RunOnceAsync(Ct));
+            Assert.Single(await db.ProducerEvents.AsNoTracking().ToListAsync(Ct));
         }
     }
 }

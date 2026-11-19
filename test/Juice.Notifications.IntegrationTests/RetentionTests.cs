@@ -29,7 +29,7 @@ namespace Juice.Notifications.IntegrationTests
 
         /// <summary>A request in its own tenant, accepted <paramref name="age"/> ago, with a delivery (and an inbox item) or still waiting to be planned.</summary>
         private async Task<(Guid Tenant, NotificationRequest Request, Delivery Delivery, InboxItem Item)> SeedAsync(TimeSpan age, bool finished = true,
-            Guid? tenant = null, string data = """{"secret":"tok-123456","note":"hello"}""")
+            Guid? tenant = null, string data = """{"secret":"tok-123456","note":"hello"}""", DeliveryStatus status = DeliveryStatus.Delivered)
         {
             var tenantId = tenant ?? Guid.CreateVersion7();
             var at = DateTimeOffset.UtcNow - age;
@@ -59,7 +59,7 @@ namespace Juice.Notifications.IntegrationTests
             var delivery = new Delivery
             {
                 TenantId = tenantId, Channel = Channels.Inbox, IntegrationId = integration.Id, DestinationKey = $"inbox:{subscriber.Id}", DestinationSnapshot = "{}",
-                Locale = "en", RendererVersion = "test", Content = """{"Title":"Your token tok-123456"}""", CreatedAt = at, Status = DeliveryStatus.Delivered,
+                Locale = "en", RendererVersion = "test", Content = """{"Title":"Your token tok-123456"}""", CreatedAt = at, Status = status,
                 Attempts = 1, CompletedAt = at,
             };
             var item = new InboxItem
@@ -95,6 +95,57 @@ namespace Juice.Notifications.IntegrationTests
             var untouched = await db.Requests.AsNoTracking().SingleAsync(r => r.Id == waiting.Request.Id, Ct);
             Assert.Null(untouched.RedactedAt);
             Assert.Contains("tok-123456", untouched.Data);
+        }
+
+        /// <summary>
+        /// A failed inbox delivery counts as settled, so its request is redacted; after that neither a retry nor a bulk replay puts it back
+        /// (the item it would write would show the masked values), and the delivery stays failed (phases 3–4 review, round 3).
+        /// </summary>
+        [Fact]
+        public async Task A_redacted_requests_failed_inbox_delivery_is_not_retried_or_replayed()
+        {
+            LocalStack.RequireAvailable();
+            var failed = await SeedAsync(TimeSpan.FromMinutes(5), status: DeliveryStatus.Failed);
+            await Worker.RedactAsync(Ct);
+
+            await using (var scope = App.Services.CreateAsyncScope())
+            {
+                using var context = NotificationsMessageContext.Begin("test");
+                var mediator = scope.ServiceProvider.GetRequiredService<Juice.MediatR.IMediator>();
+                var retried = await mediator.Send(new History.RetryDelivery(failed.Tenant, failed.Delivery.Id), Ct);
+                Assert.Equal((OutcomeKind.Conflict, ErrorCodes.NotRetryable), (retried.Kind, retried.Code));
+                var replayed = await mediator.Send(new History.ReplayDeliveries(failed.Tenant, new History.ReplayFilter(null, null, null, null, null, null, null)), Ct);
+                Assert.Equal((0, 1), (replayed.Value!.Replayed, replayed.Value.Skipped));
+            }
+            await using var db = App.Database.Context();
+            Assert.NotNull((await db.Requests.AsNoTracking().SingleAsync(r => r.Id == failed.Request.Id, Ct)).RedactedAt);
+            Assert.Equal(DeliveryStatus.Failed, (await db.Deliveries.AsNoTracking().SingleAsync(d => d.Id == failed.Delivery.Id, Ct)).Status);
+        }
+
+        /// <summary>
+        /// A retry that puts a delivery back while redaction is deciding: the retry holds the request (shared) until it commits, and redaction,
+        /// locking the request, looks at the deliveries again and finds it pending, so it leaves the request for when it settles.
+        /// </summary>
+        [Fact]
+        public async Task Redaction_waits_for_a_delivery_put_back_while_it_was_deciding()
+        {
+            LocalStack.RequireAvailable();
+            var failed = await SeedAsync(TimeSpan.FromMinutes(5), status: DeliveryStatus.Failed);
+            await using (var retry = App.Database.Context())
+            {
+                await using var transaction = await retry.Database.BeginTransactionAsync(Ct);
+                // As a retry: the delivery, then the request (shared), then the delivery back to pending, not yet committed.
+                await History.DeliveryRules.LockAsync(retry, failed.Tenant, [failed.Delivery.Id], Ct);
+                await retry.Deliveries.Where(d => d.TenantId == failed.Tenant && d.Id == failed.Delivery.Id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, DeliveryStatus.Pending).SetProperty(d => d.NextAt, DateTimeOffset.UtcNow.AddHours(1)), Ct);
+                var redacting = Worker.RedactAsync(Ct);
+                await Task.Delay(500, Ct); // redaction reads the delivery still failed, then waits for the request
+                Assert.False(redacting.IsCompleted);
+                await transaction.CommitAsync(Ct);
+                await redacting;
+            }
+            await using var db = App.Database.Context();
+            Assert.Null((await db.Requests.AsNoTracking().SingleAsync(r => r.Id == failed.Request.Id, Ct)).RedactedAt);
         }
 
         [Fact]

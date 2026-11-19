@@ -80,9 +80,22 @@ namespace Juice.Notifications.History
                 .ToListAsync(ct);
             var more = matched.Count > limit;
             var batch = matched.Take(limit).ToList();
-            var ids = batch.Where(d => d.HasContent && !d.Expired).Select(d => d.Id).ToList();
+            var candidates = batch.Where(d => d.HasContent && !d.Expired).Select(d => d.Id).ToArray();
+            var ids = new List<Guid>();
+            if (candidates.Length > 0)
+            {
+                // Every one locked before any is changed, deliveries then recipients then requests, as a single retry locks them: no lock is
+                // taken on a delivery while one on a recipient is held, so a replay can't deadlock with a retry or the delivery.failed worker.
+                await DeliveryRules.LockAsync(db, tenant, candidates, ct);
+                // Only those still failed now that they are locked (one retried or replayed meanwhile is left as it is), and no inbox delivery
+                // of a redacted request (its item would show the masked values).
+                var redacted = await DeliveryRules.Redacted(db, tenant, candidates).ToListAsync(ct);
+                ids = await db.Deliveries.AsNoTracking().Where(d => d.TenantId == tenant && candidates.Contains(d.Id) && d.Status == DeliveryStatus.Failed
+                        && !(d.Channel == Channels.Inbox && redacted.Contains(d.Id)))
+                    .Select(d => d.Id).ToListAsync(ct);
+            }
             var replayed = 0;
-            // In chunks: one statement each, as the single retry's (status still Failed: one taken meanwhile is left as it is).
+            // In chunks: one statement each, as the single retry's. Only the deliveries replayed reset their recipients' delivery.failed.
             foreach (var chunk in ids.Chunk(500))
             {
                 replayed += await db.Deliveries.Where(d => d.TenantId == tenant && chunk.Contains(d.Id) && d.Status == DeliveryStatus.Failed)

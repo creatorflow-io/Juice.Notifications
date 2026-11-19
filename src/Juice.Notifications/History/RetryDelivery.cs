@@ -17,11 +17,13 @@ namespace Juice.Notifications.History
     {
         public async ValueTask<Outcome<RetriedView>> Handle(RetryDelivery r, CancellationToken ct)
         {
-            var delivery = await db.Deliveries.SingleOrDefaultAsync(d => d.TenantId == r.NotificationTenantId && d.Id == r.DeliveryId, ct);
-            if (delivery is null)
+            // The delivery first, then its recipients and requests (DeliveryRules.LockAsync): the order the delivery.failed worker takes them in,
+            // so a retry just after a failure waits for the worker's check (or the worker passes this delivery over) rather than deadlocking.
+            if (!await DeliveryRules.LockAsync(db, r.NotificationTenantId, [r.DeliveryId], ct))
             {
                 return Outcome<RetriedView>.NotFound($"There is no delivery {r.DeliveryId} in this tenant.");
             }
+            var delivery = await db.Deliveries.SingleAsync(d => d.TenantId == r.NotificationTenantId && d.Id == r.DeliveryId, ct);
             if (delivery.Status != DeliveryStatus.Failed)
             {
                 return Outcome<RetriedView>.Conflict(ErrorCodes.NotRetryable, $"Only a failed delivery can be retried; this one is {delivery.Status}.");
@@ -36,6 +38,11 @@ namespace Juice.Notifications.History
             if (expires is { } at && at <= now)
             {
                 return Outcome<RetriedView>.Conflict(ErrorCodes.NotRetryable, $"The request expired at {at:O}; a retry would expire at once.");
+            }
+            if (delivery.Channel == Channels.Inbox && await DeliveryRules.Redacted(db, delivery.TenantId, [delivery.Id]).AnyAsync(ct))
+            {
+                return Outcome<RetriedView>.Conflict(ErrorCodes.NotRetryable,
+                    "The request has been redacted; its inbox item would show the values redaction masked. Send the request again.");
             }
             // Not claimable while Failed (no NextAt), so no worker holds it; the version still fences two retries at once.
             delivery.Status = DeliveryStatus.Pending;
@@ -67,6 +74,45 @@ namespace Juice.Notifications.History
         /// <summary>Content the dispatcher can send: a delivery that failed while it was planned (its template failed) stores none.</summary>
         /// <c>{}</c> is what deliveries planned before 12 Nov 2026 stored instead; no rendered content is ever exactly that (it is wrapped per channel).
         public static bool HasContent(Delivery delivery) => delivery.Content is { Length: > 0 } and not "{}";
+
+        /// <summary>
+        /// Locks deliveries for a retry or replay, then their recipients, then their requests (shared), each in id order; whether any delivery
+        /// was there. Deliveries before recipients is the order the <c>delivery.failed</c> worker takes them in (it never waits on either); the
+        /// requests' shared lock holds off redaction (which takes them for update) until the retry commits, so redaction then sees the
+        /// delivery pending and waits for it, or a retry after redaction sees the request redacted (<see cref="Redacted"/>).
+        /// </summary>
+        public static async Task<bool> LockAsync(NotificationsDbContext db, Guid tenantId, Guid[] deliveryIds, CancellationToken ct)
+        {
+            var ids = deliveryIds.Order().ToArray();
+            var locked = await db.Database.SqlQuery<Guid>($"""
+                SELECT id AS "Value" FROM notifications.deliveries WHERE tenant_id = {tenantId} AND id = ANY({ids}) ORDER BY id FOR UPDATE
+                """).ToListAsync(ct);
+            if (locked.Count == 0)
+            {
+                return false;
+            }
+            var lockedIds = locked.ToArray();
+            await db.Database.SqlQuery<Guid>($"""
+                SELECT r.id AS "Value" FROM notifications.notification_recipients r
+                WHERE r.tenant_id = {tenantId} AND r.id IN (SELECT i.recipient_id FROM notifications.delivery_items i WHERE i.tenant_id = {tenantId} AND i.delivery_id = ANY({lockedIds}))
+                ORDER BY r.id FOR UPDATE
+                """).ToListAsync(ct);
+            await db.Database.SqlQuery<Guid>($"""
+                SELECT q.id AS "Value" FROM notifications.requests q
+                WHERE q.tenant_id = {tenantId} AND q.id IN (SELECT i.request_id FROM notifications.delivery_items i WHERE i.tenant_id = {tenantId} AND i.delivery_id = ANY({lockedIds}))
+                ORDER BY q.id FOR SHARE
+                """).ToListAsync(ct);
+            return true;
+        }
+
+        /// <summary>
+        /// The deliveries among these that carry a redacted request. An inbox delivery among them can't be retried or replayed: the item it
+        /// writes would show the values redaction masked (other channels can: they send the stored content, which redaction leaves).
+        /// </summary>
+        public static IQueryable<Guid> Redacted(NotificationsDbContext db, Guid tenantId, IReadOnlyCollection<Guid> deliveryIds)
+            => db.DeliveryItems.Where(i => i.TenantId == tenantId && deliveryIds.Contains(i.DeliveryId)
+                    && db.Requests.Any(q => q.TenantId == tenantId && q.Id == i.RequestId && q.RedactedAt != null))
+                .Select(i => i.DeliveryId).Distinct();
 
         /// <summary>When the request a delivery carries expires, if it does (the earliest, for a digest).</summary>
         public static Task<DateTimeOffset?> ExpiresAtAsync(NotificationsDbContext db, Guid tenantId, Guid deliveryId, CancellationToken ct)
