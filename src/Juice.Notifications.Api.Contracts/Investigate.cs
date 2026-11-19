@@ -17,11 +17,11 @@ namespace Juice.Notifications.Api.Contracts
     /// Someone a notification addressed, and what came of it (phase-4c-plan I52, deferred #36): <c>outcome</c> says why there is no delivery
     /// (<c>muted</c>, <c>optedOut</c>, <c>deferred</c> by quiet hours, …), <c>bypassed</c> the rules a mandatory type went past, <c>digest</c>
     /// the digest it waits in. A person is named by subscriber id (and <c>via</c>, the names that reached them); a route by its key; an external
-    /// recipient by its channel and address.
+    /// recipient by its channel and address. <c>name</c>: a person's, as their identity's source gave it.
     /// </summary>
     public sealed record RecipientResponse(Guid Id, RecipientKind Kind, string NamedAs, IReadOnlyList<string> Via, Guid? SubscriberId, string? Route,
         string? Channel, string? Address, string Resolver, RecipientOutcome Outcome, IReadOnlyList<string> Bypassed, int EscalationStep,
-        RecipientDigestResponse? Digest, DateTimeOffset CreatedAt, IReadOnlyList<RecipientDeliveryResponse> Deliveries);
+        RecipientDigestResponse? Digest, DateTimeOffset CreatedAt, IReadOnlyList<RecipientDeliveryResponse> Deliveries, string? Name = null);
 
     /// <summary>A page of recipients, oldest first; <c>next</c> is the <c>after</c> cursor for the next page, null on the last.</summary>
     public sealed record RecipientPageResponse(IReadOnlyList<RecipientResponse> Items, Guid? Next);

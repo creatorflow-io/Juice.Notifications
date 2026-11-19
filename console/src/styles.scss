@@ -1,5 +1,7 @@
 @use '@angular/material' as mat;
 @use '@juice-js/layout' as layout;
+// The admin pages (@juice-js/notifications-admin): their layout, with colours from this theme (below).
+@use '../projects/juice-js/notifications-admin/styles/notifications-admin';
 
 // Angular Material and juice-layout themes, light and dark (juice-layout's dark-mode toggle sets body.dark), as Juice Observability's Console.
 @include mat.elevation-classes();
@@ -24,3 +26,6 @@ html { @include mat.form-field-density(-1); }
 html, body { height: 100%; }
 body { margin: 0; font-family: Roboto, 'Helvetica Neue', sans-serif; }
 mat-sidenav-content > *:not(router-outlet) { display: block; }
+
+:root { @include notifications-admin.colors($light); }
+.dark { @include notifications-admin.colors($dark); }

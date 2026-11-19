@@ -31,5 +31,10 @@
   "dependencies": {
     "tslib": "^2.3.0"
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "sass": "./styles/_notifications-admin.scss"
+    }
+  }
 }

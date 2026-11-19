@@ -1,0 +1,93 @@
+// Juice Notifications admin page styles. `@use` the module once, in the app's global styles, and the pages are styled:
+//
+//   @use '@juice-js/notifications-admin';                          // layout, and a default light and dark (.dark) palette
+//   :root { @include notifications-admin.colors($light-theme); }  // optional: colours from the app's own theme
+//   .dark { @include notifications-admin.colors($dark-theme); }   // again under the app's own dark-mode selector
+//
+// colors() writes the --na-* custom properties the pages read, from an Angular Material (M2) theme: text, background, card and divider
+// from its background and foreground palettes, links from primary, errors from warn; "ok" and "warn" from Material's green and amber.
+// The defaults sit under zero-specificity :where() selectors, so the app's colors() wins whatever the order.
+@use '@angular/material' as mat;
+@use 'sass:color';
+@use 'sass:map';
+
+@function _hue($palette, $light, $dark, $is-dark) {
+  @return mat.m2-get-color-from-palette($palette, if(sass($is-dark): $dark; else: $light));
+}
+
+/// The --na-* colour properties from an Angular Material (M2) theme.
+@mixin colors($theme) {
+  $config: mat.m2-get-color-config($theme);
+  $is-dark: map.get($config, is-dark);
+  $background: map.get($config, background);
+  $foreground: map.get($config, foreground);
+  $surface: map.get($background, card);
+  $tint: if(sass($is-dark): 22%; else: 14%);
+  $status: (
+    ok: _hue(mat.m2-define-palette(mat.$m2-green-palette), 800, 300, $is-dark),
+    warn: if(sass($is-dark): _hue(mat.m2-define-palette(mat.$m2-amber-palette), 300, 300, true); else: _hue(mat.m2-define-palette(mat.$m2-deep-orange-palette), 900, 900, false)),
+    bad: _hue(map.get($config, warn), 700, 300, $is-dark),
+    none: color.mix(color.change(map.get($foreground, secondary-text), $alpha: 1), $surface, 70%),
+  );
+  --na-surface: #{$surface};
+  --na-border: #{map.get($foreground, divider)};
+  --na-text: #{map.get($foreground, text)};
+  --na-muted: #{map.get($foreground, secondary-text)};
+  --na-accent: #{_hue(map.get($config, primary), 700, 200, $is-dark)};
+  @each $name, $value in $status {
+    --na-#{$name}: #{$value};
+    --na-#{$name}-bg: #{color.mix($value, $surface, $tint)};
+  }
+}
+
+@mixin _layout() {
+  .na-muted { color: var(--na-muted); }
+  .na-small { font-size: 12px; }
+  .na-mono { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; word-break: break-all; }
+  .na-nowrap { white-space: nowrap; }
+  .na-error { color: var(--na-bad); }
+  .na-spacer { flex: 1; }
+  .na-notice { padding: 8px 12px; border-left: 3px solid var(--na-warn); background: var(--na-warn-bg); font-size: 13px; margin-bottom: 12px; }
+
+  .na-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px;
+    h1 { margin: 0; font-size: 22px; font-weight: 500; } }
+  .na-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; @include mat.form-field-density(-1); }
+  .na-field-sm { width: 160px; }
+  .na-field-md { width: 220px; }
+  .na-card { background: var(--na-surface); border: 1px solid var(--na-border); border-radius: 8px; padding: 12px 16px; margin-bottom: 12px;
+    h2 { margin: 0 0 8px; font-size: 16px; font-weight: 500; } }
+  .na-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .na-tile { display: flex; flex-direction: column; gap: 4px; color: inherit; text-decoration: none; strong { font-size: 26px; font-weight: 500; } }
+  a.na-tile:hover { border-color: var(--na-accent); }
+  .na-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; }
+  .na-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  .na-more { display: flex; align-items: center; gap: 12px; padding: 8px 0; font-size: 13px; }
+
+  .na-table { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--na-surface);
+    th { text-align: left; font-weight: 500; color: var(--na-muted); font-size: 12px; padding: 8px; border-bottom: 1px solid var(--na-border); }
+    td { padding: 6px 8px; border-bottom: 1px solid var(--na-border); vertical-align: top; }
+    a { color: var(--na-accent); } }
+  .na-kv { border-collapse: collapse; font-size: 14px;
+    th { text-align: left; font-weight: 500; color: var(--na-muted); padding: 3px 16px 3px 0; vertical-align: top; white-space: nowrap; }
+    td { padding: 3px 0; } }
+
+  .na-badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; white-space: nowrap;
+    background: var(--na-none-bg); color: var(--na-none); }
+  .na-ok { background: var(--na-ok-bg); color: var(--na-ok); }
+  .na-warn { background: var(--na-warn-bg); color: var(--na-warn); }
+  .na-bad { background: var(--na-bad-bg); color: var(--na-bad); }
+}
+
+// The defaults: indigo on white, and the same under juice-layout's dark mode (.dark).
+:where(:root) {
+  --na-surface: #fff; --na-border: rgba(0, 0, 0, .12); --na-text: rgba(0, 0, 0, .87); --na-muted: rgba(0, 0, 0, .6); --na-accent: #303f9f;
+  --na-ok: #2e7d32; --na-ok-bg: #e3efe3; --na-warn: #bf360c; --na-warn-bg: #f6e4dc; --na-bad: #d32f2f; --na-bad-bg: #f9e0e0;
+  --na-none: #616161; --na-none-bg: #eee;
+}
+:where(.dark) {
+  --na-surface: #424242; --na-border: rgba(255, 255, 255, .12); --na-text: #fff; --na-muted: rgba(255, 255, 255, .7); --na-accent: #9fa8da;
+  --na-ok: #81c784; --na-ok-bg: #4d5e4e; --na-warn: #ffd54f; --na-warn-bg: #6b6143; --na-bad: #e57373; --na-bad-bg: #6b4d4d;
+  --na-none: #bdbdbd; --na-none-bg: #555;
+}
+
+@include _layout();

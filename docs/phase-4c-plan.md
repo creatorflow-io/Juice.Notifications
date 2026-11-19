@@ -121,6 +121,24 @@ unless the owner says otherwise.
     media rule, the fallback user id from the access token's subject, "try again" dropping a read in flight, only the current read kept).
 - **M37 Investigate** (`p4c-03`, `p4c-04`): the overview, deliveries (retry, bulk replay), notifications with recipients (closes deferred #36),
   correlations, storms; the I52 reads with their API tests; journeys `deliveries.mjs`, `why-not.mjs`, `correlations.mjs`.
+  - *As built (19 Nov 2026):* **API** (`InvestigationEndpoints`, reader `History.Investigation`, tenant admins only): `GET …/notifications`
+    (type, application, correlation, state, from, to; `before` cursor over version-7 ids), `…/notifications/{id}/recipients` (oldest first,
+    `after` cursor; each with outcome, via, bypassed rules, escalation step, its digest, its deliveries, and a person's name),
+    `…/correlations` (state, application, key), `…/overview` (deliveries created in the last 24 hours by channel and status; failed ones
+    by integration with the latest error; open storms; notifications planning or running, over a new partial index
+    `ix_notifications_unfinished`, migration `ConsoleReads`; kept 30 s per tenant in `IMemoryCache`). Beyond the plan's reads, two
+    widenings the pages need: `GET …/notifications/{id}` answers the tenant's admins for any application (naming it, new field
+    `application`), and a correlation's read and its acknowledge, resolve and cancel take `?application=` from an admin (keys are per
+    application), who acts as themselves: `by` is their name from the token (`NotificationsAudit.Caller`), whatever the body says; a
+    producer is unchanged. **Pages**: overview (tiles and tables linking to the lists they count, read again every 30 s), deliveries (filters
+    in the URL; with the filter on failed, "Replay" sends the same filter capped at the moment the list was read, up to 10,000), a delivery
+    (attempts, items, retry), notifications, a notification (each recipient's outcome and one sentence of why), correlations, a
+    correlation (`correlations/{application}/{key}`; acknowledge, resolve with an outcome, cancel), storms (current, or past too). Styles
+    in the library (`styles/_notifications-admin.scss`, `colors($theme)` as Observability's). **Journeys**: `deliveries.mjs` (a receiver
+    on this machine's private address fails with 404, then accepts: one delivery found, opened and retried with the same id and body; a
+    filter's three failed deliveries replayed and received, another type's left failed), `why-not.mjs` (ann's mute, ben's opt-out and
+    tess's quiet hours, each put back afterwards; eli is a disabled account), `correlations.mjs` (a key with a slash, acknowledged and
+    resolved by tess as herself).
 - **M38 Delivery configuration** (`p4c-05`): integrations and targets (secret references only, I53), routes, mutes, escalation policies,
   the allowlist; journey `configure.mjs` sets up the demo's email and webhook delivery in the browser and sends through it.
 - **M39 Content** (`p4c-06`): types, templates with preview, display groups; the templates page leaves `@juice-js/notifications` (p4c-d5).

@@ -57,7 +57,7 @@ namespace Juice.Notifications.IntegrationTests
             LocalStack.RequireAvailable();
             var (tenant, application, type) = await fixture.TenantAsync();
             var (request, notification) = InvestigationApp.Notification(tenant, application, type);
-            var people = Enumerable.Range(0, 5).Select(i => new Subscriber { TenantId = tenant, Source = "local", ExternalId = $"p{i}", CreatedAt = Seed.Now }).ToArray();
+            var people = Enumerable.Range(0, 5).Select(i => new Subscriber { TenantId = tenant, Source = "local", ExternalId = $"p{i}", Name = $"Person {i}", CreatedAt = Seed.Now }).ToArray();
             NotificationRecipient Person(Subscriber s, RecipientOutcome outcome, params string[] bypassed) => new()
             {
                 TenantId = tenant, NotificationId = notification.Id, Kind = RecipientKind.Subscriber, SubscriberId = s.Id, Via = ["group:sre", $"user:{s.ExternalId}"],
@@ -90,6 +90,7 @@ namespace Juice.Notifications.IntegrationTests
             foreach (var (held, why) in new[] { (muted, RecipientOutcome.Muted), (optedOut, RecipientOutcome.OptedOut), (deferred, RecipientOutcome.Deferred) })
             {
                 Assert.Equal(why, byId[held.Id].Outcome);
+                Assert.Equal(people.Single(p => p.Id == held.SubscriberId).Name, byId[held.Id].Name);
                 Assert.Empty(byId[held.Id].Deliveries);
                 Assert.Equal(["group:sre", $"user:{people.Single(p => p.Id == held.SubscriberId).ExternalId}"], byId[held.Id].Via);
             }

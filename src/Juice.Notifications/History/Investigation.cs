@@ -15,7 +15,7 @@ namespace Juice.Notifications.History
 
     public sealed record RecipientView(Guid Id, RecipientKind Kind, string NamedAs, IReadOnlyList<string> Via, Guid? SubscriberId, string? Route,
         string? Channel, string? Address, string Resolver, RecipientOutcome Outcome, IReadOnlyList<string> Bypassed, int EscalationStep,
-        RecipientDigestView? Digest, DateTimeOffset CreatedAt, IReadOnlyList<RecipientDeliveryView> Deliveries);
+        RecipientDigestView? Digest, DateTimeOffset CreatedAt, IReadOnlyList<RecipientDeliveryView> Deliveries, string? Name = null);
 
     public sealed record CorrelationFilter(string? Application = null, string? Key = null, CorrelationState? State = null, Guid? Before = null,
         int Limit = Investigation.DefaultLimit);
@@ -124,9 +124,15 @@ namespace Juice.Notifications.History
                 ? new Dictionary<Guid, RecipientDigestView>()
                 : await db.Digests.AsNoTracking().Where(d => d.TenantId == tenantId && digestIds.Contains(d.Id))
                     .ToDictionaryAsync(d => d.Id, d => new RecipientDigestView(d.Id, d.State, d.ClosesAt, d.ClosedAt), ct);
+            // A person by name, as their identity's source last gave it.
+            var subscriberIds = page.Where(r => r.SubscriberId is not null).Select(r => r.SubscriberId!.Value).Distinct().ToList();
+            var names = subscriberIds.Count == 0
+                ? new Dictionary<Guid, string?>()
+                : await db.Subscribers.AsNoTracking().Where(s => s.TenantId == tenantId && subscriberIds.Contains(s.Id))
+                    .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
             var views = page.Select(r => new RecipientView(r.Id, r.Kind, r.NamedAs, r.Via, r.SubscriberId, r.RouteKey, r.Channel, r.Address, r.Resolver,
                 r.Outcome, r.Bypassed, r.EscalationStep, r.DigestId is { } d && digests.TryGetValue(d, out var digest) ? digest : null, r.CreatedAt,
-                deliveries[r.Id].ToList())).ToList();
+                deliveries[r.Id].ToList(), r.SubscriberId is { } s && names.TryGetValue(s, out var name) ? name : null)).ToList();
             return new Page<RecipientView>(views, found.Count > limit ? page[^1].Id : null);
         }
 

@@ -9,6 +9,11 @@
       "glob": "LICENSE",
       "input": ".",
       "output": "."
+    },
+    {
+      "glob": "**/*.scss",
+      "input": "./styles",
+      "output": "./styles"
     }
   ]
 }

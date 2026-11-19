@@ -2,6 +2,8 @@
 // sign-in through Keycloak, and checks that fail the run with a message.
 import { chromium } from 'playwright-core';
 import { readFileSync, mkdirSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 /** deploy/local, with a trailing slash. */
@@ -129,10 +131,62 @@ export async function clientToken(clientId, secretName) {
 }
 
 /** The API as the platform admin client: `api('PUT', '/api/v1/applications/sample/tenants/…')`. */
-export async function adminApi(method, path, body) {
-  const token = await clientToken('notifications-admin', 'NOTIFICATIONS_ADMIN_CLIENT_SECRET');
+export async function adminApi(method, path, body, { allow = [] } = {}) {
+  return call(await clientToken('notifications-admin', 'NOTIFICATIONS_ADMIN_CLIENT_SECRET'), method, path, body, allow);
+}
+
+/** The API as the sample application (`sample-producer`): declaring types, sending. */
+export async function producerApi(method, path, body) {
+  return call(await clientToken('sample-producer', 'SAMPLE_PRODUCER_CLIENT_SECRET'), method, path, body);
+}
+
+/** The API as a person (`ann`, `ben`, …, through the people-test client): their own `me` pages. */
+export async function personApi(user, method, path, body) {
+  const r = await fetch(`${keycloak}/realms/juice/protocol/openid-connect/token`, { method: 'POST',
+    body: new URLSearchParams({ grant_type: 'password', client_id: 'people-test', username: user, password: env.PEOPLE_TEST_PASSWORD }) });
+  if (!r.ok) throw new Error(`token for ${user}: ${r.status}`);
+  return call((await r.json()).access_token, method, path, body);
+}
+
+/** A call that fails on an error status, but those in `allow` (409: already there). */
+async function call(token, method, path, body, allow = []) {
   const r = await fetch(`${base}${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body) });
-  if (!r.ok) throw new Error(`${method} ${path}: ${r.status} ${await r.text()}`);
-  return r.status === 204 ? null : r.json();
+  if (!r.ok && !allow.includes(r.status)) throw new Error(`${method} ${path}: ${r.status} ${await r.text()}`);
+  return r.status === 204 || !r.ok ? null : r.json();
+}
+
+/** The tests' tenant's API path: `tenantPath('deliveries')` → `/api/v1/tenants/{testTenant}/deliveries`. */
+export const tenantPath = path => `/api/v1/tenants/${testTenant}/${path}`;
+
+/** Polls `read` every 500 ms until `done(value)`, up to `seconds`; the last value (check it). */
+export async function until(read, done, seconds = 30) {
+  let value;
+  for (let i = 0; i < seconds * 2; i++) {
+    value = await read();
+    if (done(value)) return value;
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return value;
+}
+
+/**
+ * A webhook receiver on this machine's private IPv4 address (the service never sends to loopback), as the integration tests' Receiver:
+ * answers `status()` (404 while `failing`), and keeps each request's `webhook-id` (the delivery's id) and body.
+ */
+export async function receiver() {
+  const address = Object.values(networkInterfaces()).flat()
+    .find(a => a && a.family === 'IPv4' && !a.internal && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a.address))?.address;
+  if (!address) throw new Error('no private IPv4 address on this machine for the webhook receiver');
+  const state = { failing: true, received: [] };
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', d => body += d).on('end', () => {
+      state.received.push({ id: req.headers['webhook-id'], body, status: state.failing ? 404 : 200 });
+      res.writeHead(state.failing ? 404 : 200).end();
+    });
+  });
+  await new Promise(resolve => server.listen(0, '0.0.0.0', resolve));
+  const port = server.address().port;
+  return Object.assign(state, { address, port, url: `http://${address}:${port}/hook`, close: () => new Promise(r => server.close(r)) });
 }

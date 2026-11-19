@@ -6,3 +6,5 @@ export * from './lib/core/options';
 export * from './lib/core/access.service';
 export * from './lib/core/guards';
 export * from './lib/notifications-admin.routes';
+export * from './lib/core/models';
+export * from './lib/core/api.service';

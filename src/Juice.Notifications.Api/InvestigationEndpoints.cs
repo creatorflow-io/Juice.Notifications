@@ -50,7 +50,7 @@ namespace Juice.Notifications.Api
                 ? Results.Ok(new RecipientPageResponse(page.Items.Select(r => new RecipientResponse(r.Id, r.Kind, r.NamedAs, r.Via, r.SubscriberId, r.Route,
                     r.Channel, r.Address, r.Resolver, r.Outcome, r.Bypassed, r.EscalationStep,
                     r.Digest is { } d ? new RecipientDigestResponse(d.Id, d.State, d.ClosesAt, d.ClosedAt) : null, r.CreatedAt,
-                    r.Deliveries.Select(x => new RecipientDeliveryResponse(x.Id, x.Channel, x.DestinationKey, x.Status, x.FailureCategory)).ToList())).ToList(),
+                    r.Deliveries.Select(x => new RecipientDeliveryResponse(x.Id, x.Channel, x.DestinationKey, x.Status, x.FailureCategory)).ToList(), r.Name)).ToList(),
                     page.Next))
                 : ApiResults.NotFound($"There is no notification {id} in this tenant.");
         }

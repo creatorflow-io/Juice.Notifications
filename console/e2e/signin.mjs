@@ -49,8 +49,8 @@ try {
   // Every tenant is a platform admin's, listed or not: a deep link to one without a linked application opens it (the API answers for it).
   const unlisted = '0193f0aa-0000-7000-8000-0000000000c3';
   await paul.goto(`${base}/tenants/${unlisted}`);
-  await paul.getByTestId('tenant-bar').waitFor({ timeout: 10000 }).catch(() => {});
-  check(paul.url() === `${base}/tenants/${unlisted}` && await paul.getByTestId('overview-tenant').count() === 1,
+  await paul.getByTestId('overview-tiles').waitFor({ timeout: 10000 }).catch(() => {});
+  check(paul.url() === `${base}/tenants/${unlisted}` && await paul.getByTestId('overview-tiles').count() === 1,
     `paul opens an unlisted tenant by its link (${paul.url()})`, problems);
 
   // A link that isn't a tenant's: the no-access page says so (not that no tenant is linked).
