@@ -1748,6 +1748,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("escalation_step");
 
+                    b.Property<bool>("FailureCheckDue")
+                        .HasColumnType("boolean")
+                        .HasColumnName("failure_check_due");
+
                     b.Property<DateTimeOffset?>("FailureRaisedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("failure_raised_at");
@@ -1817,6 +1821,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasKey("TenantId", "Id")
                         .HasName("pk_notification_recipients");
+
+                    b.HasIndex("Id")
+                        .HasDatabaseName("ix_notification_recipients_failure_check")
+                        .HasFilter("failure_check_due AND next_at IS NULL AND outcome NOT IN ('Pending', 'Deferred')");
 
                     b.HasIndex("NextAt")
                         .HasDatabaseName("ix_notification_recipients_due")

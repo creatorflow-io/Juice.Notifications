@@ -148,7 +148,7 @@ namespace Juice.Notifications.Retention
                                          && !db.Notifications.Any(n => n.TenantId == r.TenantId && n.RequestId == r.Id
                                              && (n.State == NotificationState.Planning || n.State == NotificationState.Running
                                                  || db.Recipients.Any(x => x.TenantId == n.TenantId && x.NotificationId == n.Id
-                                                     && (x.Outcome == RecipientOutcome.Pending || x.NextAt != null))
+                                                     && (RecipientPlanning.StillPlannedOutcomes.Contains(x.Outcome) || x.NextAt != null))
                                                  || db.Escalations.Any(e => e.TenantId == n.TenantId && e.NotificationId == n.Id && e.State == EscalationState.Running)))
                                          // And every delivery of it settled: an inbox item is written when its delivery is sent, after planning.
                                          && !db.DeliveryItems.Any(i => i.TenantId == r.TenantId && i.RequestId == r.Id

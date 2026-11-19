@@ -614,6 +614,8 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.TenantId, x.NotificationId, x.EscalationStep, x.NamedAs }).IsUnique().HasDatabaseName(Constraints.RecipientNamed);
                 // A digest's members, when it closes.
                 e.HasIndex(x => new { x.TenantId, x.DigestId }).HasFilter("digest_id IS NOT NULL").HasDatabaseName("ix_notification_recipients_digest");
+                // delivery.failed's recipients to look at: only settled ones, so one still in quiet hours isn't in it until they end.
+                e.HasIndex(x => x.Id).HasFilter("failure_check_due AND " + RecipientPlanning.SettledSql).HasDatabaseName("ix_notification_recipients_failure_check");
                 e.HasOne<Notification>().WithMany().HasForeignKey(x => new { x.TenantId, x.NotificationId }).OnDelete(DeleteBehavior.Cascade);
             });
 

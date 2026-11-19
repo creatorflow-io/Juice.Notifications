@@ -1,6 +1,12 @@
+using Juice.Notifications.Correlations;
 using Juice.Notifications.Data;
+using Juice.Notifications.Data.PostgreSQL;
+using Juice.Notifications.Delivering;
 using Juice.Notifications.Events;
+using Juice.Notifications.Planning;
+using Juice.Notifications.Stages;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace Juice.Notifications.IntegrationTests
@@ -126,7 +132,8 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>One person's recipient with one failed inbox delivery, marked, in the given outcome.</summary>
-        private async Task<(NotificationRecipient Recipient, Delivery Inbox)> FailedInboxAsync(RecipientOutcome outcome, DateTimeOffset? nextAt)
+        private async Task<(NotificationRecipient Recipient, Delivery Inbox)> FailedInboxAsync(RecipientOutcome outcome, DateTimeOffset? nextAt,
+            Correlation? correlation = null, DateTimeOffset? expiresAt = null)
         {
             await using var db = _database.Context();
             var type = Seed.Type(_apps.WithBroker, "brokered.held." + Guid.NewGuid().ToString("N")[..6]);
@@ -134,6 +141,16 @@ namespace Juice.Notifications.IntegrationTests
             var request = Seed.Request(Tenant, _apps.WithBroker, type.Id, Guid.NewGuid().ToString("N"));
             var notification = Seed.Notification(Tenant, request.Id);
             var recipient = Seed.Recipient(Tenant, notification.Id);
+            db.Entry(request).Property(r => r.TypeKey).CurrentValue = type.Key;
+            db.Entry(request).Property(r => r.ExpiresAt).CurrentValue = expiresAt;
+            if (correlation is not null)
+            {
+                db.Add(correlation);
+                db.Entry(request).Property(r => r.CorrelationId).CurrentValue = correlation.Id;
+                db.Entry(request).Property(r => r.CorrelationKey).CurrentValue = correlation.Key;
+            }
+            notification.State = NotificationState.Planned;
+            notification.NextAt = null;
             (recipient.Outcome, recipient.NextAt) = (outcome, nextAt);
             var inbox = new Delivery
             {
@@ -150,31 +167,72 @@ namespace Juice.Notifications.IntegrationTests
             return (recipient, inbox);
         }
 
+        /// <summary>The delivery planner over this database (no workers), to run its stage by hand.</summary>
+        private ServiceProvider PlannerServices()
+        {
+            var services = new ServiceCollection().AddLogging();
+            services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
+            services.AddSingleton(TimeProvider.System);
+            services.AddPostgresClaimStore();
+            services.AddDeliveryPlanning(PlannerOptions, runWorkers: false);
+            return services.BuildServiceProvider();
+        }
+
+        private static readonly StageOptions PlannerOptions = new() { Batch = 20, Lease = TimeSpan.FromSeconds(30) };
+
         /// <summary>
         /// A person in quiet hours has only their inbox delivery so far: its failure raises nothing while more can be planned for them, and the
-        /// delivery keeps its mark. Whatever settles them (here a correlation closed: cancelled) needs to mark nothing: the event is raised then
-        /// (phases 3–4 review, rounds 3 and 4).
+        /// mark moves to them. The delivery planner settling them (here: the request expired before the hours ended, so only the inbox stands)
+        /// does nothing for the event, which is raised then (phases 3–4 review, rounds 3 to 5).
         /// </summary>
-        [Theory]
-        [InlineData(RecipientOutcome.Planned)]
-        [InlineData(RecipientOutcome.Cancelled)]
-        public async Task Delivery_failed_waits_until_nothing_more_can_be_planned_for_the_person(RecipientOutcome settled)
+        [Fact]
+        public async Task Delivery_failed_is_raised_once_the_delivery_planner_settles_a_deferred_person()
         {
             LocalStack.RequireAvailable();
-            var (recipient, inbox) = await FailedInboxAsync(RecipientOutcome.Deferred, Seed.Now.AddHours(8));
+            var (recipient, inbox) = await FailedInboxAsync(RecipientOutcome.Deferred, DateTimeOffset.UtcNow.AddSeconds(-1), expiresAt: DateTimeOffset.UtcNow.AddSeconds(-1));
             var failures = Failures();
 
             Assert.Equal(0, await failures.RunOnceAsync(Ct));
             await using var db = _database.Context();
             Assert.False(await db.ProducerEvents.AnyAsync(Ct));
-            Assert.True((await db.Deliveries.AsNoTracking().SingleAsync(d => d.Id == inbox.Id, Ct)).FailureCheckDue);
+            Assert.False((await db.Deliveries.AsNoTracking().SingleAsync(d => d.Id == inbox.Id, Ct)).FailureCheckDue);
+            Assert.True((await db.Recipients.AsNoTracking().SingleAsync(r => r.Id == recipient.Id, Ct)).FailureCheckDue);
 
-            // The quiet hours end (planned, nothing more to send) or the correlation closes (cancelled): only the recipient changes.
-            await db.Recipients.Where(r => r.Id == recipient.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.Outcome, settled)
-                .SetProperty(r => r.NextAt, (DateTimeOffset?)null), Ct);
+            await using (var planning = PlannerServices())
+            {
+                var runner = planning.GetRequiredService<StageRunner<NotificationRecipient, DeliveryPlannerStage>>();
+                var pass = await runner.RunOnceAsync(DeliveryStageNames.DeliveryPlanner, PlannerOptions, Ct);
+                Assert.Equal(1, pass.Completed);
+            }
+            var settled = await db.Recipients.AsNoTracking().SingleAsync(r => r.Id == recipient.Id, Ct);
+            Assert.Equal((RecipientOutcome.Planned, (DateTimeOffset?)null), (settled.Outcome, settled.NextAt));
+
             Assert.Equal(1, await failures.RunOnceAsync(Ct));
             Assert.Equal("brokered.notification.delivery.failed", ProducerEvents.Read((await db.ProducerEvents.AsNoTracking().SingleAsync(Ct)).Payload).EventName);
-            Assert.False((await db.Deliveries.AsNoTracking().SingleAsync(d => d.Id == inbox.Id, Ct)).FailureCheckDue);
+            Assert.False((await db.Recipients.AsNoTracking().SingleAsync(r => r.Id == recipient.Id, Ct)).FailureCheckDue);
+        }
+
+        /// <summary>The same for a deferred person whose correlation is resolved: the close cancels them, and the event is raised then.</summary>
+        [Fact]
+        public async Task Delivery_failed_is_raised_once_a_closed_correlation_settles_a_deferred_person()
+        {
+            LocalStack.RequireAvailable();
+            var correlation = new Correlation
+            {
+                TenantId = Tenant, ApplicationId = _apps.WithBroker, Key = "c-" + Guid.NewGuid().ToString("N")[..6], State = CorrelationState.Open,
+                CreatedAt = Seed.Now, LastRequestAt = Seed.Now,
+            };
+            var (recipient, _) = await FailedInboxAsync(RecipientOutcome.Deferred, DateTimeOffset.UtcNow.AddHours(8), correlation);
+            var failures = Failures();
+            Assert.Equal(0, await failures.RunOnceAsync(Ct));
+
+            await using var db = _database.Context();
+            await db.Correlations.Where(c => c.Id == correlation.Id).ExecuteUpdateAsync(s => s.SetProperty(c => c.State, CorrelationState.Resolved), Ct);
+            await CorrelationLifecycle.StopAsync(db, Tenant, correlation.Id, DateTimeOffset.UtcNow, Ct);
+            Assert.Equal(RecipientOutcome.Cancelled, (await db.Recipients.AsNoTracking().SingleAsync(r => r.Id == recipient.Id, Ct)).Outcome);
+
+            Assert.Equal(1, await failures.RunOnceAsync(Ct));
+            Assert.Single(await db.ProducerEvents.AsNoTracking().ToListAsync(Ct));
         }
 
         /// <summary>

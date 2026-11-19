@@ -17,14 +17,15 @@ namespace Juice.Notifications.Delivering
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A marked delivery is left alone, mark and all, while any of its recipients can still be planned for (<see cref="Unsettled"/>): whatever
-    /// settles them later (the planner when quiet hours end, a correlation closed, a step given up) needs to do nothing for the event, and the
-    /// mark is taken once they are settled.
+    /// A recipient more can still be planned for (<see cref="RecipientPlanning"/>) isn't checked yet: the delivery's mark moves to them
+    /// (<see cref="NotificationRecipient.FailureCheckDue"/>). Its partial index holds only settled recipients, so they enter it as whatever
+    /// settles them (the planner when quiet hours end, a closed correlation, a step given up) saves them, and the worker's second scan takes
+    /// them from there. Nothing that settles a recipient does anything for the event, and nothing waiting on quiet hours is scanned meanwhile.
     /// </para>
     /// <para>
     /// Locks: deliveries, then recipients, each in id order, as a retry and a replay take them. The worker never waits for either (<c>SKIP
-    /// LOCKED</c>): a delivery one of whose recipients is held keeps its mark for a later pass, so copies of the worker in several instances, a
-    /// retry and a replay can't deadlock with it.
+    /// LOCKED</c>): a delivery one of whose recipients is held keeps its mark, and the drain pages past it, so copies of the worker in several
+    /// instances, a retry and a replay can't deadlock with it or hold up the deliveries behind it.
     /// </para>
     /// </remarks>
     public sealed class FailureEvents(IServiceScopeFactory scopes, Events.ProducerEvents events, TimeProvider clock, ILogger<FailureEvents> logger) : BackgroundService
@@ -40,13 +41,7 @@ namespace Juice.Notifications.Delivering
             {
                 try
                 {
-                    // On while a pass takes a full batch and gets somewhere: one whose rows are all held waits for the next interval.
-                    (int Taken, int Cleared) pass;
-                    do
-                    {
-                        pass = await PassAsync(stoppingToken);
-                    }
-                    while (pass.Taken == Batch && pass.Cleared > 0);
+                    await DrainAsync(stoppingToken);
                 }
                 catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
                 {
@@ -63,33 +58,50 @@ namespace Juice.Notifications.Delivering
             }
         }
 
-        /// <summary>One batch of marked deliveries; how many marks it cleared (a delivery with a held or unsettled recipient keeps its mark).</summary>
-        public async Task<int> RunOnceAsync(CancellationToken ct) => (await PassAsync(ct)).Cleared;
+        /// <summary>
+        /// Every marked delivery once, in id order, paging past those it had to keep (a held recipient), then every settled recipient marked.
+        /// Kept ones are taken again on the next drain.
+        /// </summary>
+        public async Task DrainAsync(CancellationToken ct)
+        {
+            Guid? after = null;
+            while (await DeliveriesAsync(after, ct) is { Last: { } last } page)
+            {
+                if (page.Taken < Batch)
+                {
+                    break;
+                }
+                after = last;
+            }
+            while (await RecipientsAsync(ct) == Batch)
+            {
+            }
+        }
 
-        private static readonly string Pending = nameof(RecipientOutcome.Pending);
-        private static readonly string Deferred = nameof(RecipientOutcome.Deferred);
+        /// <summary>One batch of marked deliveries and one of settled marked recipients; how many recipients it checked.</summary>
+        public async Task<int> RunOnceAsync(CancellationToken ct) => (await DeliveriesAsync(null, ct)).Checked + await RecipientsAsync(ct);
 
-        /// <summary>One batch: how many marked deliveries it took, and how many marks it cleared.</summary>
-        private async Task<(int Taken, int Cleared)> PassAsync(CancellationToken ct)
+        private sealed record Page(int Taken, int Checked, Guid? Last);
+
+        /// <summary>One batch of marked deliveries after <paramref name="after"/>.</summary>
+        private async Task<Page> DeliveriesAsync(Guid? after, CancellationToken ct)
         {
             await using var scope = scopes.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
             await using var transaction = await db.Database.BeginTransactionAsync(ct);
-            // In id order, as the partial index ix_deliveries_failure_check gives them; none any of whose recipients can still be planned for.
-            var marked = await db.Database.SqlQuery<MarkedDelivery>($"""
-                SELECT d.tenant_id, d.id FROM notifications.deliveries d
-                WHERE d.failure_check_due AND NOT EXISTS (
-                    SELECT 1 FROM notifications.delivery_items i
-                    JOIN notifications.notification_recipients r ON r.tenant_id = i.tenant_id AND r.id = i.recipient_id
-                    WHERE i.tenant_id = d.tenant_id AND i.delivery_id = d.id AND (r.outcome IN ({Pending}, {Deferred}) OR r.next_at IS NOT NULL))
-                ORDER BY d.id LIMIT {Batch} FOR UPDATE OF d SKIP LOCKED
+            var from = after ?? Guid.Empty;
+            // In id order, as the partial index ix_deliveries_failure_check gives them.
+            var marked = await db.Database.SqlQuery<MarkedRow>($"""
+                SELECT tenant_id, id FROM notifications.deliveries WHERE failure_check_due AND id > {from}
+                ORDER BY id LIMIT {Batch} FOR UPDATE SKIP LOCKED
                 """).ToListAsync(ct);
             if (marked.Count == 0)
             {
-                return (0, 0);
+                return new Page(0, 0, null);
             }
             var now = clock.GetUtcNow();
-            var cleared = new List<MarkedDelivery>();
+            var cleared = new List<MarkedRow>();
+            var checkedCount = 0;
             foreach (var tenant in marked.GroupBy(d => d.TenantId))
             {
                 if (!events.Enabled)
@@ -103,16 +115,29 @@ namespace Juice.Notifications.Delivering
                 // Every recipient of the batch at once, in id order, skipping those another transaction holds.
                 var recipientIds = items.Select(i => i.RecipientId).Distinct().Order().ToArray();
                 var locked = await db.Database.SqlQuery<LockedRecipient>($"""
-                    SELECT id, failure_raised_at, outcome, next_at FROM notifications.notification_recipients
+                    SELECT tenant_id, id, failure_raised_at, outcome, next_at FROM notifications.notification_recipients
                     WHERE tenant_id = {tenant.Key} AND id = ANY({recipientIds}) ORDER BY id FOR UPDATE SKIP LOCKED
                     """).ToListAsync(ct);
-                // Held, or (read again under the lock) no longer settled: their deliveries keep the mark for a later pass.
-                var checkable = locked.Where(r => !Unsettled(r)).Select(r => r.Id).ToHashSet();
-                foreach (var recipient in locked.Where(r => checkable.Contains(r.Id)))
+                var later = new List<Guid>();
+                foreach (var recipient in locked)
                 {
-                    await CheckAsync(db, tenant.Key, recipient, now, ct);
+                    if (RecipientPlanning.CanStillBePlanned(Enum.Parse<RecipientOutcome>(recipient.Outcome), recipient.NextAt))
+                    {
+                        later.Add(recipient.Id); // the mark moves to them: checked once they settle
+                    }
+                    else
+                    {
+                        await CheckAsync(db, tenant.Key, recipient, now, ct);
+                        checkedCount++;
+                    }
                 }
-                var kept = items.Where(i => !checkable.Contains(i.RecipientId)).Select(i => i.DeliveryId).ToHashSet();
+                if (later.Count > 0)
+                {
+                    await db.Recipients.Where(r => r.TenantId == tenant.Key && later.Contains(r.Id)).ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureCheckDue, true), ct);
+                }
+                // Held: their deliveries keep the mark for the next drain.
+                var lockedIds = locked.Select(r => r.Id).ToHashSet();
+                var kept = items.Where(i => !lockedIds.Contains(i.RecipientId)).Select(i => i.DeliveryId).ToHashSet();
                 cleared.AddRange(tenant.Where(d => !kept.Contains(d.Id)));
             }
             foreach (var tenant in cleared.GroupBy(d => d.TenantId))
@@ -121,18 +146,50 @@ namespace Juice.Notifications.Delivering
                 await db.Deliveries.Where(d => d.TenantId == tenant.Key && ids.Contains(d.Id)).ExecuteUpdateAsync(s => s.SetProperty(d => d.FailureCheckDue, false), ct);
             }
             await transaction.CommitAsync(ct);
-            return (marked.Count, cleared.Count);
+            return new Page(marked.Count, checkedCount, marked[^1].Id);
         }
 
-        private sealed record MarkedDelivery(Guid TenantId, Guid Id);
-
-        private sealed record LockedRecipient(Guid Id, DateTimeOffset? FailureRaisedAt, string Outcome, DateTimeOffset? NextAt);
-
         /// <summary>
-        /// More can still be planned for the recipient: pending, held by quiet hours (only their inbox so far), or due at a stage. The same test
-        /// as the batch query's, in SQL there.
+        /// Settled recipients whose check waited for them: the partial index's own predicate, as literals (constants of this code, no input), so
+        /// the index serves the query.
         /// </summary>
-        private static bool Unsettled(LockedRecipient r) => r.NextAt is not null || r.Outcome == Pending || r.Outcome == Deferred;
+        private static readonly string DueRecipients = $"""
+            SELECT tenant_id, id, failure_raised_at, outcome, next_at FROM notifications.notification_recipients
+            WHERE failure_check_due AND {RecipientPlanning.SettledSql}
+            ORDER BY id LIMIT {Batch} FOR UPDATE SKIP LOCKED
+            """;
+
+        /// <summary>One batch of settled recipients whose check waited for them (from their partial index); how many it took.</summary>
+        private async Task<int> RecipientsAsync(CancellationToken ct)
+        {
+            await using var scope = scopes.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            var due = await db.Database.SqlQueryRaw<LockedRecipient>(DueRecipients).ToListAsync(ct);
+            if (due.Count == 0)
+            {
+                return 0;
+            }
+            if (events.Enabled)
+            {
+                var now = clock.GetUtcNow();
+                foreach (var recipient in due)
+                {
+                    await CheckAsync(db, recipient.TenantId, recipient, now, ct);
+                }
+            }
+            foreach (var tenant in due.GroupBy(r => r.TenantId))
+            {
+                var ids = tenant.Select(r => r.Id).ToList();
+                await db.Recipients.Where(r => r.TenantId == tenant.Key && ids.Contains(r.Id)).ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureCheckDue, false), ct);
+            }
+            await transaction.CommitAsync(ct);
+            return due.Count;
+        }
+
+        private sealed record MarkedRow(Guid TenantId, Guid Id);
+
+        private sealed record LockedRecipient(Guid TenantId, Guid Id, DateTimeOffset? FailureRaisedAt, string Outcome, DateTimeOffset? NextAt);
 
         private async Task CheckAsync(NotificationsDbContext db, Guid tenantId, LockedRecipient recipient, DateTimeOffset at, CancellationToken ct)
         {

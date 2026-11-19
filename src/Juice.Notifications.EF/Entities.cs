@@ -739,7 +739,33 @@ namespace Juice.Notifications.Data
         public string[] Bypassed { get; set; } = [];
         /// <summary>When <c>delivery.failed</c> was raised for the recipient (every destination ended without going out): once.</summary>
         public DateTimeOffset? FailureRaisedAt { get; set; }
+        /// <summary>
+        /// One of the recipient's deliveries ended while more could still be planned for them (quiet hours): <c>delivery.failed</c> looks at
+        /// them once they are settled (<see cref="RecipientPlanning"/>). The partial index holds only settled ones, so they enter it as they settle.
+        /// </summary>
+        public bool FailureCheckDue { get; set; }
         public DateTimeOffset CreatedAt { get; init; }
+    }
+
+    /// <summary>
+    /// Whether more can still be planned for a recipient: pending, held by quiet hours (<c>Deferred</c>: only their inbox so far), or due at a
+    /// stage (<c>next_at</c> set). One definition for <c>delivery.failed</c>, a closed correlation and redaction, in C# and in SQL.
+    /// </summary>
+    public static class RecipientPlanning
+    {
+        /// <summary>The outcomes that can still be planned for, whatever <c>next_at</c> says.</summary>
+        public static readonly RecipientOutcome[] StillPlannedOutcomes = [RecipientOutcome.Pending, RecipientOutcome.Deferred];
+
+        /// <summary>The same, as stored (for SQL parameters: <c>outcome = ANY(…)</c>).</summary>
+        public static readonly string[] StillPlannedNames = StillPlannedOutcomes.Select(o => o.ToString()).ToArray();
+
+        /// <summary>
+        /// Settled, as a SQL predicate over <c>notification_recipients</c> with literals (no parameters), so a query that repeats it can use the
+        /// partial index whose filter it is.
+        /// </summary>
+        public static readonly string SettledSql = $"next_at IS NULL AND outcome NOT IN ({string.Join(", ", StillPlannedNames.Select(n => $"'{n}'"))})";
+
+        public static bool CanStillBePlanned(RecipientOutcome outcome, DateTimeOffset? nextAt) => nextAt is not null || StillPlannedOutcomes.Contains(outcome);
     }
 
     /// <summary>One send of one destination on one channel, through one integration. Its id never changes across retries (design D6).</summary>

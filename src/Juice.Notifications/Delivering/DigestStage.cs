@@ -28,9 +28,45 @@ namespace Juice.Notifications.Delivering
         public string Name => StageName;
 
         /// <summary>
-        /// Closing an open digest: the lock members join under (<see cref="WorkflowRunner.DigestLock"/>), then the close, run in their own
-        /// transaction and committed at once, by a step (async) and by a give-up (sync) alike.
+        /// Closes an open digest: under the lock members join under (<see cref="WorkflowRunner.DigestLock"/>), in its own transaction committed
+        /// at once, so none joins once it is closing. The row then reads as stored: closed now, or as it was if it was closed already.
+        /// Synchronous for a give-up (the runner's hook is); <see cref="CloseAsync"/> for a step.
         /// </summary>
+        private static void Close(NotificationsDbContext db, Digest row, DateTimeOffset now)
+        {
+            var (lockStatement, close) = Closing(row, now);
+            using var transaction = db.Database.BeginTransaction();
+            db.Database.ExecuteSql(lockStatement);
+            var closed = db.Database.ExecuteSql(close) == 1;
+            transaction.Commit();
+            if (closed)
+            {
+                (row.State, row.ClosedAt) = (DigestState.Closed, now);
+            }
+            else
+            {
+                db.Entry(row).Reload(); // closed already: its own close time stays
+            }
+        }
+
+        /// <inheritdoc cref="Close"/>
+        private static async Task CloseAsync(NotificationsDbContext db, Digest row, DateTimeOffset now, CancellationToken ct)
+        {
+            var (lockStatement, close) = Closing(row, now);
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            await db.Database.ExecuteSqlAsync(lockStatement, ct);
+            var closed = await db.Database.ExecuteSqlAsync(close, ct) == 1;
+            await transaction.CommitAsync(ct);
+            if (closed)
+            {
+                (row.State, row.ClosedAt) = (DigestState.Closed, now);
+            }
+            else
+            {
+                await db.Entry(row).ReloadAsync(ct); // closed already: its own close time stays
+            }
+        }
+
         private static (FormattableString Lock, FormattableString Close) Closing(Digest row, DateTimeOffset now)
         {
             var lockKey = WorkflowRunner.DigestLock(row.TenantId, row.TypeKey, row.By, row.Key);
@@ -47,13 +83,7 @@ namespace Juice.Notifications.Delivering
             // runner's hook is.)
             if (row.State == DigestState.Open)
             {
-                var db = context.Db;
-                var (lockStatement, close) = Closing(row, context.Now);
-                using var transaction = db.Database.BeginTransaction();
-                db.Database.ExecuteSql(lockStatement);
-                db.Database.ExecuteSql(close);
-                transaction.Commit();
-                row.ClosedAt = context.Now;
+                Close(context.Db, row, context.Now);
             }
             row.State = DigestState.Cancelled;
             foreach (var member in context.Db.Recipients.Where(r => r.TenantId == row.TenantId && r.DigestId == row.Id && r.Outcome == RecipientOutcome.Pending).ToList())
@@ -75,12 +105,12 @@ namespace Juice.Notifications.Delivering
             }
             if (row.State == DigestState.Open)
             {
-                var (lockStatement, close) = Closing(row, now);
-                await using var transaction = await db.Database.BeginTransactionAsync(ct);
-                await db.Database.ExecuteSqlAsync(lockStatement, ct);
-                await db.Database.ExecuteSqlAsync(close, ct);
-                await transaction.CommitAsync(ct);
-                (row.State, row.ClosedAt) = (DigestState.Closed, now);
+                await CloseAsync(db, row, now, ct);
+                if (row.State == DigestState.Cancelled)
+                {
+                    context.Done(row, null); // given up meanwhile, as it reads now
+                    return;
+                }
             }
             var members = await db.Recipients.Where(r => r.TenantId == row.TenantId && r.DigestId == row.Id && r.Outcome == RecipientOutcome.Pending)
                 .OrderBy(r => r.Id).ToListAsync(ct);

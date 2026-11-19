@@ -196,9 +196,9 @@ namespace Juice.Notifications.Correlations
         internal static async Task<(int Notifications, int Recipients, int Deliveries)> StopAsync(NotificationsDbContext db, Guid tenantId, Guid correlationId,
             DateTimeOffset now, CancellationToken ct)
         {
-            var (cancelled, planning, running, pending, deferred, planned, retrying) = (NotificationState.Cancelled.ToString(), NotificationState.Planning.ToString(),
-                NotificationState.Running.ToString(), RecipientOutcome.Pending.ToString(), RecipientOutcome.Deferred.ToString(), RecipientOutcome.Planned.ToString(),
-                DeliveryStatus.Retrying.ToString());
+            var (cancelled, planning, running, retrying) = (NotificationState.Cancelled.ToString(), NotificationState.Planning.ToString(),
+                NotificationState.Running.ToString(), DeliveryStatus.Retrying.ToString());
+            var stillPlanned = RecipientPlanning.StillPlannedNames;
             var recipientCancelled = RecipientOutcome.Cancelled.ToString();
             var deliveryCancelled = DeliveryStatus.Cancelled.ToString();
             var deliveryPending = DeliveryStatus.Pending.ToString();
@@ -210,7 +210,7 @@ namespace Juice.Notifications.Correlations
                 FROM notifications.notifications n
                 JOIN notifications.requests r ON r.tenant_id = n.tenant_id AND r.id = n.request_id
                 WHERE x.tenant_id = {tenantId} AND n.tenant_id = x.tenant_id AND n.id = x.notification_id AND r.correlation_id = {correlationId}
-                  AND (x.outcome IN ({pending}, {deferred}) OR (x.outcome = {planned} AND x.next_at IS NOT NULL))
+                  AND (x.outcome = ANY({stillPlanned}) OR x.next_at IS NOT NULL) -- RecipientPlanning: more could still be planned for them
                 """, ct);
             var notifications = await db.Database.ExecuteSqlAsync($"""
                 UPDATE notifications.notifications n
