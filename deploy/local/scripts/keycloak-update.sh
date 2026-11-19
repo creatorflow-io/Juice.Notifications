@@ -9,6 +9,8 @@
 #     tenants, the group ops, the realm role on-call, and the notifications-directory client the identity resolver reads them as: a
 #     service account with realm-management view-users (users, groups) and view-realm (a realm role's holders). Never view-clients,
 #     which reads every client's secret.
+#   - the Notifications Console's public client notifications-console and the admins tess (tenant) and paul (platform) (19 Nov 2026,
+#     phase-4c-plan I51).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1
@@ -75,7 +77,7 @@ OTHER=0193f0aa-0000-7000-8000-0000000000b2
 # username tenant email-verified enabled groups realm-roles. A for loop, not while read: kcadm (docker compose
 # exec) reads stdin.
 PEOPLE=("ann TENANT true true ops -" "ben TENANT true true - on-call" "dora TENANT false true ops -" "eli TENANT true false ops on-call"
-  "cara OTHER true true ops on-call")
+  "cara OTHER true true ops on-call" "tess TENANT true true - notifications-tenant-admin" "paul TENANT true true - notifications-platform-admin")
 for line in "${PEOPLE[@]}"; do
   read -r person tenant verified enabled groups roles <<< "$line"
   id=$($K get users -r juice -q "username=$person" -q exact=true --fields id --format csv --noquotes)
@@ -85,7 +87,7 @@ for line in "${PEOPLE[@]}"; do
   fi
   $K update "users/$id" -r juice -s "attributes.platform_tenant=[\"${!tenant}\"]" -s "enabled=$enabled" -s "emailVerified=$verified"
   [[ "$groups" == ops ]] && $K update "users/$id/groups/$group" -r juice -s realm=juice -s "userId=$id" -s "groupId=$group" -n
-  [[ "$roles" == on-call ]] && $K add-roles -r juice --uid "$id" --rolename on-call
+  [[ "$roles" != - ]] && $K add-roles -r juice --uid "$id" --rolename "$roles"
   $K set-password -r juice --username "$person" --new-password "$PEOPLE_TEST_PASSWORD"
 done
 
@@ -106,6 +108,26 @@ if [[ -z "$demo" ]]; then
     -s protocolMapper=oidc-usermodel-property-mapper -s 'config."user.attribute"=username' -s 'config."claim.name"=preferred_username' \
     -s 'config."jsonType.label"=String' -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=true'
   $K create "clients/$demo/protocol-mappers/models" -r juice -s 'name=full name' -s protocol=openid-connect -s protocolMapper=oidc-full-name-mapper \
+    -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=true' -s 'config."userinfo.token.claim"=true'
+fi
+
+# The Notifications Console (phase-4c-plan I51): code flow with PKCE from the App (5280) or ng serve (4300), for admins.
+console=$($K get clients -r juice --fields id,clientId --format csv --noquotes | grep ",notifications-console$" | cut -d, -f1 || true)
+if [[ -z "$console" ]]; then
+  console=$($K create clients -r juice -i -s clientId=notifications-console -s "name=Notifications Console (local)" -s enabled=true \
+    -s publicClient=true -s standardFlowEnabled=true -s directAccessGrantsEnabled=false \
+    -s 'redirectUris=["http://localhost:5280/*","http://localhost:4300/*"]' -s 'webOrigins=["http://localhost:5280","http://localhost:4300"]' \
+    -s 'attributes."pkce.code.challenge.method"=S256' -s 'attributes."post.logout.redirect.uris"=http://localhost:5280/*##http://localhost:4300/*')
+  $K update "clients/$console/default-client-scopes/$scope" -r juice
+  $K create "clients/$console/protocol-mappers/models" -r juice -s 'name=platform tenant' -s protocol=openid-connect \
+    -s protocolMapper=oidc-usermodel-attribute-mapper -s 'config."user.attribute"=platform_tenant' -s 'config."claim.name"=platform_tenant' \
+    -s 'config."jsonType.label"=String' -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=false'
+  $K create "clients/$console/protocol-mappers/models" -r juice -s name=subject -s protocol=openid-connect -s protocolMapper=oidc-sub-mapper \
+    -s 'config."access.token.claim"=true' -s 'config."introspection.token.claim"=true'
+  $K create "clients/$console/protocol-mappers/models" -r juice -s name=username -s protocol=openid-connect \
+    -s protocolMapper=oidc-usermodel-property-mapper -s 'config."user.attribute"=username' -s 'config."claim.name"=preferred_username' \
+    -s 'config."jsonType.label"=String' -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=true'
+  $K create "clients/$console/protocol-mappers/models" -r juice -s 'name=full name' -s protocol=openid-connect -s protocolMapper=oidc-full-name-mapper \
     -s 'config."access.token.claim"=true' -s 'config."id.token.claim"=true' -s 'config."userinfo.token.claim"=true'
 fi
 

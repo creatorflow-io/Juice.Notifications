@@ -300,6 +300,7 @@ namespace Juice.Notifications.Api
         {
             app.MapHealthChecks("/health/live", new() { Predicate = _ => false }).AllowAnonymous();
             app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
+            app.MapAccessEndpoints();
             app.MapApplicationEndpoints();
             app.MapProducerEndpoints();
             app.MapCorrelationEndpoints();

@@ -44,9 +44,38 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOIN
 }
 
 var app = builder.Build();
+// The Notifications Console (phase-4c-plan I49), when the image includes it (web root, `webroot` to move it): static files on the API's own
+// origin, never framed. Hashed bundles are cached for good; the index page never is, so a deploy is picked up on the next load.
+app.Use((context, next) =>
+{
+    context.Response.Headers.XContentTypeOptions = "nosniff";
+    context.Response.Headers.XFrameOptions = "DENY";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    return next(context);
+});
+app.UseDefaultFiles();
+app.UseStaticFiles(ConsoleFiles.Options());
 app.UseJuiceNotifications();
 app.MapJuiceNotifications();
+// Any other path outside /api, /hubs and /health, and not a file, is a Console route. API paths keep routing's own answers (404, 405), and a
+// missing file is never answered with the index page (a stale chunk must fail, not load HTML as script).
+app.MapFallbackToFile("{*path:nonfile:regex(^(?!(api|hubs|health)(/|$)).*$)}", "index.html", ConsoleFiles.Options()).AllowAnonymous();
 app.Run();
+
+/// <summary>The Console's built files: Angular names its bundles with a content hash (<c>main-ABCD1234.js</c>).</summary>
+internal static partial class ConsoleFiles
+{
+    /// <summary>For the files and for the fallback's index page alike.</summary>
+    public static StaticFileOptions Options() => new()
+    {
+        OnPrepareResponse = file => file.Context.Response.Headers.CacheControl = IsHashed(file.File.Name) ? "public, max-age=31536000, immutable" : "no-cache",
+    };
+
+    public static bool IsHashed(string name) => Hashed().IsMatch(name);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Z0-9]{8,}\.(js|css|mjs)$")]
+    private static partial System.Text.RegularExpressions.Regex Hashed();
+}
 
 /// <summary>The host's entry point, visible to the integration tests' WebApplicationFactory.</summary>
 public partial class Program;

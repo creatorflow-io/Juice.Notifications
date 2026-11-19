@@ -17,6 +17,21 @@ namespace Juice.Notifications.Api
         /// written before <c>me</c> existed answers no, so it grants no <c>me</c> it never decided on.
         /// </summary>
         ValueTask<bool> IsMemberAsync(ClaimsPrincipal user, Guid tenantId, CancellationToken ct) => ValueTask.FromResult(false);
+
+        /// <summary>
+        /// Which tenants the caller administers, for the Console's tenant switcher (phase-4c-plan I50): every tenant, or the ones listed. It must
+        /// agree with <see cref="CanAdministerAsync"/>. An implementation written before the Console answers none, so the Console offers nothing
+        /// it never decided on (the API still answers by <see cref="CanAdministerAsync"/>).
+        /// </summary>
+        ValueTask<AdministeredTenants> AdministeredAsync(ClaimsPrincipal user, CancellationToken ct) => ValueTask.FromResult(AdministeredTenants.None);
+    }
+
+    /// <summary>The tenants a caller administers: <see cref="Every"/> (a platform admin), or those in <see cref="Ids"/>.</summary>
+    public sealed record AdministeredTenants(bool Every, IReadOnlyList<Guid> Ids)
+    {
+        public static readonly AdministeredTenants None = new(false, []);
+
+        public static AdministeredTenants All { get; } = new(true, []);
     }
 
     /// <summary>
@@ -38,6 +53,17 @@ namespace Juice.Notifications.Api
 
         public ValueTask<bool> IsMemberAsync(ClaimsPrincipal user, Guid tenantId, CancellationToken ct)
             => ValueTask.FromResult(Guid.TryParse(user.FindFirst(auth.Value.TenantClaim)?.Value, out var id) && id == tenantId);
+
+        public ValueTask<AdministeredTenants> AdministeredAsync(ClaimsPrincipal user, CancellationToken ct)
+        {
+            if (user.IsInRole(Roles.PlatformAdmin))
+            {
+                return ValueTask.FromResult(AdministeredTenants.All);
+            }
+            return ValueTask.FromResult(user.IsInRole(auth.Value.TenantAdminRole) && Guid.TryParse(user.FindFirst(auth.Value.TenantClaim)?.Value, out var id)
+                ? new AdministeredTenants(false, [id])
+                : AdministeredTenants.None);
+        }
     }
 
     internal static class TenantAccessFilter

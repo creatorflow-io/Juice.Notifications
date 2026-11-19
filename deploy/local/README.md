@@ -78,6 +78,7 @@ Contact addresses and device tokens are encrypted at rest under `NOTIFICATIONS_C
 | `tenant-admin` | client credentials | `notifications-tenant-admin`, `platform_tenant` = `0193f0aa-0000-7000-8000-0000000000a1` | configure that one tenant's delivery (the tests' tenant) |
 | `people-test` | password (public client) | none, `platform_tenant` = the person's own attribute | sign in the person accounts (password `PEOPLE_TEST_PASSWORD`) for the person's API, `me`, which refuses a client's own token |
 | `juice-layout-demo` | code with PKCE (public client) | none, `platform_tenant` = the person's own attribute | the `juice-layout` demo app (`ng serve -c notifications`, `https://localhost:4201`), for `@juice-js/notifications`; the API allows that origin (`Cors:Origins`) |
+| `notifications-console` | code with PKCE (public client) | the person's realm roles, `platform_tenant` = their own attribute | the Notifications Console (phase-4c-plan I51), served by the App on `http://localhost:5280` or by `ng serve` on `http://localhost:4300`; same origin as the API, so no CORS |
 | `notifications-directory` | client credentials | realm-management `view-users`, `view-realm` | the identity resolver's directory `keycloak` (the app's `Identity:Directories:keycloak`): reads users, groups and realm roles |
 
 The person accounts belong to a tenant through the user attribute `platform_tenant` (declared in the realm's user profile, admin-only):
@@ -89,6 +90,12 @@ The person accounts belong to a tenant through the user attribute `platform_tena
 | `dora` | `…a1` | not verified | yes | |
 | `eli` (disabled) | `…a1` | verified | yes | yes |
 | `cara` | `…b2` | verified | yes | yes |
+| `tess` | `…a1` | verified | | |
+| `paul` | `…a1` | verified | | |
+
+`tess` is a tenant admin of `…a1` (realm role `notifications-tenant-admin`) and `paul` a platform admin (`notifications-platform-admin`):
+the Console's admins, signed in with `PEOPLE_TEST_PASSWORD`. An existing Keycloak gets them, and the Console's client, from
+`scripts/keycloak-update.sh`.
 
 A tenant reaches them through a resolver of kind `identity` naming the directory: `PUT /api/v1/tenants/{id}/resolvers/people
 { "kind": "identity", "settings": { "directory": "keycloak" } }`, then recipients such as `{ "kind": "group", "id": "ops", "resolver": "people" }`.
