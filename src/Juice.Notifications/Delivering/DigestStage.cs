@@ -62,7 +62,7 @@ namespace Juice.Notifications.Delivering
         {
             if (updated != 1)
             {
-                throw new InvalidOperationException($"Digest {row.Id} was closed by another worker since this one claimed it; its claim is lost.");
+                throw new InvalidOperationException($"Digest {row.Id} moved on since this worker loaded it (claimed by another, perhaps closed); its claim is lost.");
             }
             (row.State, row.ClosedAt) = (DigestState.Closed, now);
         }

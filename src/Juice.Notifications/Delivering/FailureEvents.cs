@@ -119,6 +119,7 @@ namespace Juice.Notifications.Delivering
                     WHERE tenant_id = {tenant.Key} AND id = ANY({recipientIds}) ORDER BY id FOR UPDATE SKIP LOCKED
                     """).ToListAsync(ct);
                 var later = new List<Guid>();
+                var checkedHere = new List<Guid>();
                 foreach (var recipient in locked)
                 {
                     if (recipient.FailureRaisedAt is not null)
@@ -131,15 +132,20 @@ namespace Juice.Notifications.Delivering
                     }
                     else
                     {
-                        if (await CheckAsync(db, tenant.Key, recipient, now, ct))
-                        {
-                            checkedCount++;
-                        }
+                        await CheckAsync(db, tenant.Key, recipient, now, ct); // not reported yet (above): always a check
+                        checkedHere.Add(recipient.Id);
                     }
                 }
                 if (later.Count > 0)
                 {
                     await db.Recipients.Where(r => r.TenantId == tenant.Key && later.Contains(r.Id)).ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureCheckDue, true), ct);
+                }
+                if (checkedHere.Count > 0)
+                {
+                    // Checked now: a mark one of them carries from earlier (quiet hours) is answered too, so the recipients pass doesn't check again.
+                    await db.Recipients.Where(r => r.TenantId == tenant.Key && r.FailureCheckDue && checkedHere.Contains(r.Id))
+                        .ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureCheckDue, false), ct);
+                    checkedCount += checkedHere.Count;
                 }
                 // Held: their deliveries keep the mark for the next drain.
                 var lockedIds = locked.Select(r => r.Id).ToHashSet();

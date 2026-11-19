@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Juice.Notifications.EF.PostgreSQL.Migrations
 {
     [DbContext(typeof(NotificationsDbContext))]
-    [Migration("20261119011123_ReviewFixes4")]
-    partial class ReviewFixes4
+    [Migration("20261119021051_ReviewFixes5")]
+    partial class ReviewFixes5
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
