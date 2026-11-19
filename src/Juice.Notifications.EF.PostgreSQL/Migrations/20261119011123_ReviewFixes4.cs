@@ -18,19 +18,24 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                 nullable: false,
                 defaultValue: false);
 
-            // Built concurrently, outside the migration's transaction: notification_recipients is written by every stage, and a plain CREATE INDEX
-            // would hold its writes for the whole build. The model (snapshot) has the same index, so later migrations see it as there. If the
-            // build fails it leaves an invalid index: drop it and run the migration again (IF NOT EXISTS would keep the invalid one).
-            migrationBuilder.Sql("""
-                CREATE INDEX CONCURRENTLY ix_notification_recipients_failure_check ON notifications.notification_recipients (id)
-                WHERE failure_check_due AND next_at IS NULL AND outcome NOT IN ('Pending', 'Deferred')
-                """, suppressTransaction: true);
+            // A plain build in the migration's transaction: the index starts empty (failure_check_due was just added, false everywhere), so it
+            // costs one scan of the table. CONCURRENTLY would need its own transaction (no rerun after a failure, the migration lock released
+            // early, no idempotent script).
+            migrationBuilder.CreateIndex(
+                name: "ix_notification_recipients_failure_check",
+                schema: "notifications",
+                table: "notification_recipients",
+                column: "id",
+                filter: "failure_check_due AND next_at IS NULL AND outcome NOT IN ('Pending', 'Deferred')");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.Sql("DROP INDEX CONCURRENTLY IF EXISTS notifications.ix_notification_recipients_failure_check", suppressTransaction: true);
+            migrationBuilder.DropIndex(
+                name: "ix_notification_recipients_failure_check",
+                schema: "notifications",
+                table: "notification_recipients");
 
             migrationBuilder.DropColumn(
                 name: "failure_check_due",

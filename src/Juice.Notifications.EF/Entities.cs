@@ -756,11 +756,11 @@ namespace Juice.Notifications.Data
         private static readonly RecipientOutcome[] Outcomes = [RecipientOutcome.Pending, RecipientOutcome.Deferred];
         private static readonly string[] Names = Outcomes.Select(o => o.ToString()).ToArray();
 
-        /// <summary>The outcomes that can still be planned for, whatever <c>next_at</c> says (a copy: the set itself can't be changed).</summary>
-        public static RecipientOutcome[] StillPlannedOutcomes => [.. Outcomes];
+        /// <summary>The outcomes that can still be planned for, whatever <c>next_at</c> says (read-only).</summary>
+        public static IReadOnlyList<RecipientOutcome> StillPlannedOutcomes { get; } = Array.AsReadOnly(Outcomes);
 
-        /// <summary>The same, as stored (for SQL parameters: <c>outcome = ANY(…)</c>; a copy).</summary>
-        public static string[] StillPlannedNames => [.. Names];
+        /// <summary>The same, as stored (read-only; a SQL parameter for <c>outcome = ANY(…)</c> takes a copy as an array).</summary>
+        public static IReadOnlyList<string> StillPlannedNames { get; } = Array.AsReadOnly(Names);
 
         /// <summary>
         /// Settled, as a SQL predicate over <c>notification_recipients</c> with literals (no parameters), so a query that repeats it can use the
@@ -768,9 +768,7 @@ namespace Juice.Notifications.Data
         /// </summary>
         public static readonly string SettledSql = $"next_at IS NULL AND outcome NOT IN ({string.Join(", ", Names.Select(n => $"'{n}'"))})";
 
-        public static bool CanStillBePlanned(RecipientOutcome outcome, DateTimeOffset? nextAt) => nextAt is not null || Outcomes.Contains(outcome);
-
-        /// <summary>The same over the stored outcome: an outcome this build doesn't know is taken as settled, as <see cref="SettledSql"/> takes it.</summary>
+        /// <summary>Over the stored outcome: one this build doesn't know is taken as settled, as <see cref="SettledSql"/> takes it.</summary>
         public static bool CanStillBePlanned(string outcome, DateTimeOffset? nextAt) => nextAt is not null || Names.Contains(outcome, StringComparer.Ordinal);
     }
 

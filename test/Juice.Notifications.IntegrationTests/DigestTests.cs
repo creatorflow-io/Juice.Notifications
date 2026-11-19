@@ -231,5 +231,42 @@ namespace Juice.Notifications.IntegrationTests
             Assert.All(await check.Recipients.AsNoTracking().ToListAsync(Ct), r => Assert.Equal(RecipientOutcome.Pending, r.Outcome));
             Assert.Equal(0, await check.Deliveries.CountAsync(Ct));
         }
+
+        /// <summary>
+        /// A stale worker's close lands on nothing once another has claimed the digest (the close applies only at the version it loaded), so
+        /// the owner's close still applies and its step plans the members (phases 3–4 review, round 6).
+        /// </summary>
+        [Fact]
+        public async Task A_stale_close_lands_on_nothing_and_the_owners_close_applies()
+        {
+            LocalStack.RequireAvailable();
+            await NotificationAsync(1);
+            await DrainAsync<Notification, PlannerStage>("planner");
+            await using var stale = _services!.CreateAsyncScope();
+            var staleDb = stale.ServiceProvider.GetRequiredService<NotificationsDbContext>();
+            var staleRow = await staleDb.Digests.SingleAsync(Ct);
+            var staleContext = new StageContext(staleDb, new Claim(staleRow.TenantId, staleRow.Id, staleRow.Version), _clock.GetUtcNow(), stale.ServiceProvider);
+            await using (var claim = _database.Context())
+            {
+                // Another worker claims it (the claim moves the version) but hasn't closed it yet.
+                await claim.Digests.ExecuteUpdateAsync(s => s.SetProperty(d => d.Version, d => d.Version + 1), Ct);
+            }
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => stale.ServiceProvider.GetRequiredService<DigestStage>().ExecuteAsync(staleContext, staleRow, Ct));
+            await using (var check = _database.Context())
+            {
+                Assert.Equal(DigestState.Open, (await check.Digests.AsNoTracking().SingleAsync(Ct)).State);
+            }
+
+            await using var owner = _services!.CreateAsyncScope();
+            var db = owner.ServiceProvider.GetRequiredService<NotificationsDbContext>();
+            var row = await db.Digests.SingleAsync(Ct);
+            var context = new StageContext(db, new Claim(row.TenantId, row.Id, row.Version), _clock.GetUtcNow(), owner.ServiceProvider);
+            await owner.ServiceProvider.GetRequiredService<DigestStage>().ExecuteAsync(context, row, Ct);
+            await db.SaveChangesAsync(Ct);
+            await using var after = _database.Context();
+            Assert.Equal(DigestState.Closed, (await after.Digests.AsNoTracking().SingleAsync(Ct)).State);
+            Assert.All(await after.Recipients.AsNoTracking().ToListAsync(Ct), r => Assert.Equal(RecipientOutcome.Planned, r.Outcome));
+        }
     }
 }

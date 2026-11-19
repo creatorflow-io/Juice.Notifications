@@ -198,7 +198,7 @@ namespace Juice.Notifications.Correlations
         {
             var (cancelled, planning, running, retrying) = (NotificationState.Cancelled.ToString(), NotificationState.Planning.ToString(),
                 NotificationState.Running.ToString(), DeliveryStatus.Retrying.ToString());
-            var stillPlanned = RecipientPlanning.StillPlannedNames;
+            var stillPlanned = RecipientPlanning.StillPlannedNames.ToArray(); // an array for ANY()
             var recipientCancelled = RecipientOutcome.Cancelled.ToString();
             var deliveryCancelled = DeliveryStatus.Cancelled.ToString();
             var deliveryPending = DeliveryStatus.Pending.ToString();

@@ -53,9 +53,10 @@ namespace Juice.Notifications.Delivering
         }
 
         /// <summary>
-        /// The close's result on the row. None updated: the row the step loaded (open, at its claimed version) was closed by another worker since,
-        /// which only happens once this claim is lost. The step stops there, its row neither read back nor saved: the runner's version check
-        /// then reports the lost lease, and nothing of this worker's lands over the owner's.
+        /// The close's result on the row. The close applies only at the version this worker loaded (its claim), so a stale worker's close lands
+        /// on nothing and the owner's always applies. None updated: the row moved on since it was loaded (another worker claimed it), so this
+        /// claim is lost. The step stops there, its row neither read back nor saved: the runner's version check then reports the lost lease,
+        /// and nothing of this worker's lands over the owner's.
         /// </summary>
         private static void Closed(Digest row, DateTimeOffset now, int updated)
         {
@@ -71,7 +72,7 @@ namespace Juice.Notifications.Delivering
             var lockKey = WorkflowRunner.DigestLock(row.TenantId, row.TypeKey, row.By, row.Key);
             var (closed, open) = (DigestState.Closed.ToString(), DigestState.Open.ToString());
             return ($"SELECT pg_advisory_xact_lock({WorkflowRunner.DigestLockSpace}, hashtext({lockKey}))",
-                $"UPDATE notifications.digests SET state = {closed}, closed_at = {now} WHERE tenant_id = {row.TenantId} AND id = {row.Id} AND state = {open}");
+                $"UPDATE notifications.digests SET state = {closed}, closed_at = {now} WHERE tenant_id = {row.TenantId} AND id = {row.Id} AND state = {open} AND version = {row.Version}");
         }
 
         public void GiveUp(StageContext context, Digest row, string error)

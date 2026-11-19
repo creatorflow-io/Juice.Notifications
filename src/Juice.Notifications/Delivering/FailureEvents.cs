@@ -131,8 +131,10 @@ namespace Juice.Notifications.Delivering
                     }
                     else
                     {
-                        await CheckAsync(db, tenant.Key, recipient, now, ct);
-                        checkedCount++;
+                        if (await CheckAsync(db, tenant.Key, recipient, now, ct))
+                        {
+                            checkedCount++;
+                        }
                     }
                 }
                 if (later.Count > 0)
@@ -177,12 +179,16 @@ namespace Juice.Notifications.Delivering
             {
                 return (0, 0);
             }
+            var checkedCount = 0;
             if (events.Enabled)
             {
                 var now = clock.GetUtcNow();
                 foreach (var recipient in due)
                 {
-                    await CheckAsync(db, recipient.TenantId, recipient, now, ct);
+                    if (await CheckAsync(db, recipient.TenantId, recipient, now, ct))
+                    {
+                        checkedCount++;
+                    }
                 }
             }
             foreach (var tenant in due.GroupBy(r => r.TenantId))
@@ -191,18 +197,19 @@ namespace Juice.Notifications.Delivering
                 await db.Recipients.Where(r => r.TenantId == tenant.Key && ids.Contains(r.Id)).ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureCheckDue, false), ct);
             }
             await transaction.CommitAsync(ct);
-            return (due.Count, events.Enabled ? due.Count : 0);
+            return (due.Count, checkedCount);
         }
 
         private sealed record MarkedRow(Guid TenantId, Guid Id);
 
         private sealed record LockedRecipient(Guid TenantId, Guid Id, DateTimeOffset? FailureRaisedAt, string Outcome, DateTimeOffset? NextAt);
 
-        private async Task CheckAsync(NotificationsDbContext db, Guid tenantId, LockedRecipient recipient, DateTimeOffset at, CancellationToken ct)
+        /// <summary>Checks one locked, settled recipient, raising the event if it is due; false when it was raised already (nothing to check).</summary>
+        private async Task<bool> CheckAsync(NotificationsDbContext db, Guid tenantId, LockedRecipient recipient, DateTimeOffset at, CancellationToken ct)
         {
             if (recipient.FailureRaisedAt is not null)
             {
-                return; // raised already
+                return false; // raised already
             }
             var all = await (from item in db.DeliveryItems
                              join d in db.Deliveries on new { item.TenantId, Id = item.DeliveryId } equals new { d.TenantId, d.Id }
@@ -210,7 +217,7 @@ namespace Juice.Notifications.Delivering
                              select new { d.Status, d.Channel }).AsNoTracking().ToListAsync(ct);
             if (all.Any(d => !Ended.Contains(d.Status)) || !all.Any(d => d.Status is DeliveryStatus.Failed or DeliveryStatus.Bounced))
             {
-                return; // one went out or still may, or none failed (expired or cancelled only: not a failure to report)
+                return true; // one went out or still may, or none failed (expired or cancelled only: not a failure to report)
             }
             var x = await (from r in db.Recipients
                            join n in db.Notifications on new { r.TenantId, Id = r.NotificationId } equals new { n.TenantId, n.Id }
@@ -227,6 +234,7 @@ namespace Juice.Notifications.Delivering
             await db.SaveChangesAsync(ct);
             db.ChangeTracker.Clear();
             await db.Recipients.Where(r => r.TenantId == tenantId && r.Id == recipient.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.FailureRaisedAt, at), ct);
+            return true;
         }
     }
 }
