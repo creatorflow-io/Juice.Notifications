@@ -95,6 +95,7 @@ namespace Juice.Notifications.IntegrationTests
             LocalStack.RequireAvailable();
             var access = await AccessAsync(await LocalStack.TenantAdminTokenAsync());
             Assert.False(access.PlatformAdmin);
+            Assert.False(access.AllTenants);
             Assert.Equal([TestTenant], access.Tenants.Select(t => t.Id));
         }
 
@@ -111,6 +112,7 @@ namespace Juice.Notifications.IntegrationTests
             }
             var access = await AccessAsync(await LocalStack.AdminTokenAsync());
             Assert.True(access.PlatformAdmin);
+            Assert.True(access.AllTenants);
             Assert.Contains(linked, access.Tenants.Select(t => t.Id));
             Assert.DoesNotContain(other, access.Tenants.Select(t => t.Id));
             Assert.Equal(access.Tenants.Select(t => t.Id).Order(), access.Tenants.Select(t => t.Id));
@@ -134,6 +136,7 @@ namespace Juice.Notifications.IntegrationTests
             LocalStack.RequireAvailable();
             var access = await AccessAsync(await LocalStack.PersonTokenAsync());
             Assert.False(access.PlatformAdmin);
+            Assert.False(access.AllTenants);
             Assert.Empty(access.Tenants);
             using var anonymous = fixture.App.Client();
             Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/v1/access", Ct)).StatusCode);

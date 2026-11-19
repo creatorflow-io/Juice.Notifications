@@ -43,26 +43,25 @@ namespace Juice.Notifications.Api
     {
         public ValueTask<bool> CanAdministerAsync(ClaimsPrincipal user, Guid tenantId, CancellationToken ct)
         {
-            if (user.IsInRole(Roles.PlatformAdmin))
-            {
-                return ValueTask.FromResult(true);
-            }
-            var claimed = user.FindFirst(auth.Value.TenantClaim)?.Value;
-            return ValueTask.FromResult(user.IsInRole(auth.Value.TenantAdminRole) && Guid.TryParse(claimed, out var id) && id == tenantId);
+            var administered = Administered(user);
+            return ValueTask.FromResult(administered.Every || administered.Ids.Contains(tenantId));
         }
 
         public ValueTask<bool> IsMemberAsync(ClaimsPrincipal user, Guid tenantId, CancellationToken ct)
             => ValueTask.FromResult(Guid.TryParse(user.FindFirst(auth.Value.TenantClaim)?.Value, out var id) && id == tenantId);
 
-        public ValueTask<AdministeredTenants> AdministeredAsync(ClaimsPrincipal user, CancellationToken ct)
+        public ValueTask<AdministeredTenants> AdministeredAsync(ClaimsPrincipal user, CancellationToken ct) => ValueTask.FromResult(Administered(user));
+
+        /// <summary>The one rule both answers come from, so they can't disagree.</summary>
+        private AdministeredTenants Administered(ClaimsPrincipal user)
         {
             if (user.IsInRole(Roles.PlatformAdmin))
             {
-                return ValueTask.FromResult(AdministeredTenants.All);
+                return AdministeredTenants.All;
             }
-            return ValueTask.FromResult(user.IsInRole(auth.Value.TenantAdminRole) && Guid.TryParse(user.FindFirst(auth.Value.TenantClaim)?.Value, out var id)
+            return user.IsInRole(auth.Value.TenantAdminRole) && Guid.TryParse(user.FindFirst(auth.Value.TenantClaim)?.Value, out var id)
                 ? new AdministeredTenants(false, [id])
-                : AdministeredTenants.None);
+                : AdministeredTenants.None;
         }
     }
 

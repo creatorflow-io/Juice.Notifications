@@ -26,12 +26,27 @@ export function launch() {
 
 /**
  * A new page signed in as `user` (a person account, password PEOPLE_TEST_PASSWORD), at `path`. Page errors go to `problems`; API answers
- * of 400 or more after sign-in go to `onRefused` (by default `problems` too), so a journey that expects refusals collects them apart.
+ * of 400 or more once back from Keycloak go to `onRefused` (by default `problems` too), so a journey that expects refusals collects them
+ * apart. Before that, the first page load (signed out) is expected to be refused: the bell asks for the inbox before it redirects.
+ * `page.apiAnswers` keeps every API answer once back (url and status).
  */
 export async function signIn(browser, user, problems, { path = '/', onRefused = e => problems.push(e) } = {}) {
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   const page = await context.newPage();
   page.on('pageerror', e => problems.push(`${user} pageerror: ${e.message}`));
+  let atKeycloak = false;
+  let back = false;
+  page.apiAnswers = [];
+  page.on('framenavigated', frame => {
+    if (frame !== page.mainFrame()) return;
+    if (frame.url().includes('/realms/juice')) atKeycloak = true;
+    else if (atKeycloak && frame.url().startsWith(base)) back = true;
+  });
+  page.on('response', r => {
+    if (!back || !r.url().includes('/api/')) return;
+    page.apiAnswers.push({ url: r.url(), status: r.status() });
+    if (r.status() >= 400) onRefused(`${user} http ${r.status()} ${r.url()}`);
+  });
   await page.goto(`${base}${path}`);
   await page.waitForURL(/realms\/juice/, { timeout: 30000 });
   await page.fill('#username', user);
@@ -39,8 +54,6 @@ export async function signIn(browser, user, problems, { path = '/', onRefused = 
   await page.click('#kc-login');
   await page.waitForURL(u => u.toString().startsWith(base) && !u.toString().includes('login-completed') && !u.toString().includes('/auth/'),
     { timeout: 30000 });
-  // From here on: before sign-in completes, the bell (@juice-js/notifications) asks for the inbox without a token, and is refused.
-  page.on('response', r => { if (r.url().includes('/api/') && r.status() >= 400) onRefused(`${user} http ${r.status()} ${r.url()}`); });
   return page;
 }
 

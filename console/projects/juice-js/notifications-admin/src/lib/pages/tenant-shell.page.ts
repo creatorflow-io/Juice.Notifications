@@ -43,21 +43,26 @@ export class TenantShellPage {
   private readonly base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
   readonly tenantId = input.required<string>();
 
-  private readonly loaded = toSignal(this.access.load(), { initialValue: { platformAdmin: false, tenants: [] } });
-  protected readonly tenants = computed(() => this.loaded().tenants);
+  private readonly loaded = toSignal(this.access.load(), { initialValue: { platformAdmin: false, allTenants: false, tenants: [] } });
+  // The listed tenants, and this one when it was opened by its link without being listed (a platform admin's, every tenant theirs).
+  protected readonly tenants = computed(() => {
+    const listed = this.loaded().tenants;
+    return listed.some(t => sameId(t.id, this.tenantId())) ? listed : [{ id: this.tenantId(), name: null }, ...listed];
+  });
   protected readonly current = computed(() => this.tenants().find(t => sameId(t.id, this.tenantId())) ?? null);
 
   protected label(t: AccessTenant): string {
     return t.name ? `${t.name} (${t.id})` : t.id;
   }
 
-  /** The same page in the other tenant: the path after the tenant id is kept, its query (filters, ids of this tenant) isn't. */
+  /**
+   * The same page in the other tenant: the page after the tenant id is kept; its query, fragment, matrix parameters and any row id (all
+   * this tenant's) aren't.
+   */
   protected switch(id: string): void {
-    const prefix = under(this.base, `tenants/${this.tenantId()}`);
-    const path = this.router.url.split('?')[0];
-    const rest = path.toLowerCase().startsWith(prefix.toLowerCase()) ? path.slice(prefix.length) : '';
-    // A detail page names a row of the other tenant: go to its list instead.
-    const page = rest.split('/').filter(Boolean)[0] ?? '';
+    const segments = this.router.parseUrl(this.router.url).root.children['primary']?.segments.map(s => s.path) ?? [];
+    const at = segments.findIndex((s, i) => i > 0 && segments[i - 1] === 'tenants' && sameId(s, this.tenantId()));
+    const page = at >= 0 ? segments[at + 1] : undefined;
     void this.router.navigateByUrl(under(this.base, `tenants/${id}${page ? `/${page}` : ''}`));
   }
 }

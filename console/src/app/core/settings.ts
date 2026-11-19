@@ -41,8 +41,8 @@ export async function loadSettings(): Promise<void> {
     redirectUri: `${origin}/auth/login-completed`,
     postLogoutRedirectUri: `${origin}/auth/logout-completed`,
     basePath: `${origin}/auth`,
-    // The bearer token goes only to the Juice API, never to another host.
-    allowedUrls: settings.apiBase ? ['', settings.apiBase] : [''],
+    // The bearer token goes only to the API, never to another host: relative URLs, and the API's origin (the bell calls it by its full URL).
+    allowedUrls: ['', settings.apiBase || origin],
     // Renew before expiry with the session's refresh token.
     automaticRefresh: true,
     requireHttps: settings.auth.requireHttps ?? 'remoteOnly',

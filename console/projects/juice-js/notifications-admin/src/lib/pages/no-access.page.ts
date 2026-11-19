@@ -11,7 +11,7 @@ import { AccessService } from '../core/access.service';
   styles: `:host { display: block; max-width: 640px; padding: 32px 16px; }`,
   template: `
     <h1>No access here</h1>
-    @if (access().platformAdmin) {
+    @if (access().allTenants) {
       <p data-testid="no-access-platform">No tenant has a linked application yet. Register an application and link it to a tenant; its
         notifications are then administered here.</p>
     } @else {
@@ -20,5 +20,5 @@ import { AccessService } from '../core/access.service';
     }`,
 })
 export class NoAccessPage {
-  protected readonly access = toSignal(inject(AccessService).load(), { initialValue: { platformAdmin: false, tenants: [] } });
+  protected readonly access = toSignal(inject(AccessService).load(), { initialValue: { platformAdmin: false, allTenants: false, tenants: [] } });
 }

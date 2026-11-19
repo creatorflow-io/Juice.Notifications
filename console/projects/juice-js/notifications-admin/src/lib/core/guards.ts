@@ -40,11 +40,10 @@ export const tenantGuard: CanActivateFn = route => {
   const base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
   const id = route.paramMap.get('tenantId');
   return access.load().pipe(map(a => {
-    const tenant = a.tenants.find(t => sameId(t.id, id));
-    if (!tenant) {
+    if (!id || !access.allows(a, id)) {
       return router.parseUrl(under(base, 'no-access'));
     }
-    access.use(tenant.id);
+    access.use(a.tenants.find(t => sameId(t.id, id))?.id ?? id.toLowerCase());
     return true;
   }));
 };

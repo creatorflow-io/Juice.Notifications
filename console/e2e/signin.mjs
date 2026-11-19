@@ -17,6 +17,10 @@ try {
   check(await tess.getByTestId('tenant-switcher').count() === 0, 'tess has no tenant switcher', problems);
   check(await tess.locator('jn-notification-bell, [data-testid="notification-bell"], .jn-bell').count() > 0
     || await tess.getByRole('button', { name: /notification/i }).count() > 0, 'tess has the bell in the toolbar', problems);
+  // The bell's own calls carry her token (the API's origin is among the token's allowed URLs): its counts load.
+  const counts = () => tess.apiAnswers.filter(a => a.url.includes('/me/inbox/counts'));
+  for (let i = 0; i < 50 && !counts().some(a => a.status === 200); i++) await tess.waitForTimeout(200);
+  check(counts().some(a => a.status === 200), `tess's bell loads her inbox counts (${counts().map(a => a.status).join(', ') || 'no call'})`, problems);
   await shot(tess, 'signin-tess');
 
   const paul = await signIn(browser, 'paul', problems);
@@ -29,9 +33,10 @@ try {
     const options = paul.getByRole('option');
     const count = await options.count();
     check(count > 1, `paul's switcher lists his tenants (${count})`, problems);
+    // Another tenant: an option not naming the one in the URL (a label is the id, or "name (id)").
+    const currentId = from.split('/').pop();
     for (let i = 0; i < count; i++) {
-      const text = (await options.nth(i).textContent()).trim();
-      if (!from.endsWith(text)) { await options.nth(i).click(); break; }
+      if (!(await options.nth(i).textContent()).includes(currentId)) { await options.nth(i).click(); break; }
     }
     await paul.waitForURL(u => u.toString() !== from, { timeout: 10000 }).catch(() => {});
     check(paul.url() !== from && /\/tenants\/[0-9a-f-]{36}$/.test(paul.url()), `paul switches tenant (${paul.url()})`, problems);
@@ -40,6 +45,13 @@ try {
     console.log('note paul administers one tenant here: no switcher to try');
   }
   await shot(paul, 'signin-paul');
+
+  // Every tenant is a platform admin's, listed or not: a deep link to one without a linked application opens it (the API answers for it).
+  const unlisted = '0193f0aa-0000-7000-8000-0000000000c3';
+  await paul.goto(`${base}/tenants/${unlisted}`);
+  await paul.getByTestId('tenant-bar').waitFor({ timeout: 10000 }).catch(() => {});
+  check(paul.url() === `${base}/tenants/${unlisted}` && await paul.getByTestId('overview-tenant').count() === 1,
+    `paul opens an unlisted tenant by its link (${paul.url()})`, problems);
 } finally {
   await browser.close();
 }

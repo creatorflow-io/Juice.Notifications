@@ -73,7 +73,8 @@ internal static partial class ConsoleFiles
 
     public static bool IsHashed(string name) => Hashed().IsMatch(name);
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_]{8}\.(js|css|mjs)$")]
+    // Bundles and the media they name (fonts under media/), whatever the type; logo.svg, favicon.ico, config.json and index.html have none.
+    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_-]{8}\.[a-z0-9]+$")]
     private static partial System.Text.RegularExpressions.Regex Hashed();
 }
 
