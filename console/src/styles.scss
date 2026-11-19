@@ -1,0 +1,26 @@
+@use '@angular/material' as mat;
+@use '@juice-js/layout' as layout;
+
+// Angular Material and juice-layout themes, light and dark (juice-layout's dark-mode toggle sets body.dark), as Juice Observability's Console.
+@include mat.elevation-classes();
+@include mat.app-background();
+
+$primary: mat.m2-define-palette(mat.$m2-indigo-palette, 600);
+$accent: mat.m2-define-palette(mat.$m2-amber-palette);
+$warn: mat.m2-define-palette(mat.$m2-red-palette);
+$light: mat.m2-define-light-theme((color: (primary: $primary, accent: $accent, warn: $warn),
+  typography: mat.m2-define-typography-config(), density: -2));
+$dark: mat.m2-define-dark-theme((color: (primary: mat.m2-define-palette(mat.$m2-indigo-palette, 300), accent: $accent, warn: $warn)));
+
+@include mat.all-component-themes($light);
+@include layout.layout-component-themes($light);
+// Below -1, Material hides the label of fill form fields.
+html { @include mat.form-field-density(-1); }
+.dark {
+  @include mat.all-component-colors($dark);
+  @include layout.layout-component-colors($dark);
+}
+
+html, body { height: 100%; }
+body { margin: 0; font-family: Roboto, 'Helvetica Neue', sans-serif; }
+mat-sidenav-content > *:not(router-outlet) { display: block; }

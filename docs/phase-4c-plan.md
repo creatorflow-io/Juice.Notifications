@@ -98,6 +98,19 @@ unless the owner says otherwise.
 
 - **M36 Skeleton, hosting and access** (`p4c-01`, `p4c-02`): I48, I49, I50, I51; the shell, sign-in, the tenant switcher, the no-access page,
   the bell; `ConsoleHostingTests`, `AccessTests`; journeys `signin.mjs`, `no-access.mjs`.
+  - *As built (19 Nov 2026):* **Hosting** in the App's `Program.cs` (not the API library: an embedding host serves no Console), from the
+    standard `webroot` setting rather than a `Console:Root` of its own; an 8-character hash in a bundle's name (`main-FIXYNYJB.js`,
+    `chunk-Ce0mZ_Dd.js`) is cached a year, everything else `no-cache`. A missing file falls to the API's signed-in policy (401), never the
+    index page. The Dockerfile builds the Console in a Node stage. **Access**: `ITenantAccess.AdministeredAsync` (a default answering none);
+    names are null for now (no tenant directory is configured anywhere yet). **Keycloak**: the client asks for `openid juice-notifications`
+    (the local realm has no profile or email scope); people `tess` and `paul`. **Console** (`console/`, from Observability's workspace and
+    lock file, Angular 22.2): the menu links tenant pages through `go/{page}` (a guard sends them to the tenant being worked in, kept in
+    session storage), so one menu serves every tenant; the app runs sign-in first and the pages' guards after it, in order, so the access
+    read never goes out without a token. Switching tenant keeps the page and drops the query and any row id. The bell asks for the inbox once
+    before sign-in completes and is refused (the library's behaviour, also in the juice-layout demo); the journeys count refusals after
+    sign-in. The overview is a placeholder until M37's read. Journeys: `signin.mjs` (tess lands in her tenant with no switcher and the bell;
+    paul switches between two tenants, linking the sample application to `…b2` first), `no-access.mjs` (ann at the home, a tenant's deep
+    link and a menu link).
 - **M37 Investigate** (`p4c-03`, `p4c-04`): the overview, deliveries (retry, bulk replay), notifications with recipients (closes deferred #36),
   correlations, storms; the I52 reads with their API tests; journeys `deliveries.mjs`, `why-not.mjs`, `correlations.mjs`.
 - **M38 Delivery configuration** (`p4c-05`): integrations and targets (secret references only, I53), routes, mutes, escalation policies,

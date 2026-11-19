@@ -62,7 +62,7 @@ app.MapJuiceNotifications();
 app.MapFallbackToFile("{*path:nonfile:regex(^(?!(api|hubs|health)(/|$)).*$)}", "index.html", ConsoleFiles.Options()).AllowAnonymous();
 app.Run();
 
-/// <summary>The Console's built files: Angular names its bundles with a content hash (<c>main-ABCD1234.js</c>).</summary>
+/// <summary>The Console's built files: Angular names its bundles with an 8-character content hash (<c>main-FIXYNYJB.js</c>, <c>chunk-Ce0mZ_Dd.js</c>).</summary>
 internal static partial class ConsoleFiles
 {
     /// <summary>For the files and for the fallback's index page alike.</summary>
@@ -73,7 +73,7 @@ internal static partial class ConsoleFiles
 
     public static bool IsHashed(string name) => Hashed().IsMatch(name);
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Z0-9]{8,}\.(js|css|mjs)$")]
+    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_]{8}\.(js|css|mjs)$")]
     private static partial System.Text.RegularExpressions.Regex Hashed();
 }
 

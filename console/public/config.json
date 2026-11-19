@@ -1,0 +1,8 @@
+{
+  "apiBase": "",
+  "auth": {
+    "issuer": "http://localhost:8081/realms/juice",
+    "clientId": "notifications-console",
+    "scope": "openid juice-notifications"
+  }
+}

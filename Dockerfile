@@ -2,6 +2,14 @@
 #   docker build -t juice-notifications .
 # Released Juice packages come from nuget.org. To restore pre-release ones from the GitHub feed too, pass its credentials as build secrets:
 #   docker build --secret id=gh_user,env=GITHUB_PACKAGE_USERNAME --secret id=gh_token,env=GITHUB_PACKAGE_TOKEN -t juice-notifications .
+# The Notifications Console (phase-4c-plan I49), served by the App from its web root.
+FROM node:24.22.0-alpine AS console
+WORKDIR /console
+COPY console/package.json console/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY console/ ./
+RUN npx ng build notifications-console --configuration production
+
 FROM mcr.microsoft.com/dotnet/sdk:10.0.402 AS build
 WORKDIR /src
 COPY Directory.Build.props Directory.Packages.props nuget.config ./
@@ -23,6 +31,7 @@ ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false \
     ASPNETCORE_URLS=http://+:8080
 WORKDIR /app
 COPY --from=build /app .
+COPY --from=console /console/dist/notifications-console/browser wwwroot/
 USER $APP_UID
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=12 CMD wget -q -O - http://127.0.0.1:8080/health/ready || exit 1

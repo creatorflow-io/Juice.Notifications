@@ -1,0 +1,35 @@
+{
+  "name": "@juice-js/notifications-admin",
+  "version": "0.1.0",
+  "description": "The Notifications Console pages (deliveries, notifications, integrations, routes, templates, people, settings) for an Angular app on juice-layout",
+  "author": "jack@creatorflow.io",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/creatorflow-io/Juice.Notifications/issues"
+  },
+  "homepage": "https://github.com/creatorflow-io/Juice.Notifications#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/creatorflow-io/Juice.Notifications.git",
+    "directory": "console/projects/juice-js/notifications-admin"
+  },
+  "peerDependencies": {
+    "@angular/cdk": "^22.0.0",
+    "@angular/common": "^22.0.0",
+    "@angular/core": "^22.0.0",
+    "@angular/forms": "^22.0.0",
+    "@angular/material": "^22.0.0",
+    "@angular/router": "^22.0.0",
+    "@juice-js/core": "^2.2.0",
+    "@juice-js/layout": "^2.2.0",
+    "rxjs": "^7.8.0"
+  },
+  "dependencies": {
+    "tslib": "^2.3.0"
+  },
+  "sideEffects": false
+}

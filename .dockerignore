@@ -8,3 +8,7 @@ docs/
 .vs/
 **/*.user
 **/.env
+console/node_modules/
+console/dist/
+console/.angular/
+console/e2e/
