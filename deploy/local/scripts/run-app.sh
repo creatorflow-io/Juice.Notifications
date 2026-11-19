@@ -6,7 +6,7 @@ set -a; source "$here/.env"; set +a
 
 export ConnectionStrings__Notifications="Host=127.0.0.1;Port=5434;Database=notifications;Username=notifications;Password=$POSTGRES_PASSWORD"
 export Database__Migrate=true
-export Auth__Authority=http://localhost:8081/realms/juice
+export Auth__Authority="http://${PUBLIC_HOST:-localhost}:8080/realms/juice"  # the shared Keycloak's issuer (dev-infra)
 export Auth__RequireHttpsMetadata=false
 export ASPNETCORE_URLS=http://localhost:5280
 export ASPNETCORE_ENVIRONMENT=Development

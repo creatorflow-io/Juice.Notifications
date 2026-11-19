@@ -195,27 +195,6 @@ namespace Juice.Notifications.Tests
             Assert.Contains(log.Entries, e => e.Level == LogLevel.Error && e.Message.Contains("users/u"));
         }
 
-        /// <summary>
-        /// The realm file imports the user profile as a string (Keycloak's form), and scripts/keycloak-update.sh applies keycloak/user-profile.json
-        /// to an existing realm: the two must be the same profile, or new and upgraded stacks differ.
-        /// </summary>
-        [Fact]
-        public void The_realm_files_user_profile_is_the_one_the_update_script_applies()
-        {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "deploy", "local", "keycloak", "user-profile.json")))
-            {
-                dir = dir.Parent;
-            }
-            Assert.NotNull(dir);
-            var keycloak = Path.Combine(dir.FullName, "deploy", "local", "keycloak");
-            using var realm = JsonDocument.Parse(File.ReadAllText(Path.Combine(keycloak, "juice-realm.json")));
-            var embedded = realm.RootElement.GetProperty("components").GetProperty("org.keycloak.userprofile.UserProfileProvider")[0]
-                .GetProperty("config").GetProperty("kc.user.profile.config")[0].GetString()!;
-            Assert.Equal(CanonicalJson.Write(JsonElement.Parse(File.ReadAllText(Path.Combine(keycloak, "user-profile.json")))),
-                CanonicalJson.Write(JsonElement.Parse(embedded)));
-        }
-
         [Fact]
         public async Task A_group_reaches_its_enabled_members_of_the_tenant_only_with_their_email_as_verified_as_the_directory_says()
         {

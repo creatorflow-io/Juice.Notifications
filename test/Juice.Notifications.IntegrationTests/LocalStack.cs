@@ -12,7 +12,8 @@ namespace Juice.Notifications.IntegrationTests
     /// </summary>
     public static class LocalStack
     {
-        public const string KeycloakRealm = "http://localhost:8081/realms/juice"; // the issuer tokens carry (KC_HOSTNAME);
+        /// <summary>The issuer tokens carry: the shared Keycloak's (dev-infra), as PUBLIC_HOST in deploy/local/.env names it (KC_HOSTNAME).</summary>
+        public static string KeycloakRealm => $"http://{Env.Value.GetValueOrDefault("PUBLIC_HOST", "localhost")}:8080/realms/juice";
 
         private static readonly Lazy<Dictionary<string, string>> Env = new(() =>
         {
@@ -130,7 +131,7 @@ namespace Juice.Notifications.IntegrationTests
         /// <summary>The variable the identity directory's secret reference names; set in this process from .env.</summary>
         public const string DirectorySecretVariable = "NOTIFICATIONS_DIRECTORY_CLIENT_SECRET";
 
-        public const string KeycloakServer = "http://127.0.0.1:8081";
+        public const string KeycloakServer = "http://127.0.0.1:8080";
 
         private static readonly Lazy<bool> DirectoryUp = new(() =>
         {
@@ -140,7 +141,7 @@ namespace Juice.Notifications.IntegrationTests
             }
             try
             {
-                // The realm as scripts/keycloak-update.sh leaves it (M16): the directory client, and cara in the other tenant.
+                // The shared realm (dev-infra/keycloak/juice-realm.json, M16): the directory client, and cara in the other tenant.
                 return KeycloakUserIdAsync("cara").GetAwaiter().GetResult() is not null;
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
@@ -151,15 +152,15 @@ namespace Juice.Notifications.IntegrationTests
         });
 
         /// <summary>
-        /// Skips the calling test unless the realm has the identity directory's client and people (phase-2-plan M16): a realm imported before
-        /// M16 gets them from deploy/local/scripts/init.sh then scripts/keycloak-update.sh.
+        /// Skips the calling test unless the realm has the identity directory's client and people (phase-2-plan M16): the shared dev
+        /// infrastructure's realm has them (dev-infra: scripts/init.sh, docker compose up -d).
         /// </summary>
         public static void RequireDirectory()
         {
             RequireAvailable();
             if (!DirectoryUp.Value)
             {
-                Assert.Skip("The local Keycloak has no identity directory yet: deploy/local/scripts/init.sh, then scripts/keycloak-update.sh.");
+                Assert.Skip("The local Keycloak has no identity directory: start the shared one (dev-infra: scripts/init.sh, docker compose up -d).");
             }
         }
 

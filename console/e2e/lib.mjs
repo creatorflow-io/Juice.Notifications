@@ -15,7 +15,7 @@ export const env = Object.fromEntries(readFileSync(`${local}.env`, 'utf8').split
 
 /** The Console as the stack's app serves it (`docker compose --profile app up`), or `ng serve` (BASE=http://localhost:4300). */
 export const base = process.env.BASE ?? 'http://localhost:5280';
-export const keycloak = process.env.KEYCLOAK ?? 'http://localhost:8081';
+export const keycloak = process.env.KEYCLOAK ?? 'http://localhost:8080';
 /** The tests' tenant, which tess administers. */
 export const testTenant = '0193f0aa-0000-7000-8000-0000000000a1';
 

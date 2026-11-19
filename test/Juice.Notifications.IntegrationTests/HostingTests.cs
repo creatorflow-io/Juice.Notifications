@@ -41,7 +41,7 @@ namespace Juice.Notifications.IntegrationTests
 
         [Fact]
         public void An_http_authority_is_allowed_for_local_development()
-            => Register(("Auth:Authority", "http://localhost:8081/realms/juice"), ("Auth:RequireHttpsMetadata", "false"));
+            => Register(("Auth:Authority", "http://localhost:8080/realms/juice"), ("Auth:RequireHttpsMetadata", "false"));
 
         [Fact]
         public void An_https_authority_is_allowed()

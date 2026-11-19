@@ -45,7 +45,7 @@ namespace Juice.Notifications.IntegrationTests
     }
 
     /// <summary>
-    /// The identity resolver against the local Keycloak (phase-2-plan M16): its people in two tenants (deploy/local/scripts/keycloak-update.sh):
+    /// The identity resolver against the local Keycloak (phase-2-plan M16): its people in two tenants (the shared realm, dev-infra/keycloak/juice-realm.json):
     /// ann, ben, dora (email not verified) and eli (disabled) in the tests' tenant, cara in the other; the group <c>ops</c> holds ann, dora, eli
     /// and cara, and the realm role <c>on-call</c> ben, eli and cara.
     /// </summary>
@@ -112,7 +112,7 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         private static async Task<string> IdAsync(string username) => await LocalStack.KeycloakUserIdAsync(username)
-            ?? throw new InvalidOperationException($"The realm has no {username}: scripts/keycloak-update.sh.");
+            ?? throw new InvalidOperationException($"The realm has no {username}: start the shared Keycloak (dev-infra).");
 
         [Fact]
         public async Task A_tenant_admin_names_a_directory_the_deployment_configures_and_nothing_more()
@@ -199,7 +199,7 @@ namespace Juice.Notifications.IntegrationTests
         private readonly ScratchDatabase _database = new();
         // Whole seconds: the database keeps microseconds, the clock ticks.
         private readonly ManualClock _clock = new(new DateTimeOffset(DateTimeOffset.UtcNow.UtcTicks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond, TimeSpan.Zero));
-        private readonly TcpGate _keycloak = new(new IPEndPoint(IPAddress.Loopback, 8081));
+        private readonly TcpGate _keycloak = new(new IPEndPoint(IPAddress.Loopback, 8080));
         private readonly FakePeopleResolver _staff = new();
         private ServiceProvider? _services;
         private (Guid App, Guid Type) _seed;

@@ -26,7 +26,7 @@ if (webhookSecret.Length == 0)
     Console.Error.WriteLine("SAMPLE_WEBHOOK_SECRET is not set: run deploy/local/scripts/init.sh, then start the service with run-app.sh or the app service.");
     return 1;
 }
-var tokenUrl = settings.Get("TOKEN_URL", "http://127.0.0.1:8081/realms/juice/protocol/openid-connect/token");
+var tokenUrl = settings.Get("TOKEN_URL", "http://127.0.0.1:8080/realms/juice/protocol/openid-connect/token");
 
 using var http = new HttpClient();
 var admin = Client(api, await TokenAsync(http, tokenUrl, "notifications-admin", settings.Get("NOTIFICATIONS_ADMIN_CLIENT_SECRET", "")));

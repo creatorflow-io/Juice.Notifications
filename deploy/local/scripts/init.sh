@@ -41,3 +41,11 @@ else
   done
   echo "deploy/local/.env exists; kept (scripts/init.sh --force to regenerate)"
 fi
+# The shared Keycloak's address (dev-infra, 19 Nov 2026): the issuer in its tokens is http://PUBLIC_HOST:8080/realms/juice, so this
+# stack's app, Console and tests must say the same. Taken from dev-infra's .env; localhost when it has none.
+if ! grep -q "^PUBLIC_HOST=" .env; then
+  shared="$(cd ../../../.. && pwd)/dev-infra/.env"
+  host=$( [[ -f "$shared" ]] && grep -E "^PUBLIC_HOST=" "$shared" | cut -d= -f2- || true)
+  echo "PUBLIC_HOST=${host:-localhost}" >> .env
+  echo "added PUBLIC_HOST=${host:-localhost} to deploy/local/.env"
+fi

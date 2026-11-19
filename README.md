@@ -53,7 +53,7 @@ deploy/local/scripts/run-app.sh                    # migrates the database and l
 deploy/local/scripts/demo.sh                       # in another shell: register, configure, send; then open http://localhost:8026
 ```
 
-A stack created before 11 Nov 2026 needs `deploy/local/scripts/keycloak-update.sh` once (see [`deploy/local/README.md`](deploy/local/README.md)).
+Keycloak is the Juice projects' shared one (`../../dev-infra`, since 19 Nov 2026): start it first (see [`deploy/local/README.md`](deploy/local/README.md)).
 
 ## Migrations
 

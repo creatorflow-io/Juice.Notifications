@@ -25,7 +25,7 @@ namespace Juice.Notifications.Api
 
         /// <summary>
         /// Where to read the identity provider's metadata when the service reaches it by another address than the token's issuer (a container
-        /// calling <c>keycloak:8080</c> while tokens name <c>localhost:8081</c>). The issuer is still <see cref="Authority"/>.
+        /// calling <c>keycloak:8080</c> while tokens name <c>localhost:8080</c>). The issuer is still <see cref="Authority"/>.
         /// </summary>
         public string? MetadataAddress { get; set; }
 

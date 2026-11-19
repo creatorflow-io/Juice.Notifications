@@ -2,7 +2,7 @@
 #
 #   PostgreSQL   localhost:5434    database "notifications" (the app migrates it; tests create scratch databases)
 #   RabbitMQ     localhost:5673    management UI http://localhost:15673 (from M2: NotificationRequested intake)
-#   Keycloak     http://localhost:8081   realm "juice" (admin console: admin / KEYCLOAK_ADMIN_PASSWORD)
+#   Keycloak     http://localhost:8080   shared: ../../../../dev-infra, started first (realm "juice", SSO with the other Juice apps)
 #   Mailpit      SMTP localhost:1026, UI http://localhost:8026 (from M6: the SMTP provider's test sink)
 #   audit        gRPC localhost:5285 (h2c): services/audit's host, records in schema "audit" of the notifications database (p1-09)
 #   Redis        localhost:6380 (from M15: the inbox hub's SignalR backplane, for the two-replica test)
@@ -45,30 +45,6 @@ services:
       timeout: 5s
       retries: 30
 
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.7.5
-    command: ["start-dev", "--import-realm", "--http-port=8080", "--health-enabled=true"]
-    environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?run scripts/init.sh}
-      KC_HOSTNAME: http://localhost:8081
-      # Tokens name localhost:8081 as issuer; a container (the app profile) reads metadata and keys from keycloak:8080.
-      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
-      NOTIFICATIONS_ADMIN_CLIENT_SECRET: ${NOTIFICATIONS_ADMIN_CLIENT_SECRET}
-      SAMPLE_PRODUCER_CLIENT_SECRET: ${SAMPLE_PRODUCER_CLIENT_SECRET}
-      TENANT_ADMIN_CLIENT_SECRET: ${TENANT_ADMIN_CLIENT_SECRET}
-      PEOPLE_TEST_PASSWORD: ${PEOPLE_TEST_PASSWORD}
-      NOTIFICATIONS_DIRECTORY_CLIENT_SECRET: ${NOTIFICATIONS_DIRECTORY_CLIENT_SECRET:?run scripts/init.sh}
-    volumes:
-      - ./keycloak/juice-realm.json:/opt/keycloak/data/import/juice-realm.json:ro
-    ports:
-      - "127.0.0.1:8081:8080"
-    healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3"]
-      interval: 5s
-      timeout: 5s
-      retries: 60
-
   mailpit:
     image: axllent/mailpit:v1.27.10
     ports:
@@ -107,7 +83,8 @@ services:
     environment:
       ConnectionStrings__Notifications: "Host=postgres;Port=5432;Database=notifications;Username=notifications;Password=${POSTGRES_PASSWORD}"
       Database__Migrate: "true"
-      Auth__Authority: http://localhost:8081/realms/juice
+      # The shared Keycloak's issuer (dev-infra), as its PUBLIC_HOST names it.
+      Auth__Authority: http://${PUBLIC_HOST:-localhost}:8080/realms/juice
       Auth__MetadataAddress: http://keycloak:8080/realms/juice/.well-known/openid-configuration
       Auth__RequireHttpsMetadata: "false"
       Delivery__AllowHttpToAllowlisted: "true"
@@ -142,15 +119,31 @@ services:
       Provisioning__Path: /config/provisioning.json
     volumes:
       - ./provisioning.json:/config/provisioning.json:ro
+    configs:
+      # The Console's settings, with the shared Keycloak's issuer (the built config.json says localhost, for ng serve), which is plain HTTP
+      # here: allowed for any host, not only localhost (as Juice Observability's Console config).
+      - source: console-config
+        target: /app/wwwroot/config.json
     ports:
       - "127.0.0.1:5280:8080"
+    # Keycloak is the shared one (dev-infra), reached as keycloak:8080 on the juice-dev network.
+    networks: [default, juice-dev]
     depends_on:
       postgres: { condition: service_healthy }
-      keycloak: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       mailpit: { condition: service_started }
       redis: { condition: service_healthy }
       audit: { condition: service_healthy }
+
+networks:
+  # The shared dev infrastructure's network (../../../../dev-infra: docker compose up -d there first), for its Keycloak.
+  juice-dev:
+    external: true
+
+configs:
+  console-config:
+    content: |
+      {"apiBase": "", "auth": {"issuer": "http://${PUBLIC_HOST:-localhost}:8080/realms/juice", "clientId": "notifications-console", "scope": "openid juice-notifications", "requireHttps": false}}
 
 volumes:
   postgres-data:

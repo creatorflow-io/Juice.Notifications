@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Phases 2 and 3 end to end against the running host (docker compose --profile app up): people from Keycloak, an approval in their inboxes,
-# an action, the producer resolving it, an escalation that stops, and a digest. Needs scripts/keycloak-update.sh run once, node for reading
+# an action, the producer resolving it, an escalation that stops, and a digest. Needs the shared Keycloak (dev-infra), node for reading
 # JSON, and Mailpit (http://localhost:8026) to see the emails. Safe to run again.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 set -a; source "$here/.env"; set +a
 
 API=${API:-http://localhost:5280}
-KC=http://127.0.0.1:8081/realms/juice/protocol/openid-connect/token
+KC=http://127.0.0.1:8080/realms/juice/protocol/openid-connect/token
 TENANT=${TENANT:-0193f0aa-0000-7000-8000-0000000000a1}
 T="/api/v1/tenants/$TENANT"
 RUN=$(date +%s)

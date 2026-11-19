@@ -8,7 +8,7 @@ set -a; source "$here/.env"; set +a
 
 API=${API:-http://localhost:5280}
 MAILPIT=${MAILPIT:-http://localhost:8026}
-KC=http://127.0.0.1:8081/realms/juice/protocol/openid-connect/token
+KC=http://127.0.0.1:8080/realms/juice/protocol/openid-connect/token
 TENANT=${TENANT:-0193f0aa-0000-7000-8000-0000000000a1}
 T="/api/v1/tenants/$TENANT"
 RUN=$(date +%s)

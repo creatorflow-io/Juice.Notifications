@@ -6,7 +6,7 @@ can run at once.
 | Component | Image (pinned) | Address | Used from |
 |---|---|---|---|
 | PostgreSQL | `postgres:17.10-alpine` | `localhost:5434`, database `notifications` | M1 |
-| Keycloak | `quay.io/keycloak/keycloak:26.7.5` | http://localhost:8081, realm `juice` | M1 |
+| Keycloak | shared: `../../../../dev-infra` (19 Nov 2026) | http://localhost:8080, realm `juice`, one sign-in for every Juice app | M1 |
 | RabbitMQ | `rabbitmq:4.1.4-management-alpine` | `localhost:5673`, UI http://localhost:15673 | M2 |
 | Mailpit | `axllent/mailpit:v1.27.10` | SMTP `localhost:1026`, UI http://localhost:8026 | M6 |
 | Audit host | built from `audit/` (Juice.Audit 10.6.1) | gRPC `localhost:5285` (h2c); records in schema `audit` of database `notifications` | p1-09 |
@@ -49,7 +49,7 @@ docker compose --profile app up -d --build --wait
 docker compose --profile app stop app
 ```
 
-The container reads Keycloak's metadata from `keycloak:8080` (`Auth:MetadataAddress`) while tokens name `localhost:8081` as issuer, which
+The container reads Keycloak's metadata from `keycloak:8080` (`Auth:MetadataAddress`) while tokens name `localhost:8080` as issuer, which
 Keycloak's `KC_HOSTNAME_BACKCHANNEL_DYNAMIC` allows.
 
 ## Samples
@@ -94,27 +94,30 @@ The person accounts belong to a tenant through the user attribute `platform_tena
 | `paul` | `…a1` | verified | | |
 
 `tess` is a tenant admin of `…a1` (realm role `notifications-tenant-admin`) and `paul` a platform admin (`notifications-platform-admin`):
-the Console's admins, signed in with `PEOPLE_TEST_PASSWORD`. An existing Keycloak gets them, and the Console's client, from
-`scripts/keycloak-update.sh`.
+the Console's admins, signed in with `PEOPLE_TEST_PASSWORD`. With the shared Keycloak, `tess` also opens Juice Observability as a viewer,
+and Observability's `alice` is a platform admin here (dev-infra's README lists everyone).
 
 A tenant reaches them through a resolver of kind `identity` naming the directory: `PUT /api/v1/tenants/{id}/resolvers/people
 { "kind": "identity", "settings": { "directory": "keycloak" } }`, then recipients such as `{ "kind": "group", "id": "ops", "resolver": "people" }`.
 
 Producers must authenticate as their client: the API accepts a producer token only when its `client_id` claim (set by the `juice-notifications`
-scope on client-credentials tokens only) equals its `azp`. A stack created before 11 Nov 2026 lacks that mapper and the `tenant-admin` client, and one
-created before 17 Nov 2026 lacks `people-test`, the person accounts and the directory client (and the M16 people, group and role), because
-Keycloak imports the realm only into an empty volume. Bring it up to date (safe to repeat):
+scope on client-credentials tokens only) equals its `azp`. 
+**Keycloak is shared** (19 Nov 2026): the realm is `dev-infra/keycloak/juice-realm.json`, with Juice Observability's and the juice-layout
+demo's clients beside this service's, imported each time its container is created (this stack used its own on :8081, kept up to date by
+`scripts/keycloak-update.sh`; both are gone). Start it before this stack, whose app joins its `juice-dev` network:
 
 ```bash
-scripts/init.sh && scripts/keycloak-update.sh
+(cd ../../../../dev-infra && scripts/init.sh && docker compose up -d --wait)
 ```
+
+Its `init.sh` takes the secrets from this `.env` and says if the two differ.
 
 Their secrets are in `.env`. A token for the admin client:
 
 ```bash
 source .env
 curl -s -d grant_type=client_credentials -d client_id=notifications-admin -d "client_secret=$NOTIFICATIONS_ADMIN_CLIENT_SECRET" \
-  http://localhost:8081/realms/juice/protocol/openid-connect/token | jq -r .access_token
+  http://localhost:8080/realms/juice/protocol/openid-connect/token | jq -r .access_token
 ```
 
 ## Events to producers
