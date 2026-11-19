@@ -114,10 +114,11 @@ unless the owner says otherwise.
     Switching tenant keeps the page and drops the query, fragment, matrix parameters and any row id. The token's allowed URLs include the
     API's origin: the bell calls it by its full URL (review round 1 found its calls went without a token). The first, signed-out page load
     is refused (the bell asks before the redirect); the journeys count a refusal once back from Keycloak if it carried a token, and any once
-    the app has left its sign-in pages, by when the call was sent (a 401 on a call with a token only if it isn't retried and answered within
-    3 s). Cached for good: `.js`, `.mjs`, `.css` and `media/` files with an 8-character hash. The overview is a placeholder until M37's read. Journeys: `signin.mjs` (tess lands in her tenant with no switcher and the bell;
+    the app has left its sign-in pages, by when the call was sent (a 401 on a call with a token only if the same call isn't answered within 3 s
+    under a refreshed token; a page is closed only once those are decided). Cached for good: `.js`, `.mjs`, `.css` and `media/` fonts and images with an 8-character hash. The overview is a placeholder until M37's read. Journeys: `signin.mjs` (tess lands in her tenant with no switcher and the bell;
     paul switches between two tenants, linking the sample application to `…b2` first), `no-access.mjs` (ann at the home, a tenant's deep
-    link and a menu link).
+    link and a menu link). Closed after four review rounds; the last round's small items were fixed without another (the
+    media rule, the fallback user id from the access token's subject, "try again" dropping a read in flight, only the current read kept).
 - **M37 Investigate** (`p4c-03`, `p4c-04`): the overview, deliveries (retry, bulk replay), notifications with recipients (closes deferred #36),
   correlations, storms; the I52 reads with their API tests; journeys `deliveries.mjs`, `why-not.mjs`, `correlations.mjs`.
 - **M38 Delivery configuration** (`p4c-05`): integrations and targets (secret references only, I53), routes, mutes, escalation policies,

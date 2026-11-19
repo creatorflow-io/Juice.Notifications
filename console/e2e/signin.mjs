@@ -1,6 +1,6 @@
 // M36 (phase-4c-plan): an admin signs in and lands in a tenant. tess (tenant admin of the tests' tenant) sees only it, by name, with no
 // switcher; paul (platform admin) lands in a tenant and, with more than one, switches tenants on the same page. Both have the bell.
-import { launch, signIn, check, shot, finish, base, testTenant, adminApi } from './lib.mjs';
+import { launch, signIn, close, check, shot, finish, base, testTenant, adminApi } from './lib.mjs';
 
 // A second tenant for paul to switch to: cara's (…b2), linked to the stack's sample application (idempotent).
 const otherTenant = '0193f0aa-0000-7000-8000-0000000000b2';
@@ -59,6 +59,8 @@ try {
   check(new URL(paul.url()).pathname === '/no-access' && new URL(paul.url()).searchParams.get('reason') === 'tenant'
     && await paul.getByTestId('no-access-tenant').count() === 1,
     `paul at a malformed tenant link is told it isn't his tenant's (${paul.url()})`, problems);
+  await close(tess);
+  await close(paul);
 } finally {
   await browser.close();
 }

@@ -27,10 +27,11 @@ export function launch() {
 /**
  * A new page signed in as `user` (a person account, password PEOPLE_TEST_PASSWORD), at `path`. Page errors go to `problems`; API answers
  * of 400 or more go to `onRefused` (by default `problems` too), so a journey that expects refusals collects them apart: once back from
- * Keycloak, a refused call that carried a token (a 401 only if the same call doesn't then succeed within 3 s: the auth library refreshes
- * the token and retries), and any refused call sent once the app has left its sign-in pages (/auth/…). A call without a token sent before
- * then is expected: the bell asks for the inbox on the signed-out page load and while the callback stores the token. Call `settled()`
- * before reading what was refused.
+ * Keycloak, a refused call that carried a token (a 401 only if it isn't retried within 3 s: the same method and URL answered with success
+ * under a different token, the auth library having refreshed it), and any refused call sent once the app has left its sign-in pages
+ * (/auth/…). A call without a token sent before then is expected: the bell asks for the inbox on the signed-out page load and while the
+ * callback stores the token. Close the page with `close(page)` (it waits for those retries), and call `settled()` before reading what was
+ * refused.
  * `page.apiAnswers` keeps every API answer once back from Keycloak (url and status).
  */
 export async function signIn(browser, user, problems, { path = '/', onRefused = e => problems.push(e) } = {}) {
@@ -41,6 +42,7 @@ export async function signIn(browser, user, problems, { path = '/', onRefused = 
   let back = false;
   let settled = false;
   page.apiAnswers = [];
+  page.pending = [];
   page.on('framenavigated', frame => {
     if (frame !== page.mainFrame()) return;
     if (frame.url().includes('/realms/juice')) atKeycloak = true;
@@ -54,16 +56,21 @@ export async function signIn(browser, user, problems, { path = '/', onRefused = 
   page.on('request', r => sentSettled.set(r, settled));
   page.on('response', r => {
     if (!back || !r.url().includes('/api/')) return;
-    const answer = { url: r.url(), status: r.status(), at: Date.now() };
+    const authorization = r.request().headers()['authorization'];
+    const answer = { method: r.request().method(), url: r.url(), status: r.status(), authorization, at: Date.now() };
     page.apiAnswers.push(answer);
     if (r.status() < 400) return;
-    const withToken = !!r.request().headers()['authorization'];
+    const withToken = !!authorization;
     const refusal = `${user} http ${r.status()} ${r.url()}${withToken ? '' : ' (no token)'}`;
     if (withToken && r.status() === 401) {
-      pending.push(new Promise(resolve => setTimeout(() => {
-        if (!page.apiAnswers.some(a => a.url === answer.url && a.status < 400 && a.at >= answer.at)) onRefused(refusal);
+      const decided = new Promise(resolve => setTimeout(() => {
+        const retried = page.apiAnswers.some(a => a.method === answer.method && a.url === answer.url && a.status < 400 && a.at >= answer.at
+          && a.authorization && a.authorization !== answer.authorization);
+        if (!retried) onRefused(refusal);
         resolve();
-      }, 3000)));
+      }, 3000));
+      pending.push(decided);
+      page.pending.push(decided);
     } else if (withToken || sentSettled.get(r.request())) {
       onRefused(refusal);
     }
@@ -80,6 +87,12 @@ export async function signIn(browser, user, problems, { path = '/', onRefused = 
 
 /** Refusals waiting to see whether their call is retried. */
 const pending = [];
+
+/** Closes a page from `signIn` once its refusals waiting on a retry are decided (the page stays open meanwhile, so the retry can happen). */
+export async function close(page) {
+  await Promise.all(page.pending);
+  await page.context().close();
+}
 
 /** Once every refusal waiting on a retry is decided. */
 export async function settled() {

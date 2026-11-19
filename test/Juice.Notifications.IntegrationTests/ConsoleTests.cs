@@ -21,6 +21,7 @@ namespace Juice.Notifications.IntegrationTests
             Directory.CreateDirectory(Path.Combine(Root, "media"));
             File.WriteAllText(Path.Combine(Root, "media", "roboto-Ab_cD-12.woff2"), "font");
             File.WriteAllText(Path.Combine(Root, "media", "banner.png"), "png");
+            File.WriteAllText(Path.Combine(Root, "media", "settings-override.json"), "{}");
             App = new NotificationsApp(host => host.UseSetting("webroot", Root));
         }
 
@@ -61,6 +62,9 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains("immutable", font.Headers.CacheControl?.ToString());
             using var banner = await client.GetAsync("/media/banner.png", Ct);
             Assert.True(banner.Headers.CacheControl?.NoCache);
+            // Nor any other type there, whatever its name: only the fonts and images Angular hashes.
+            using var data = await client.GetAsync("/media/settings-override.json", Ct);
+            Assert.True(data.Headers.CacheControl?.NoCache);
 
             foreach (var path in new[] { "/", "/tenants/0193f0aa-0000-7000-8000-0000000000a1/deliveries?status=Failed", "/applications" })
             {

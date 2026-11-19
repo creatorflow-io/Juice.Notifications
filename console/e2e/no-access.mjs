@@ -1,6 +1,6 @@
 // M36 (phase-4c-plan proof point 2, its first part): someone signed in without an admin role (ann) gets the no-access page from the home,
 // a tenant's deep link and a menu link, saying why, and no tenant data: the access read is answered (none) and nothing is refused.
-import { launch, signIn, check, shot, finish, settled, base, testTenant } from './lib.mjs';
+import { launch, signIn, close, check, shot, finish, settled, base, testTenant } from './lib.mjs';
 
 const problems = [];
 const refused = [];
@@ -28,7 +28,7 @@ try {
         `ann's try again goes back to ${path} and is refused again (${page.url()})`, problems);
       check(reads() > before, `ann's try again reads her access afresh (${before} → ${reads()})`, problems);
     }
-    await page.context().close();
+    await close(page);
   }
 } finally {
   await browser.close();

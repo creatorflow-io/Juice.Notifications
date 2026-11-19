@@ -62,15 +62,24 @@ export class AccessService {
     }));
   }
 
-  /** Forgets the kept answer, so the next {@link load} asks the API again (the no-access page's "try again"). */
+  /**
+   * Forgets the kept answer and any read in flight (it may have started before the change awaited), so the next {@link load} asks the API
+   * again (the no-access page's "try again").
+   */
   refresh(): void {
     this.kept = null;
+    this.reading = null;
   }
 
   private read(user: string): Observable<Access> {
     const access: Observable<Access> = this.http.get<Partial<Access>>(`${this.options.apiBase}/api/v1/access`).pipe(
       map(a => ({ platformAdmin: !!a?.platformAdmin, allTenants: !!a?.allTenants, tenants: Array.isArray(a?.tenants) ? a.tenants : [] }) satisfies Access),
-      tap(answer => this.kept = { user, access: answer, until: Date.now() + (grants(answer) ? KEEP_GRANTING_MS : KEEP_NOTHING_MS) }),
+      // Kept only while this is the current read: one dropped (try again) or overtaken (another user) never replaces a newer answer.
+      tap(answer => {
+        if (this.reading?.access === access) {
+          this.kept = { user, access: answer, until: Date.now() + (grants(answer) ? KEEP_GRANTING_MS : KEEP_NOTHING_MS) };
+        }
+      }),
       catchError(() => of({ ...EMPTY_ACCESS, unavailable: true } satisfies Access)),
       // Only this read: a newer one (another user, or one started after this was dropped) stays.
       finalize(() => { if (this.reading?.access === access) this.reading = null; }),

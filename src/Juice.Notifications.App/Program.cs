@@ -86,6 +86,7 @@ internal static partial class ConsoleFiles
     [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_-]{8}\.(js|mjs|css)$")]
     private static partial System.Text.RegularExpressions.Regex Bundle();
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_-]{8}\.[a-z0-9]+$")]
+    // The fonts and images Angular hashes into media/; any other type there is someone's own file.
+    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_-]{8}\.(woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|avif|ico)$")]
     private static partial System.Text.RegularExpressions.Regex Media();
 }
