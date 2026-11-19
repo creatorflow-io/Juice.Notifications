@@ -62,21 +62,24 @@ app.MapJuiceNotifications();
 app.MapFallbackToFile("{*path:nonfile:regex(^(?!(api|hubs|health)(/|$)).*$)}", "index.html", ConsoleFiles.Options()).AllowAnonymous();
 app.Run();
 
-/// <summary>The Console's built files: Angular names its bundles with an 8-character content hash (<c>main-FIXYNYJB.js</c>, <c>chunk-Ce0mZ_Dd.js</c>).</summary>
+/// <summary>
+/// The Console's built files: Angular names its bundles with an 8-character content hash (<c>main-FIXYNYJB.js</c>, <c>chunk-Ce0mZ_Dd.js</c>)
+/// and puts the media they name, hashed too, under <c>media/</c>. Those never change under their name; anything else (the index page,
+/// config.json, logo.svg, an asset added to public/) may.
+/// </summary>
 internal static partial class ConsoleFiles
 {
     /// <summary>For the files and for the fallback's index page alike.</summary>
     public static StaticFileOptions Options() => new()
     {
-        OnPrepareResponse = file => file.Context.Response.Headers.CacheControl = IsHashed(file.File.Name) ? "public, max-age=31536000, immutable" : "no-cache",
+        OnPrepareResponse = file => file.Context.Response.Headers.CacheControl = IsHashed(file.Context.Request.Path.Value ?? "")
+            ? "public, max-age=31536000, immutable"
+            : "no-cache",
     };
 
-    public static bool IsHashed(string name) => Hashed().IsMatch(name);
+    /// <summary>A bundle (<c>.js</c>, <c>.mjs</c>, <c>.css</c> with its hash) or a file under <c>/media/</c>, by its request path.</summary>
+    public static bool IsHashed(string path) => path.StartsWith("/media/", StringComparison.Ordinal) || Bundle().IsMatch(path);
 
-    // Bundles and the media they name (fonts under media/), whatever the type; logo.svg, favicon.ico, config.json and index.html have none.
-    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_-]{8}\.[a-z0-9]+$")]
-    private static partial System.Text.RegularExpressions.Regex Hashed();
+    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_-]{8}\.(js|mjs|css)$")]
+    private static partial System.Text.RegularExpressions.Regex Bundle();
 }
-
-/// <summary>The host's entry point, visible to the integration tests' WebApplicationFactory.</summary>
-public partial class Program;

@@ -26,9 +26,10 @@ export function launch() {
 
 /**
  * A new page signed in as `user` (a person account, password PEOPLE_TEST_PASSWORD), at `path`. Page errors go to `problems`; API answers
- * of 400 or more once back from Keycloak go to `onRefused` (by default `problems` too), so a journey that expects refusals collects them
- * apart. Before that, the first page load (signed out) is expected to be refused: the bell asks for the inbox before it redirects.
- * `page.apiAnswers` keeps every API answer once back (url and status).
+ * of 400 or more go to `onRefused` (by default `problems` too), so a journey that expects refusals collects them apart: any refused
+ * call that carried a token, once back from Keycloak, and any refused call once the app has left its sign-in pages (/auth/…). Before then
+ * a call without a token is expected: the bell asks for the inbox on the signed-out page load and while the callback stores the token.
+ * `page.apiAnswers` keeps every API answer once back from Keycloak (url and status).
  */
 export async function signIn(browser, user, problems, { path = '/', onRefused = e => problems.push(e) } = {}) {
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
@@ -36,16 +37,21 @@ export async function signIn(browser, user, problems, { path = '/', onRefused = 
   page.on('pageerror', e => problems.push(`${user} pageerror: ${e.message}`));
   let atKeycloak = false;
   let back = false;
+  let settled = false;
   page.apiAnswers = [];
   page.on('framenavigated', frame => {
     if (frame !== page.mainFrame()) return;
     if (frame.url().includes('/realms/juice')) atKeycloak = true;
-    else if (atKeycloak && frame.url().startsWith(base)) back = true;
+    else if (atKeycloak && frame.url().startsWith(base)) {
+      back = true;
+      settled ||= !new URL(frame.url()).pathname.startsWith('/auth/');
+    }
   });
   page.on('response', r => {
     if (!back || !r.url().includes('/api/')) return;
     page.apiAnswers.push({ url: r.url(), status: r.status() });
-    if (r.status() >= 400) onRefused(`${user} http ${r.status()} ${r.url()}`);
+    const withToken = !!r.request().headers()['authorization'];
+    if (r.status() >= 400 && (settled || withToken)) onRefused(`${user} http ${r.status()} ${r.url()}${withToken ? '' : ' (no token)'}`);
   });
   await page.goto(`${base}${path}`);
   await page.waitForURL(/realms\/juice/, { timeout: 30000 });

@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
 import { Router, RouterOutlet } from '@angular/router';
-import { AccessService, AccessTenant, sameId } from '../core/access.service';
+import { AccessService, AccessTenant, EMPTY_ACCESS, sameId } from '../core/access.service';
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
 
 /**
@@ -43,7 +43,7 @@ export class TenantShellPage {
   private readonly base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
   readonly tenantId = input.required<string>();
 
-  private readonly loaded = toSignal(this.access.load(), { initialValue: { platformAdmin: false, allTenants: false, tenants: [] } });
+  private readonly loaded = toSignal(this.access.load(), { initialValue: EMPTY_ACCESS });
   // The listed tenants, and this one when it was opened by its link without being listed (a platform admin's, every tenant theirs).
   protected readonly tenants = computed(() => {
     const listed = this.loaded().tenants;

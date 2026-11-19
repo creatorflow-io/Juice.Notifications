@@ -17,6 +17,7 @@ namespace Juice.Notifications.IntegrationTests
             File.WriteAllText(Path.Combine(Root, "index.html"), "<!doctype html><title>console</title>");
             File.WriteAllText(Path.Combine(Root, "main-ABCD1234.js"), "export const x = 1;");
             File.WriteAllText(Path.Combine(Root, "chunk-Ce0mZ_Dd.js"), "export const y = 2;");
+            File.WriteAllText(Path.Combine(Root, "logo-darkmode.svg"), "<svg/>");
             App = new NotificationsApp(host => host.UseSetting("webroot", Root));
         }
 
@@ -49,6 +50,9 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains("immutable", script.Headers.CacheControl?.ToString());
             using var chunk = await client.GetAsync("/chunk-Ce0mZ_Dd.js", Ct);
             Assert.Contains("immutable", chunk.Headers.CacheControl?.ToString());
+            // A plain asset whose name happens to end in a dash and 8 letters isn't a bundle: it may change.
+            using var asset = await client.GetAsync("/logo-darkmode.svg", Ct);
+            Assert.True(asset.Headers.CacheControl?.NoCache);
 
             foreach (var path in new[] { "/", "/tenants/0193f0aa-0000-7000-8000-0000000000a1/deliveries?status=Failed", "/applications" })
             {

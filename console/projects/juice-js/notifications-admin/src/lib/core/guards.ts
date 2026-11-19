@@ -1,8 +1,17 @@
 import { inject } from '@angular/core';
-import { CanActivateFn, Router } from '@angular/router';
+import { CanActivateFn, Router, UrlTree } from '@angular/router';
 import { map } from 'rxjs';
-import { AccessService, sameId } from './access.service';
+import { Access, AccessService } from './access.service';
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from './options';
+
+/** Why the no-access page is shown: nothing to administer, not the user's tenant (or not a tenant id), or the access couldn't be read. */
+export type NoAccessReason = 'none' | 'tenant' | 'unavailable';
+
+function noAccess(router: Router, base: string, access: Access, reason: NoAccessReason): UrlTree {
+  const tree = router.parseUrl(under(base, 'no-access'));
+  tree.queryParams = { reason: access.unavailable ? 'unavailable' : reason };
+  return tree;
+}
 
 /** The Console's home: the tenant being worked in (or the first the user administers), else the no-access page. */
 export const homeGuard: CanActivateFn = () => {
@@ -11,7 +20,7 @@ export const homeGuard: CanActivateFn = () => {
   const base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
   return access.load().pipe(map(a => {
     const tenant = access.pick(a);
-    return router.parseUrl(tenant ? under(base, `tenants/${tenant}`) : under(base, 'no-access'));
+    return tenant ? router.parseUrl(under(base, `tenants/${tenant}`)) : noAccess(router, base, a, 'none');
   }));
 };
 
@@ -27,7 +36,8 @@ export const goGuard: CanActivateFn = route => {
   const page = route.url.map(s => s.path).join('/');
   return access.load().pipe(map(a => {
     const tenant = access.pick(a);
-    const tree = router.parseUrl(tenant ? under(base, `tenants/${tenant}/${page}`) : under(base, 'no-access'));
+    if (!tenant) return noAccess(router, base, a, 'none');
+    const tree = router.parseUrl(under(base, `tenants/${tenant}/${page}`));
     tree.queryParams = route.queryParams;
     return tree;
   }));
@@ -38,12 +48,10 @@ export const tenantGuard: CanActivateFn = route => {
   const access = inject(AccessService);
   const router = inject(Router);
   const base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
-  const id = route.paramMap.get('tenantId');
   return access.load().pipe(map(a => {
-    if (!id || !access.allows(a, id)) {
-      return router.parseUrl(under(base, 'no-access'));
-    }
-    access.use(a.tenants.find(t => sameId(t.id, id))?.id ?? id.toLowerCase());
+    const tenant = access.resolve(a, route.paramMap.get('tenantId'));
+    if (!tenant) return noAccess(router, base, a, 'tenant');
+    access.use(tenant);
     return true;
   }));
 };

@@ -1,4 +1,5 @@
 import { EnvironmentProviders, InjectionToken, makeEnvironmentProviders } from '@angular/core';
+import { Observable, of } from 'rxjs';
 
 /** How the host app mounts the Notifications Console pages. */
 export interface NotificationsAdminOptions {
@@ -11,6 +12,16 @@ export interface NotificationsAdminOptions {
 export const NOTIFICATIONS_ADMIN_OPTIONS = new InjectionToken<NotificationsAdminOptions>('NOTIFICATIONS_ADMIN_OPTIONS', {
   providedIn: 'root',
   factory: () => ({ apiBase: '', basePath: '/' }),
+});
+
+/**
+ * Emits once the user is signed in with a token the API accepts; the pages read nothing before. Each subscription decides afresh (a cold
+ * observable), so one made after sign-in completes emits at once. The host provides it from its own sign-in library; left out, the pages
+ * read at once (a host whose routes can't be reached signed out).
+ */
+export const NOTIFICATIONS_ADMIN_SIGNED_IN = new InjectionToken<Observable<unknown>>('NOTIFICATIONS_ADMIN_SIGNED_IN', {
+  providedIn: 'root',
+  factory: () => of(true),
 });
 
 /** Configures the pages: where the API is and where the host mounted the routes. */
