@@ -27,7 +27,6 @@ const failedOf = async ids => (await Promise.all(ids.map(deliveriesOf))).flat();
 const all = await until(() => failedOf([...sent.retry, ...sent.replay, ...sent.other]), ds => ds.length === 5 && ds.every(d => d.status === 'failed'), 60);
 check(all.length === 5 && all.every(d => d.status === 'failed'), `five deliveries failed at the receiver (${all.map(d => d.status).join(', ')})`, problems);
 const [retryDelivery] = await deliveriesOf(sent.retry[0]);
-const replayIds = (await failedOf(sent.replay)).map(d => d.id).sort();
 const [otherDelivery] = await deliveriesOf(sent.other[0]);
 
 const browser = await launch();
@@ -62,20 +61,32 @@ try {
   check(retried.length === 2 && retried.every(r => r.body === retried[0].body), `the receiver got the same delivery twice, same id and body (${retried.length})`, problems);
   await shot(tess, 'delivery-retried');
 
-  // Bulk replay from the filter: exactly the three failed deliveries of its type, not the other type's.
-  await tess.goto(`${base}/tenants/${testTenant}/deliveries?status=failed&type=${types.replay}`);
-  await until(async () => tess.getByTestId('delivery-row').count(), n => n === 3, 15);
+  // Bulk replay from the filter: exactly the failed deliveries of its type, not the other type's. The list is opened unfiltered first and
+  // one more fails after that: the filter is applied on the same page, and the replay still takes every row it shows (review M37 r1).
+  hook.failing = true;
+  await tess.goto(`${base}/tenants/${testTenant}/deliveries`);
+  await tess.getByTestId('delivery-row').first().waitFor({ timeout: 15000 }).catch(() => {});
+  await tess.waitForTimeout(1500);
+  sent.replay.push(await send(types.replay, 4));
+  await until(() => failedOf(sent.replay), ds => ds.length === 4 && ds.every(d => d.status === 'failed'), 30);
+  const replayIds = (await failedOf(sent.replay)).map(d => d.id).sort();
+  await tess.getByTestId('filter-status').click();
+  await tess.getByRole('option', { name: 'failed', exact: true }).click();
+  await tess.getByTestId('filter-type').fill(types.replay);
+  await tess.getByTestId('filter-apply').click();
+  await until(async () => tess.getByTestId('delivery-row').count(), n => n === 4, 15);
+  hook.failing = false;
   const shown = (await tess.getByTestId('delivery-row').evaluateAll(rs => rs.map(r => r.getAttribute('data-id')))).sort();
-  check(JSON.stringify(shown) === JSON.stringify(replayIds), `the filter shows the three failed deliveries of its type (${shown.length})`, problems);
+  check(JSON.stringify(shown) === JSON.stringify(replayIds), `the filter shows the four failed deliveries of its type (${shown.length})`, problems);
   await tess.getByTestId('replay').click();
   await tess.getByTestId('replay-confirm').click();
   await tess.getByTestId('replay-result').waitFor({ timeout: 10000 }).catch(() => {});
   const result = await tess.getByTestId('replay-result').innerText().catch(() => '');
-  check(/Replayed 3\b/.test(result), `the replay put back three (${result.trim()})`, problems);
+  check(/Replayed 4\b/.test(result), `the replay put back four (${result.trim()})`, problems);
   await shot(tess, 'deliveries-replayed');
   const replayed = await until(async () => [...new Set(hook.received.filter(r => replayIds.includes(r.id) && r.status === 200).map(r => r.id))].sort(),
-    ids => ids.length === 3, 30);
-  check(JSON.stringify(replayed) === JSON.stringify(replayIds), `the receiver got exactly those three again (${replayed.length})`, problems);
+    ids => ids.length === 4, 30);
+  check(JSON.stringify(replayed) === JSON.stringify(replayIds), `the receiver got exactly those four again (${replayed.length})`, problems);
   const other = (await deliveriesOf(sent.other[0]))[0];
   check(other?.status === 'failed' && !hook.received.some(r => r.id === otherDelivery?.id && r.status === 200),
     `the other type's failed delivery wasn't replayed (${other?.status})`, problems);

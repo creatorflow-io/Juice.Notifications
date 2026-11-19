@@ -29,6 +29,7 @@ export function apiResource<T, P>(options: RxResourceOptions<T, P>): ApiResource
 export function cursorList<P, T>(params: () => P, fetch: (params: P, cursor: string | null) => Observable<Page<T>>) {
   const destroyRef = inject(DestroyRef);
   const first = apiResource({ params, stream: ({ params }) => fetch(params, null).pipe(map(page => ({ page, params }))) });
+  // Pages after the first; reset whenever the first page reloads (a page still on its way then is dropped when it comes: see more()).
   const rest = linkedSignal({ source: first.value, computation: () => ({ items: [] as T[], cursor: undefined as string | null | undefined }) });
   const loadingMore = signal(false);
   const moreError = signal<unknown>(null);
@@ -42,7 +43,8 @@ export function cursorList<P, T>(params: () => P, fetch: (params: P, cursor: str
     loadingMore.set(true);
     moreError.set(null);
     fetch(current.params, next).pipe(takeUntilDestroyed(destroyRef)).subscribe({
-      next: page => rest.update(r => ({ items: [...r.items, ...page.items], cursor: page.next ?? null })),
+      // Only onto the list it was asked for: one reloaded or refiltered meanwhile drops it.
+      next: page => { if (first.value() === current) rest.update(r => ({ items: [...r.items, ...page.items], cursor: page.next ?? null })); },
       error: e => { moreError.set(e); loadingMore.set(false); },
       complete: () => loadingMore.set(false),
     });

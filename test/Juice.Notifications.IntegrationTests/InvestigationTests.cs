@@ -169,6 +169,8 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal("the type is gone", all.Items[0].Error);
 
             Assert.Equal([made[1].Request.Id], (await admin.GetFromJsonAsync<NotificationPageResponse>($"{url}?state=running", Ct))!.Items.Select(n => n.Id));
+            Assert.Equal([made[2].Request.Id, made[1].Request.Id],
+                (await admin.GetFromJsonAsync<NotificationPageResponse>($"{url}?state=running,failed", Ct))!.Items.Select(n => n.Id));
             Assert.Equal([made[1].Request.Id], (await admin.GetFromJsonAsync<NotificationPageResponse>($"{url}?correlation=order-1", Ct))!.Items.Select(n => n.Id));
             Assert.Equal([made[2].Request.Id], (await admin.GetFromJsonAsync<NotificationPageResponse>($"{url}?type=inv.other", Ct))!.Items.Select(n => n.Id));
             Assert.Empty((await admin.GetFromJsonAsync<NotificationPageResponse>($"{url}?application=nope", Ct))!.Items);

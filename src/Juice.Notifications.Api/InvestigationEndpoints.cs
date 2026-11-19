@@ -26,15 +26,21 @@ namespace Juice.Notifications.Api
         private static async Task<IResult> NotificationsAsync(Guid tenantId, string? type, string? application, string? correlation, string? state,
             DateTimeOffset? from, DateTimeOffset? to, Guid? before, int? limit, Investigation reader, CancellationToken ct)
         {
-            if (Named<NotificationState>(state, "state", "a notification state", out var parsed) is { } bad)
+            // One state, or several separated by commas (planning,running: the overview's "under way").
+            var states = new List<NotificationState>();
+            foreach (var name in state?.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries) ?? [])
             {
-                return bad;
+                if (Named<NotificationState>(name, "state", "a notification state", out var parsed) is { } bad)
+                {
+                    return bad;
+                }
+                states.Add(parsed!.Value);
             }
             if (Limit(limit) is { } wrong)
             {
                 return wrong;
             }
-            var page = await reader.NotificationsAsync(tenantId, new NotificationFilter(type, application, correlation, parsed, from, to, before,
+            var page = await reader.NotificationsAsync(tenantId, new NotificationFilter(type, application, correlation, states, from, to, before,
                 limit ?? Investigation.DefaultLimit), ct);
             return Results.Ok(new NotificationPageResponse(page.Items.Select(n => new NotificationListItemResponse(n.Id, n.Type, n.TypeVersion,
                 n.Application, n.CorrelationKey, n.Priority, n.State, n.Error, n.Actor, n.AcceptedAt)).ToList(), page.Next));

@@ -52,11 +52,11 @@ import { Badge, TenantLinkPipe, instant, localInput, problemText, words } from '
         @if (request()) {
           <span class="na-muted na-small">Replay takes no notification id: clear it to replay what the other filters match.</span>
         } @else if (!confirming()) {
-          <button mat-stroked-button type="button" (click)="confirming.set(true)" [disabled]="!list.first.value() || replaying()" data-testid="replay">
+          <button mat-stroked-button type="button" (click)="confirming.set(true)" [disabled]="!readAt() || replaying()" data-testid="replay">
             Replay these failed deliveries</button>
         } @else {
-          <span>Put back every failed delivery this filter matches{{ list.hasMore() ? '' : ' (' + list.items().length + ')' }}, read up to
-            {{ readAt() | date: 'HH:mm:ss' }}?</span>
+          <span>Put back every failed delivery this filter matches{{ list.hasMore() ? '' : ' (' + list.items().length + ')' }}, up to the newest
+            shown ({{ readAt() | date: 'HH:mm:ss' }})?</span>
           <button mat-flat-button type="button" (click)="replay()" [disabled]="replaying()" data-testid="replay-confirm">Replay</button>
           <button mat-button type="button" (click)="confirming.set(false)">Cancel</button>
         }
@@ -111,12 +111,12 @@ export class DeliveriesPage {
 
   private readonly filter = computed<DeliveryFilter>(() => ({ status: this.status(), channel: this.channel(), integration: this.integration(),
     type: this.type(), request: this.request(), from: this.from(), to: this.to() }));
-  /** Read again (Refresh, after a replay): a new moment to read up to. */
-  private readonly stamp = signal(Date.now());
-  protected readonly list = cursorList(() => ({ tenantId: this.tenantId(), filter: this.filter(), at: new Date(this.stamp()).toISOString() }),
+  protected readonly list = cursorList(() => ({ tenantId: this.tenantId(), filter: this.filter() }),
     (p, cursor) => this.api.deliveries(p.tenantId, p.filter, cursor));
   /** When the list was read: a replay takes nothing created after it, so it puts back what the list shows. */
-  protected readonly readAt = computed(() => this.list.first.value()?.params.at ?? null);
+  // The newest delivery the list shows (newest first), by the server's clock: a replay takes nothing created after it, so it puts back what
+  // the list shows whenever the list was read and whatever the browser's clock says. Null when it shows none.
+  protected readonly readAt = computed(() => this.list.first.value()?.page.items[0]?.createdAt ?? null);
   protected readonly error = computed(() => problemText(this.list.first.error()));
   protected readonly confirming = signal(false);
   protected readonly replaying = signal(false);
@@ -137,7 +137,7 @@ export class DeliveriesPage {
   }
 
   protected refresh(): void {
-    this.stamp.set(Date.now());
+    this.list.first.reload();
   }
 
   protected apply(): void {
@@ -155,7 +155,10 @@ export class DeliveriesPage {
     const f = this.filter();
     const readAt = this.readAt();
     // Up to when the list was read (or the filter's own end, if earlier).
-    const to = f.to && readAt && f.to < readAt ? f.to : readAt ?? f.to;
+    if (!readAt) return;
+    // Past the newest shown (the bound is exclusive; the API's times are finer than a millisecond), or the filter's own end if earlier.
+    const newest = new Date(new Date(readAt).getTime() + 1).toISOString();
+    const to = f.to && f.to < newest ? f.to : newest;
     this.replaying.set(true);
     this.replayError.set('');
     this.api.replay(this.tenantId(), { channel: f.channel, integration: f.integration, type: f.type, from: f.from, to: to ?? undefined }, 10_000).subscribe({

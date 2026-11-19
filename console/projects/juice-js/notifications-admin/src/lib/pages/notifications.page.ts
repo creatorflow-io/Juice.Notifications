@@ -30,6 +30,7 @@ import { Badge, TenantLinkPipe, instant, localInput, problemText, words } from '
       <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>State</mat-label>
         <mat-select name="state" [(ngModel)]="draft.state" data-testid="filter-state">
           <mat-option value="">Any</mat-option>
+          <mat-option value="planning,running">Under way (planning or running)</mat-option>
           @for (s of states; track s) { <mat-option [value]="s">{{ label(s) }}</mat-option> }
         </mat-select>
       </mat-form-field>

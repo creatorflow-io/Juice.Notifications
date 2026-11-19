@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Juice.Notifications.History
 {
-    public sealed record NotificationFilter(string? Type = null, string? Application = null, string? Correlation = null, NotificationState? State = null,
+    public sealed record NotificationFilter(string? Type = null, string? Application = null, string? Correlation = null, IReadOnlyList<NotificationState>? States = null,
         DateTimeOffset? From = null, DateTimeOffset? To = null, Guid? Before = null, int Limit = Investigation.DefaultLimit);
 
     public sealed record NotificationListRow(Guid Id, string Type, int TypeVersion, string Application, string? CorrelationKey, NotificationPriority Priority,
@@ -79,9 +79,9 @@ namespace Juice.Notifications.History
                        join notification in db.Notifications on new { request.TenantId, RequestId = request.Id } equals new { notification.TenantId, notification.RequestId }
                        join app in db.Applications on request.ApplicationId equals app.Id
                        select new { request, notification.State, notification.Error, Application = app.Key };
-            if (filter.State is { } state)
+            if (filter.States is { Count: > 0 } states)
             {
-                rows = rows.Where(r => r.State == state);
+                rows = rows.Where(r => states.Contains(r.State));
             }
             var found = await rows.OrderByDescending(r => r.request.Id).Take(limit + 1)
                 .Select(r => new NotificationListRow(r.request.Id, r.request.TypeKey, r.request.TypeVersion, r.Application, r.request.CorrelationKey,

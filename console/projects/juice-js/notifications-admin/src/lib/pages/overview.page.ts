@@ -32,7 +32,7 @@ import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
           <span class="na-muted">Deliveries</span><strong>{{ total() }}</strong></a>
         <a class="na-card na-tile" [routerLink]="['deliveries'] | naTenant: tenantId()" [queryParams]="{ status: 'failed', from: o.since }" data-testid="tile-failed">
           <span class="na-muted">Failed</span><strong [class.na-error]="failed() > 0">{{ failed() }}</strong></a>
-        <a class="na-card na-tile" [routerLink]="['notifications'] | naTenant: tenantId()" [queryParams]="{ state: 'running' }" data-testid="tile-unfinished">
+        <a class="na-card na-tile" [routerLink]="['notifications'] | naTenant: tenantId()" [queryParams]="{ state: 'planning,running' }" data-testid="tile-unfinished">
           <span class="na-muted">Notifications under way</span><strong>{{ o.unfinished }}</strong></a>
         <a class="na-card na-tile" [routerLink]="['storms'] | naTenant: tenantId()" data-testid="tile-storms">
           <span class="na-muted">Open storms</span><strong [class.na-error]="o.openStorms > 0">{{ o.openStorms }}</strong></a>
