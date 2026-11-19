@@ -18,6 +18,9 @@ namespace Juice.Notifications.IntegrationTests
             File.WriteAllText(Path.Combine(Root, "main-ABCD1234.js"), "export const x = 1;");
             File.WriteAllText(Path.Combine(Root, "chunk-Ce0mZ_Dd.js"), "export const y = 2;");
             File.WriteAllText(Path.Combine(Root, "logo-darkmode.svg"), "<svg/>");
+            Directory.CreateDirectory(Path.Combine(Root, "media"));
+            File.WriteAllText(Path.Combine(Root, "media", "roboto-Ab_cD-12.woff2"), "font");
+            File.WriteAllText(Path.Combine(Root, "media", "banner.png"), "png");
             App = new NotificationsApp(host => host.UseSetting("webroot", Root));
         }
 
@@ -53,6 +56,11 @@ namespace Juice.Notifications.IntegrationTests
             // A plain asset whose name happens to end in a dash and 8 letters isn't a bundle: it may change.
             using var asset = await client.GetAsync("/logo-darkmode.svg", Ct);
             Assert.True(asset.Headers.CacheControl?.NoCache);
+            // Media: hashed, for good; unhashed (added to public/media), may change.
+            using var font = await client.GetAsync("/media/roboto-Ab_cD-12.woff2", Ct);
+            Assert.Contains("immutable", font.Headers.CacheControl?.ToString());
+            using var banner = await client.GetAsync("/media/banner.png", Ct);
+            Assert.True(banner.Headers.CacheControl?.NoCache);
 
             foreach (var path in new[] { "/", "/tenants/0193f0aa-0000-7000-8000-0000000000a1/deliveries?status=Failed", "/applications" })
             {

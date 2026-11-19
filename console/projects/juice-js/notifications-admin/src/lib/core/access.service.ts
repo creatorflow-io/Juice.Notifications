@@ -40,30 +40,43 @@ export class AccessService {
   private readonly options = inject(NOTIFICATIONS_ADMIN_OPTIONS);
   private readonly signedIn = inject(NOTIFICATIONS_ADMIN_SIGNED_IN);
   private readonly current = signal<string | null>(readStored());
-  private kept: { access: Access; until: number } | null = null;
-  private reading: Observable<Access> | null = null;
+  private kept: { user: string; access: Access; until: number } | null = null;
+  private reading: { user: string; access: Observable<Access> } | null = null;
 
   /** The tenant being worked in: the last one opened. */
   readonly tenantId = this.current.asReadonly();
 
   /**
-   * The access. An answer is kept (5 minutes if it grants something, 30 seconds if not); a failed read (refused, the API down) isn't, and
-   * neither is a read still waiting for sign-in: it is shared only while someone waits for it, and dropped when they all stop.
+   * The signed-in user's access, once signed in. An answer is kept for that user (5 minutes if it grants something, 30 seconds if not); a
+   * failed read (refused, the API down) isn't. A read is shared only while someone waits for it, and dropped when they all stop.
    */
   load(): Observable<Access> {
-    if (this.kept && this.kept.until > Date.now()) {
-      return of(this.kept.access);
-    }
-    this.reading ??= this.signedIn.pipe(
-      take(1),
-      switchMap(() => this.http.get<Partial<Access>>(`${this.options.apiBase}/api/v1/access`)),
+    return this.signedIn.pipe(take(1), switchMap(user => {
+      if (this.kept?.user === user && this.kept.until > Date.now()) {
+        return of(this.kept.access);
+      }
+      if (this.reading?.user !== user) {
+        this.reading = { user, access: this.read(user) };
+      }
+      return this.reading.access;
+    }));
+  }
+
+  /** Forgets the kept answer, so the next {@link load} asks the API again (the no-access page's "try again"). */
+  refresh(): void {
+    this.kept = null;
+  }
+
+  private read(user: string): Observable<Access> {
+    const access: Observable<Access> = this.http.get<Partial<Access>>(`${this.options.apiBase}/api/v1/access`).pipe(
       map(a => ({ platformAdmin: !!a?.platformAdmin, allTenants: !!a?.allTenants, tenants: Array.isArray(a?.tenants) ? a.tenants : [] }) satisfies Access),
-      tap(access => this.kept = { access, until: Date.now() + (grants(access) ? KEEP_GRANTING_MS : KEEP_NOTHING_MS) }),
+      tap(answer => this.kept = { user, access: answer, until: Date.now() + (grants(answer) ? KEEP_GRANTING_MS : KEEP_NOTHING_MS) }),
       catchError(() => of({ ...EMPTY_ACCESS, unavailable: true } satisfies Access)),
-      finalize(() => this.reading = null),
+      // Only this read: a newer one (another user, or one started after this was dropped) stays.
+      finalize(() => { if (this.reading?.access === access) this.reading = null; }),
       shareReplay({ bufferSize: 1, refCount: true }),
     );
-    return this.reading;
+    return access;
   }
 
   /** Remembers the tenant opened (for the menu's links and the next visit). */

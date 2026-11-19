@@ -26,9 +26,11 @@ export function launch() {
 
 /**
  * A new page signed in as `user` (a person account, password PEOPLE_TEST_PASSWORD), at `path`. Page errors go to `problems`; API answers
- * of 400 or more go to `onRefused` (by default `problems` too), so a journey that expects refusals collects them apart: any refused
- * call that carried a token, once back from Keycloak, and any refused call once the app has left its sign-in pages (/auth/…). Before then
- * a call without a token is expected: the bell asks for the inbox on the signed-out page load and while the callback stores the token.
+ * of 400 or more go to `onRefused` (by default `problems` too), so a journey that expects refusals collects them apart: once back from
+ * Keycloak, a refused call that carried a token (a 401 only if the same call doesn't then succeed within 3 s: the auth library refreshes
+ * the token and retries), and any refused call sent once the app has left its sign-in pages (/auth/…). A call without a token sent before
+ * then is expected: the bell asks for the inbox on the signed-out page load and while the callback stores the token. Call `settled()`
+ * before reading what was refused.
  * `page.apiAnswers` keeps every API answer once back from Keycloak (url and status).
  */
 export async function signIn(browser, user, problems, { path = '/', onRefused = e => problems.push(e) } = {}) {
@@ -47,11 +49,24 @@ export async function signIn(browser, user, problems, { path = '/', onRefused = 
       settled ||= !new URL(frame.url()).pathname.startsWith('/auth/');
     }
   });
+  // Whether the app had left its sign-in pages when each call was sent (not when its answer came).
+  const sentSettled = new WeakMap();
+  page.on('request', r => sentSettled.set(r, settled));
   page.on('response', r => {
     if (!back || !r.url().includes('/api/')) return;
-    page.apiAnswers.push({ url: r.url(), status: r.status() });
+    const answer = { url: r.url(), status: r.status(), at: Date.now() };
+    page.apiAnswers.push(answer);
+    if (r.status() < 400) return;
     const withToken = !!r.request().headers()['authorization'];
-    if (r.status() >= 400 && (settled || withToken)) onRefused(`${user} http ${r.status()} ${r.url()}${withToken ? '' : ' (no token)'}`);
+    const refusal = `${user} http ${r.status()} ${r.url()}${withToken ? '' : ' (no token)'}`;
+    if (withToken && r.status() === 401) {
+      pending.push(new Promise(resolve => setTimeout(() => {
+        if (!page.apiAnswers.some(a => a.url === answer.url && a.status < 400 && a.at >= answer.at)) onRefused(refusal);
+        resolve();
+      }, 3000)));
+    } else if (withToken || sentSettled.get(r.request())) {
+      onRefused(refusal);
+    }
   });
   await page.goto(`${base}${path}`);
   await page.waitForURL(/realms\/juice/, { timeout: 30000 });
@@ -61,6 +76,14 @@ export async function signIn(browser, user, problems, { path = '/', onRefused = 
   await page.waitForURL(u => u.toString().startsWith(base) && !u.toString().includes('login-completed') && !u.toString().includes('/auth/'),
     { timeout: 30000 });
   return page;
+}
+
+/** Refusals waiting to see whether their call is retried. */
+const pending = [];
+
+/** Once every refusal waiting on a retry is decided. */
+export async function settled() {
+  await Promise.all(pending);
 }
 
 /** Fails the journey with `message` unless `ok`. */
@@ -74,8 +97,9 @@ export async function shot(page, name) {
   await page.screenshot({ path: `${shots}${name}.png`, fullPage: true });
 }
 
-/** Prints the problems and exits non-zero when there are any. */
-export function finish(problems) {
+/** Prints the problems (once every refusal is decided) and exits non-zero when there are any. */
+export async function finish(problems) {
+  await settled();
   if (problems.length) {
     console.error(`\n${problems.length} problem(s):\n${problems.map(p => `  - ${p}`).join('\n')}`);
     process.exit(1);

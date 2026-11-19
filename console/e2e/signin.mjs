@@ -56,9 +56,10 @@ try {
   // A link that isn't a tenant's: the no-access page says so (not that no tenant is linked).
   await paul.goto(`${base}/tenants/not-a-tenant`);
   await paul.getByTestId('no-access-tenant').waitFor({ timeout: 10000 }).catch(() => {});
-  check(paul.url() === `${base}/no-access?reason=tenant` && await paul.getByTestId('no-access-tenant').count() === 1,
+  check(new URL(paul.url()).pathname === '/no-access' && new URL(paul.url()).searchParams.get('reason') === 'tenant'
+    && await paul.getByTestId('no-access-tenant').count() === 1,
     `paul at a malformed tenant link is told it isn't his tenant's (${paul.url()})`, problems);
 } finally {
   await browser.close();
 }
-finish(problems);
+await finish(problems);

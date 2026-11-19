@@ -77,9 +77,15 @@ internal static partial class ConsoleFiles
             : "no-cache",
     };
 
-    /// <summary>A bundle (<c>.js</c>, <c>.mjs</c>, <c>.css</c> with its hash) or a file under <c>/media/</c>, by its request path.</summary>
-    public static bool IsHashed(string path) => path.StartsWith("/media/", StringComparison.Ordinal) || Bundle().IsMatch(path);
+    /// <summary>
+    /// A bundle (<c>.js</c>, <c>.mjs</c>, <c>.css</c>) or a file under <c>/media/</c>, either with its hash, by its request path. An unhashed
+    /// file there (one added to public/media, or a build without output hashing) may change.
+    /// </summary>
+    public static bool IsHashed(string path) => Bundle().IsMatch(path) || (path.StartsWith("/media/", StringComparison.Ordinal) && Media().IsMatch(path));
 
     [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_-]{8}\.(js|mjs|css)$")]
     private static partial System.Text.RegularExpressions.Regex Bundle();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"-[A-Za-z0-9_-]{8}\.[a-z0-9]+$")]
+    private static partial System.Text.RegularExpressions.Regex Media();
 }

@@ -1,5 +1,5 @@
 import { EnvironmentProviders, InjectionToken, makeEnvironmentProviders } from '@angular/core';
-import { Observable, of } from 'rxjs';
+import { Observable } from 'rxjs';
 
 /** How the host app mounts the Notifications Console pages. */
 export interface NotificationsAdminOptions {
@@ -9,28 +9,33 @@ export interface NotificationsAdminOptions {
   basePath: string;
 }
 
+/** What {@link provideNotificationsAdmin} takes: the options, and how the pages know the user is signed in. */
+export interface NotificationsAdminSetup extends Partial<NotificationsAdminOptions> {
+  /**
+   * Called once, in an injection context (it may `inject()` the host's sign-in service). Returns a cold observable that emits, on each
+   * subscription, the signed-in user's id (the token's subject) once there is a token the API accepts: at once when there is one, else
+   * when sign-in or a refresh brings it. The pages read nothing before, and read again when the user changes. Required: without it a page
+   * would ask the API before sign-in completes, be refused, and say the access couldn't be read.
+   */
+  signedIn: () => Observable<string>;
+}
+
 export const NOTIFICATIONS_ADMIN_OPTIONS = new InjectionToken<NotificationsAdminOptions>('NOTIFICATIONS_ADMIN_OPTIONS', {
   providedIn: 'root',
   factory: () => ({ apiBase: '', basePath: '/' }),
 });
 
-/**
- * Emits once the user is signed in with a token the API accepts; the pages read nothing before. Each subscription decides afresh (a cold
- * observable), so one made after sign-in completes emits at once. The host provides it from its own sign-in library; left out, the pages
- * read at once (a host whose routes can't be reached signed out).
- */
-export const NOTIFICATIONS_ADMIN_SIGNED_IN = new InjectionToken<Observable<unknown>>('NOTIFICATIONS_ADMIN_SIGNED_IN', {
-  providedIn: 'root',
-  factory: () => of(true),
-});
+/** The signed-in user's id, as {@link NotificationsAdminSetup.signedIn} gives it. No default: a host must say how sign-in is known. */
+export const NOTIFICATIONS_ADMIN_SIGNED_IN = new InjectionToken<Observable<string>>('NOTIFICATIONS_ADMIN_SIGNED_IN');
 
-/** Configures the pages: where the API is and where the host mounted the routes. */
-export function provideNotificationsAdmin(options: Partial<NotificationsAdminOptions> = {}): EnvironmentProviders {
+/** Configures the pages: where the API is, where the host mounted the routes, and how they know who is signed in. */
+export function provideNotificationsAdmin(setup: NotificationsAdminSetup): EnvironmentProviders {
   return makeEnvironmentProviders([
     {
       provide: NOTIFICATIONS_ADMIN_OPTIONS,
-      useValue: { apiBase: options.apiBase ?? '', basePath: options.basePath ?? '/' } satisfies NotificationsAdminOptions,
+      useValue: { apiBase: setup.apiBase ?? '', basePath: setup.basePath ?? '/' } satisfies NotificationsAdminOptions,
     },
+    { provide: NOTIFICATIONS_ADMIN_SIGNED_IN, useFactory: setup.signedIn },
   ]);
 }
 

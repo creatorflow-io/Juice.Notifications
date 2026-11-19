@@ -1,19 +1,31 @@
-import { ChangeDetectionStrategy, Component, NgModule } from '@angular/core';
+import { ChangeDetectionStrategy, Component, NgModule, inject } from '@angular/core';
 import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http';
 import { BrowserModule } from '@angular/platform-browser';
 import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
 import { RouterOutlet } from '@angular/router';
 import { MissingTranslationHandler, TranslatePipe, provideTranslateService } from '@ngx-translate/core';
 import { OAuthModule, OAuthService } from 'angular-oauth2-oidc';
-import { defer, filter, of, take } from 'rxjs';
+import { Observable, defer, filter, map, of, take } from 'rxjs';
 import { LAYOUT_TOOLBAR_ITEMS, LayoutModule, UserProfileDialogModule } from '@juice-js/layout';
 import { LocalizeModule } from '@juice-js/localize';
 import { AuthModule } from '@juice-js/auth';
 import { NotificationBellComponent, NotificationsModule } from '@juice-js/notifications';
-import { NOTIFICATIONS_ADMIN_SIGNED_IN, provideNotificationsAdmin } from '@juice-js/notifications-admin';
+import { provideNotificationsAdmin } from '@juice-js/notifications-admin';
 import { AppRoutingModule } from './app-routing.module';
 import { authOptions, settings } from './core/settings';
 import { ShowKeyHandler } from './core/show-key.handler';
+
+/**
+ * Who is signed in, for the admin pages: the subject once there is a valid access token, checked on each subscription, else when sign-in
+ * or a refresh brings one.
+ */
+function signedIn(): Observable<string> {
+  const oauth = inject(OAuthService);
+  const user = () => String((oauth.getIdentityClaims() as { sub?: string } | null)?.sub ?? oauth.getAccessToken());
+  return defer(() => oauth.hasValidAccessToken()
+    ? of(user())
+    : oauth.events.pipe(filter(() => oauth.hasValidAccessToken()), take(1), map(user)));
+}
 
 @Component({
   selector: 'app-root',
@@ -44,15 +56,7 @@ export class AppComponent { }
   ],
   providers: [
     provideHttpClient(withInterceptorsFromDi()),
-    provideNotificationsAdmin({ apiBase: settings.apiBase, basePath: '/' }),
-    // Signed in once there is a valid access token: checked when a page subscribes, else when sign-in or a refresh brings one.
-    {
-      provide: NOTIFICATIONS_ADMIN_SIGNED_IN,
-      deps: [OAuthService],
-      useFactory: (oauth: OAuthService) => defer(() => oauth.hasValidAccessToken()
-        ? of(true)
-        : oauth.events.pipe(filter(() => oauth.hasValidAccessToken()), take(1))),
-    },
+    provideNotificationsAdmin({ apiBase: settings.apiBase, basePath: '/', signedIn }),
     { provide: LAYOUT_TOOLBAR_ITEMS, useValue: NotificationBellComponent, multi: true },
     provideTranslateService({ missingTranslationHandler: { provide: MissingTranslationHandler, useClass: ShowKeyHandler } }),
   ],

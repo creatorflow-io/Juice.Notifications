@@ -105,15 +105,17 @@ unless the owner says otherwise.
     names are null for now (no tenant directory is configured anywhere yet). **Keycloak**: the client asks for `openid juice-notifications`
     (the local realm has no profile or email scope); people `tess` and `paul`. **Console** (`console/`, from Observability's workspace and
     lock file, Angular 22.2): the menu links tenant pages through `go/{page}` (a guard sends them to the tenant being worked in, kept in
-    session storage), so one menu serves every tenant; the access read waits for sign-in, which the host provides
-    (`NOTIFICATIONS_ADMIN_SIGNED_IN`, a cold observable: the Console's from its OAuth service; the library knows no sign-in library), so a
-    guard beside sign-in never asks without a token; an answer is kept 5 minutes if it grants something, 30 seconds if not, a failed read or
-    one still waiting not at all; `allTenants` lets a platform admin open any tenant's link. The no-access page says why (`reason`: none,
-    tenant, unavailable).
+    session storage), so one menu serves every tenant; the access read waits for sign-in, which the host must say how to know
+    (`provideNotificationsAdmin({ signedIn })`, required: a cold observable of the signed-in user's subject; the Console's from its OAuth
+    service; the library knows no sign-in library), so a guard beside sign-in never asks without a token; an answer is kept for that user,
+    5 minutes if it grants something, 30 seconds if not, a failed read not at all, and read again when the user changes; `allTenants` lets
+    a platform admin open any tenant's link. The no-access page says why (`reason`: none, tenant, unavailable) and keeps the link opened:
+    "Try again" reads the access afresh and goes back to it.
     Switching tenant keeps the page and drops the query, fragment, matrix parameters and any row id. The token's allowed URLs include the
     API's origin: the bell calls it by its full URL (review round 1 found its calls went without a token). The first, signed-out page load
     is refused (the bell asks before the redirect); the journeys count a refusal once back from Keycloak if it carried a token, and any once
-    the app has left its sign-in pages. Cached for good: `.js`, `.mjs`, `.css` with an 8-character hash, and `media/`. The overview is a placeholder until M37's read. Journeys: `signin.mjs` (tess lands in her tenant with no switcher and the bell;
+    the app has left its sign-in pages, by when the call was sent (a 401 on a call with a token only if it isn't retried and answered within
+    3 s). Cached for good: `.js`, `.mjs`, `.css` and `media/` files with an 8-character hash. The overview is a placeholder until M37's read. Journeys: `signin.mjs` (tess lands in her tenant with no switcher and the bell;
     paul switches between two tenants, linking the sample application to `…b2` first), `no-access.mjs` (ann at the home, a tenant's deep
     link and a menu link).
 - **M37 Investigate** (`p4c-03`, `p4c-04`): the overview, deliveries (retry, bulk replay), notifications with recipients (closes deferred #36),
