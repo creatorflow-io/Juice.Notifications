@@ -138,7 +138,9 @@ unless the owner says otherwise.
     on this machine's private address fails with 404, then accepts: one delivery found, opened and retried with the same id and body; a
     filter's three failed deliveries replayed and received, another type's left failed), `why-not.mjs` (ann's mute, ben's opt-out and
     tess's quiet hours, each put back afterwards; eli is a disabled account), `correlations.mjs` (a key with a slash, acknowledged and
-    resolved by tess as herself).
+    resolved by tess as herself). Review round 1 fixed the replay bound (the newest delivery shown, by the server's time, not the page's
+    open time; then, at confirmation, the latest creation time among all rows shown, since the list is in id order), late "More" pages, and
+    the under-way link (the list takes several states); closed after the confirmation round with that one fix, by the owner's go-ahead.
 - **M38 Delivery configuration** (`p4c-05`): integrations and targets (secret references only, I53), routes, mutes, escalation policies,
   the allowlist; journey `configure.mjs` sets up the demo's email and webhook delivery in the browser and sends through it.
 - **M39 Content** (`p4c-06`): types, templates with preview, display groups; the templates page leaves `@juice-js/notifications` (p4c-d5).

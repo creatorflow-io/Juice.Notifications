@@ -114,9 +114,11 @@ export class DeliveriesPage {
   protected readonly list = cursorList(() => ({ tenantId: this.tenantId(), filter: this.filter() }),
     (p, cursor) => this.api.deliveries(p.tenantId, p.filter, cursor));
   /** When the list was read: a replay takes nothing created after it, so it puts back what the list shows. */
-  // The newest delivery the list shows (newest first), by the server's clock: a replay takes nothing created after it, so it puts back what
-  // the list shows whenever the list was read and whatever the browser's clock says. Null when it shows none.
-  protected readonly readAt = computed(() => this.list.first.value()?.page.items[0]?.createdAt ?? null);
+  // The latest creation time among the deliveries shown, by the server's clock: a replay takes nothing created after it, so it puts back what
+  // the list shows whenever the list was read and whatever the browser's clock says. The latest of all, not the first row's: the list is in
+  // id order, and a delivery's time is its planning step's start, before its id is minted (two planned at once can be out of order).
+  protected readonly readAt = computed(() => this.list.items().reduce<string | null>(
+    (latest, d) => !latest || new Date(d.createdAt).getTime() > new Date(latest).getTime() ? d.createdAt : latest, null));
   protected readonly error = computed(() => problemText(this.list.first.error()));
   protected readonly confirming = signal(false);
   protected readonly replaying = signal(false);
