@@ -573,7 +573,12 @@ namespace Juice.Notifications.IntegrationTests
             using var admin = producer.App.Client(await LocalStack.AdminTokenAsync());
             var type = await DeclaredAsync(client, Type(NewType()));
             var id = (await (await client.PostAsJsonAsync(SendUrl, Send(type), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct))!.Id;
-            Assert.Equal(HttpStatusCode.Forbidden, (await admin.GetAsync($"{SendUrl}/{id}", Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"{SendUrl}/{id}", Ct)).StatusCode);
+            // The tenant's admins read any of its notifications (phase-4c-plan I52), naming the application; someone else, neither, is refused.
+            var read = await admin.GetFromJsonAsync<NotificationResponse>($"{SendUrl}/{id}", Ct);
+            Assert.Equal((id, ProducerApp.Key), (read!.Id, read.Application));
+            using var person = producer.App.Client(await LocalStack.PersonTokenAsync());
+            Assert.Equal(HttpStatusCode.Forbidden, (await person.GetAsync($"{SendUrl}/{id}", Ct)).StatusCode);
         }
     }
 }

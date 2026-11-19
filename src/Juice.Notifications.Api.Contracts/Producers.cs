@@ -37,7 +37,7 @@ namespace Juice.Notifications.Api.Contracts
     public sealed record NotificationResponse(
         Guid Id, string Type, int TypeVersion, string IdempotencyKey, string? CorrelationKey, NotificationPriority Priority,
         IReadOnlyDictionary<string, string> Labels, IReadOnlyDictionary<string, string> Links, string? Actor, DateTimeOffset AcceptedAt,
-        DateTimeOffset? ExpiresAt, NotificationState State, string? Error, IReadOnlyList<DeliveryResponse> Deliveries);
+        DateTimeOffset? ExpiresAt, NotificationState State, string? Error, IReadOnlyList<DeliveryResponse> Deliveries, string? Application = null);
 
     public sealed record DeliveryResponse(Guid Id, string Channel, string DestinationKey, DeliveryStatus Status, int Attempts, FailureCategory? FailureCategory,
         DateTimeOffset CreatedAt, DateTimeOffset? CompletedAt);

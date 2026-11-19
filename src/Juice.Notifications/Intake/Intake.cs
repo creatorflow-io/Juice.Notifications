@@ -488,7 +488,7 @@ namespace Juice.Notifications.Intake
     public sealed record NotificationDetail(
         Guid Id, string Type, int TypeVersion, string IdempotencyKey, string? CorrelationKey, NotificationPriority Priority,
         IReadOnlyDictionary<string, string> Labels, IReadOnlyDictionary<string, string> Links, string? Actor, DateTimeOffset AcceptedAt,
-        DateTimeOffset? ExpiresAt, NotificationState State, string? Error, IReadOnlyList<DeliverySummary> Deliveries);
+        DateTimeOffset? ExpiresAt, NotificationState State, string? Error, IReadOnlyList<DeliverySummary> Deliveries, string Application = "");
 
     public sealed record DeliverySummary(Guid Id, string Channel, string DestinationKey, DeliveryStatus Status, int Attempts, FailureCategory? FailureCategory,
         DateTimeOffset CreatedAt, DateTimeOffset? CompletedAt);
@@ -496,14 +496,19 @@ namespace Juice.Notifications.Intake
     /// <summary>Reads notifications for their producer, outside any command.</summary>
     public sealed class NotificationReader(NotificationsDbContext db)
     {
-        /// <summary>One of the application's own notifications in a tenant; another application's is not found.</summary>
-        public async Task<NotificationDetail?> GetAsync(Guid tenantId, Guid applicationId, Guid id, CancellationToken ct)
+        /// <summary>
+        /// One of the application's own notifications in a tenant, another application's not found; or, with no application (a tenant admin,
+        /// phase-4c-plan I52), any of the tenant's.
+        /// </summary>
+        public async Task<NotificationDetail?> GetAsync(Guid tenantId, Guid? applicationId, Guid id, CancellationToken ct)
         {
-            var request = await db.Requests.AsNoTracking().SingleOrDefaultAsync(r => r.TenantId == tenantId && r.Id == id && r.ApplicationId == applicationId, ct);
+            var request = await db.Requests.AsNoTracking()
+                .SingleOrDefaultAsync(r => r.TenantId == tenantId && r.Id == id && (applicationId == null || r.ApplicationId == applicationId), ct);
             if (request is null)
             {
                 return null;
             }
+            var application = await db.Applications.AsNoTracking().Where(a => a.Id == request.ApplicationId).Select(a => a.Key).SingleAsync(ct);
             var notification = await db.Notifications.AsNoTracking().SingleAsync(n => n.TenantId == tenantId && n.RequestId == id, ct);
             var deliveries = await (
                 from recipient in db.Recipients.Where(r => r.TenantId == tenantId && r.NotificationId == notification.Id)
@@ -512,7 +517,8 @@ namespace Juice.Notifications.Intake
                 select delivery).AsNoTracking().Distinct().OrderBy(d => d.CreatedAt).ToListAsync(ct);
             return new NotificationDetail(request.Id, request.TypeKey, request.TypeVersion, request.IdempotencyKey, request.CorrelationKey, request.Priority,
                 request.Labels, request.Links, request.Actor, request.AcceptedAt, request.ExpiresAt, notification.State, notification.Error,
-                deliveries.Select(d => new DeliverySummary(d.Id, d.Channel, d.DestinationKey, d.Status, d.Attempts, d.FailureCategory, d.CreatedAt, d.CompletedAt)).ToList());
+                deliveries.Select(d => new DeliverySummary(d.Id, d.Channel, d.DestinationKey, d.Status, d.Attempts, d.FailureCategory, d.CreatedAt, d.CompletedAt)).ToList(),
+                application);
         }
     }
 }

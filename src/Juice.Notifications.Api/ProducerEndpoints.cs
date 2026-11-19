@@ -150,19 +150,30 @@ namespace Juice.Notifications.Api
                 : Results.Accepted($"/api/v1/tenants/{tenantId}/notifications/{view.Id}", response);
         }
 
-        private static async Task<IResult> GetAsync(Guid tenantId, Guid id, ClaimsPrincipal user, Producers producers, NotificationReader reader, CancellationToken ct)
+        /// <summary>A producer's own notification; or, for the tenant's admins (phase-4c-plan I52), any of the tenant's.</summary>
+        private static async Task<IResult> GetAsync(Guid tenantId, Guid id, ClaimsPrincipal user, Producers producers, ITenantAccess access,
+            NotificationReader reader, CancellationToken ct)
         {
+            if (await access.CanAdministerAsync(user, tenantId, ct))
+            {
+                return await reader.GetAsync(tenantId, null, id, ct) is { } any
+                    ? Results.Ok(ToResponse(any))
+                    : ApiResults.NotFound($"There is no notification {id} in this tenant.");
+            }
             var (caller, refusal) = await producers.ResolveAsync(user, ct, forWriting: false);
             if (caller is null)
             {
                 return refusal!;
             }
             return await reader.GetAsync(tenantId, caller.Id, id, ct) is { } n
-                ? Results.Ok(new NotificationResponse(n.Id, n.Type, n.TypeVersion, n.IdempotencyKey, n.CorrelationKey, n.Priority, n.Labels, n.Links, n.Actor,
-                    n.AcceptedAt, n.ExpiresAt, n.State, n.Error,
-                    n.Deliveries.Select(d => new DeliveryResponse(d.Id, d.Channel, d.DestinationKey, d.Status, d.Attempts, d.FailureCategory, d.CreatedAt, d.CompletedAt)).ToList()))
+                ? Results.Ok(ToResponse(n))
                 : ApiResults.NotFound($"There is no notification {id} from {caller.Key} in this tenant.");
         }
+
+        private static NotificationResponse ToResponse(NotificationDetail n) => new(n.Id, n.Type, n.TypeVersion, n.IdempotencyKey, n.CorrelationKey,
+            n.Priority, n.Labels, n.Links, n.Actor, n.AcceptedAt, n.ExpiresAt, n.State, n.Error,
+            n.Deliveries.Select(d => new DeliveryResponse(d.Id, d.Channel, d.DestinationKey, d.Status, d.Attempts, d.FailureCategory, d.CreatedAt, d.CompletedAt)).ToList(),
+            n.Application);
 
         private static TypeVersionResponse ToResponse(TypeVersionView v) => new(v.Key, v.Version, v.Name, v.SchemaHash, v.CreatedAt);
     }

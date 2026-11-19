@@ -113,6 +113,10 @@ namespace Juice.Notifications.Api
             services.AddHostedService<People.ServiceTypesProvisioner>();
             services.Configure<People.DeviceOptions>(configuration.GetSection(People.DeviceOptions.Section));
             services.AddScoped<History.DeliveryHistory>();
+            // The Console's reads (phase-4c-plan I52); the overview is kept 30 seconds per tenant.
+            services.AddScoped<History.Investigation>();
+            services.AddScoped<CorrelationEndpoints.Owners>();
+            services.AddMemoryCache();
             // Display groups and the inbox (phase-2-plan M15).
             services.AddScoped<Inbox.DisplayGroupReader>();
             services.AddScoped<Inbox.PersonInboxReader>();
@@ -308,6 +312,7 @@ namespace Juice.Notifications.Api
             app.MapPeopleEndpoints();
             app.MapMeEndpoints();
             app.MapHistoryEndpoints();
+            app.MapInvestigationEndpoints();
             app.MapDisplayGroupEndpoints();
             app.MapCallbackEndpoints();
             // A session ends when its token does (a person removed from the tenant gets no new one), and reconnects with a fresh one.

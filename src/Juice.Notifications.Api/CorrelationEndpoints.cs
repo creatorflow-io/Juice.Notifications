@@ -7,33 +7,61 @@ namespace Juice.Notifications.Api
     /// <summary>
     /// A producer's correlations (design §5.3, phase-3-plan M20): always its own application's (D5); another application's key is not found. A
     /// disabled application may still acknowledge, resolve and cancel: stopping sends can't wait. A key with <c>/</c> in it is sent encoded
-    /// (<c>%2F</c>).
+    /// (<c>%2F</c>). The tenant's admins (phase-4c-plan I52) name the application (<c>?application=</c>: keys are per application) and act as
+    /// themselves: <c>by</c> is who they signed in as, whatever the body says.
     /// </summary>
     internal static class CorrelationEndpoints
     {
         public static void MapCorrelationEndpoints(this IEndpointRouteBuilder app)
         {
             var correlations = app.MapGroup("/api/v1/tenants/{tenantId:guid}/correlations").WithTags("Correlations");
-            correlations.MapGet("/{key}", async (Guid tenantId, string key, HttpContext http, ClaimsPrincipal user, Producers producers, CorrelationLifecycle lifecycle, CancellationToken ct) =>
+            correlations.MapGet("/{key}", async (Guid tenantId, string key, string? application, HttpContext http, ClaimsPrincipal user, Owners owners,
+                CorrelationLifecycle lifecycle, CancellationToken ct) =>
             {
-                var (caller, refusal) = await producers.ResolveAsync(user, ct, forWriting: false);
-                if (caller is null)
+                var (owner, refusal) = await owners.ResolveAsync(tenantId, application, user, ct);
+                if (owner is null)
                 {
                     return refusal!;
                 }
-                return await lifecycle.GetAsync(tenantId, caller.Id, Key(http, key), ct) is { } view
+                return await lifecycle.GetAsync(tenantId, owner.Value.ApplicationId, Key(http, key), ct) is { } view
                     ? Results.Ok(ToResponse(view))
                     : ApiResults.NotFound($"There is no correlation {Key(http, key)}.");
             });
-            correlations.MapPost("/{key}/acknowledge", (Guid tenantId, string key, HttpContext http, AcknowledgeCorrelationBody? body, ClaimsPrincipal user, Producers producers,
-                CorrelationLifecycle lifecycle, CancellationToken ct)
-                => ChangeAsync(user, producers, ct, caller => lifecycle.AcknowledgeAsync(tenantId, caller, Key(http, key), body?.By, ct)));
-            correlations.MapPost("/{key}/resolve", (Guid tenantId, string key, HttpContext http, ResolveCorrelationBody? body, ClaimsPrincipal user, Producers producers,
-                CorrelationLifecycle lifecycle, CancellationToken ct)
-                => ChangeAsync(user, producers, ct, caller => lifecycle.ResolveAsync(tenantId, caller, Key(http, key), body?.Outcome, body?.By, ct)));
-            correlations.MapPost("/{key}/cancel", (Guid tenantId, string key, HttpContext http, CancelCorrelationBody? body, ClaimsPrincipal user, Producers producers,
-                CorrelationLifecycle lifecycle, CancellationToken ct)
-                => ChangeAsync(user, producers, ct, caller => lifecycle.CancelAsync(tenantId, caller, Key(http, key), body?.By, ct)));
+            correlations.MapPost("/{key}/acknowledge", (Guid tenantId, string key, string? application, HttpContext http, AcknowledgeCorrelationBody? body,
+                ClaimsPrincipal user, Owners owners, CorrelationLifecycle lifecycle, CancellationToken ct)
+                => ChangeAsync(tenantId, application, user, owners, ct,
+                    owner => lifecycle.AcknowledgeAsync(tenantId, owner.ApplicationId, Key(http, key), owner.By ?? body?.By, ct)));
+            correlations.MapPost("/{key}/resolve", (Guid tenantId, string key, string? application, HttpContext http, ResolveCorrelationBody? body,
+                ClaimsPrincipal user, Owners owners, CorrelationLifecycle lifecycle, CancellationToken ct)
+                => ChangeAsync(tenantId, application, user, owners, ct,
+                    owner => lifecycle.ResolveAsync(tenantId, owner.ApplicationId, Key(http, key), body?.Outcome, owner.By ?? body?.By, ct)));
+            correlations.MapPost("/{key}/cancel", (Guid tenantId, string key, string? application, HttpContext http, CancelCorrelationBody? body,
+                ClaimsPrincipal user, Owners owners, CorrelationLifecycle lifecycle, CancellationToken ct)
+                => ChangeAsync(tenantId, application, user, owners, ct,
+                    owner => lifecycle.CancelAsync(tenantId, owner.ApplicationId, Key(http, key), owner.By ?? body?.By, ct)));
+        }
+
+        /// <summary>Whose correlation, and who acts: a producer's own (<c>By</c> null: its body names them), or for an admin the one named.</summary>
+        internal readonly record struct Owner(Guid ApplicationId, string? By);
+
+        internal sealed class Owners(Producers producers, ITenantAccess access, History.Investigation investigation)
+        {
+            public async Task<(Owner? Owner, IResult? Refusal)> ResolveAsync(Guid tenantId, string? application, ClaimsPrincipal user, CancellationToken ct)
+            {
+                if (application is null)
+                {
+                    var (caller, refusal) = await producers.ResolveAsync(user, ct, forWriting: false);
+                    return caller is null ? (null, refusal) : (new Owner(caller.Id, null), null);
+                }
+                if (!await access.CanAdministerAsync(user, tenantId, ct))
+                {
+                    return (null, ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin,
+                        "Only the tenant's admins name the application; a producer reads its own correlations."));
+                }
+                return await investigation.LinkedApplicationAsync(tenantId, application, ct) is { } id
+                    ? (new Owner(id, NotificationsAudit.Caller(user) ?? "admin"), null)
+                    : (null, ApiResults.NotFound($"There is no application {application} in this tenant."));
+            }
         }
 
         /// <summary>
@@ -56,18 +84,18 @@ namespace Juice.Notifications.Api
             return Uri.UnescapeDataString(end < 0 ? segment : segment[..end]);
         }
 
-        private static async Task<IResult> ChangeAsync(ClaimsPrincipal user, Producers producers, CancellationToken ct,
-            Func<Guid, Task<Outcome<CorrelationView>>> change)
+        private static async Task<IResult> ChangeAsync(Guid tenantId, string? application, ClaimsPrincipal user, Owners owners, CancellationToken ct,
+            Func<Owner, Task<Outcome<CorrelationView>>> change)
         {
-            var (caller, refusal) = await producers.ResolveAsync(user, ct, forWriting: false);
-            if (caller is null)
+            var (owner, refusal) = await owners.ResolveAsync(tenantId, application, user, ct);
+            if (owner is null)
             {
                 return refusal!;
             }
             Outcome<CorrelationView> outcome;
             try
             {
-                outcome = await change(caller.Id);
+                outcome = await change(owner.Value);
             }
             catch (Exception ex) when (Data.DbConflicts.Classify(ex) is { Kind: Data.ConflictKind.RowGone or Data.ConflictKind.Aborted })
             {

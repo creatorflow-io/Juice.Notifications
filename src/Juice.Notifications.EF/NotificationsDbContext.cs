@@ -501,6 +501,8 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Error).HasMaxLength(2000);
                 e.Property(x => x.EscalationSpecs).HasColumnType("jsonb");
                 e.HasIndex(x => new { x.TenantId, x.RequestId }).IsUnique();
+                // The overview's unfinished count (phase-4c-plan I52): only the notifications still being planned or running.
+                e.HasIndex(x => x.TenantId, "ix_notifications_unfinished").HasFilter("state IN ('Planning', 'Running')").HasDatabaseName("ix_notifications_unfinished");
                 e.HasOne<NotificationRequest>().WithMany().HasForeignKey(x => new { x.TenantId, x.RequestId }).OnDelete(DeleteBehavior.Cascade);
             });
 

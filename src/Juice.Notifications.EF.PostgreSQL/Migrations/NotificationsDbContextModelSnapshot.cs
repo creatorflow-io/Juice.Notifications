@@ -1703,6 +1703,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_notifications_tenant_id_request_id");
 
+                    b.HasIndex(new[] { "TenantId" }, "ix_notifications_unfinished")
+                        .HasDatabaseName("ix_notifications_unfinished")
+                        .HasFilter("state IN ('Planning', 'Running')");
+
                     b.ToTable("notifications", "notifications");
                 });
 
