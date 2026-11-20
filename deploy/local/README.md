@@ -65,6 +65,18 @@ The sample producer also receives a signed webhook on this machine's private add
 with `SAMPLE_WEBHOOK_SECRET` from `.env` (passed to it as `NOTIFICATIONS_SECRET_SAMPLE_HOOK` by `run-app.sh` and the `app` service). It
 exits non-zero when a delivery doesn't arrive.
 
+Approvals, the producer's side (the inbox decides nothing; the application hears the person's choice and closes the correlation):
+
+```bash
+dotnet run --project samples/Juice.Notifications.Samples.Producer -- listen   # stays up; Ctrl+C to stop
+node console/e2e/send-approval.mjs [tess|alice]                              # an approval request (Approve / Reject)
+```
+
+`listen` gives the `sample` application a broker user (`sample`, allowed to bind only to `sample.*` on `juice.notifications.events`, as a
+deployment would; password derived from `RABBITMQ_PASSWORD` unless `SAMPLE_BROKER_PASSWORD` is set) and names it on the application, which
+is what makes the service raise its events. It binds a queue of its own to `sample.notification.interaction`, and on the first Approve or
+Reject resolves the correlation with outcome `Approved` or `Rejected`. Every inbox item of it then shows the outcome instead of its buttons.
+
 Contact addresses and device tokens are encrypted at rest under `NOTIFICATIONS_CONTACT_KEY`, with hashes under `NOTIFICATIONS_CONTACT_HASH_KEY`
 (both base64 32-byte keys in `.env`, passed by `run-app.sh` and the `app` service). The service doesn't start without them. A `.env` made before
 16 Nov 2026 lacks them: `scripts/init.sh` adds them and keeps the rest.

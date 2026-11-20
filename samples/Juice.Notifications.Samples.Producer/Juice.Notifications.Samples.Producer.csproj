@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="RabbitMQ.Client" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Juice.Notifications.Api.Contracts\Juice.Notifications.Api.Contracts.csproj" />
   </ItemGroup>
 

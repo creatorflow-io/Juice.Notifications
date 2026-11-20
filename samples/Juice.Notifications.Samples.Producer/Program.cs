@@ -1,5 +1,6 @@
 // A producer against the local stack (deploy/local). Start the stack and the service first (scripts/run-app.sh, or --profile app), then:
 //   dotnet run --project samples/Juice.Notifications.Samples.Producer [path/to/deploy/local/.env]
+// With `listen` first, it is the application hearing its events instead, and closing a correlation on Approve or Reject (Listener.cs).
 // It registers the 'sample' application (as the platform admin), routes its type to the Mailpit mailbox and to a signed webhook this program
 // receives itself, declares the type, sends one notification, verifies the webhook's signature, and prints the delivery history.
 
@@ -15,10 +16,21 @@ using System.Text.Json;
 using Juice.Notifications;
 using Juice.Notifications.Api.Contracts;
 
-var settings = Settings.Load(args.FirstOrDefault() ?? Path.Combine(AppContext.BaseDirectory, "../../../../../deploy/local/.env"));
+var listen = args.FirstOrDefault() == "listen";
+var settings = Settings.Load(args.Skip(listen ? 1 : 0).FirstOrDefault() ?? Path.Combine(AppContext.BaseDirectory, "../../../../../deploy/local/.env"));
 var api = settings.Get("NOTIFICATIONS_API", "http://localhost:5280");
 var tenant = settings.Get("TENANT", "0193f0aa-0000-7000-8000-0000000000a1");
 var mailbox = settings.Get("MAILBOX", "ops@example.com");
+var tokenUrl = settings.Get("TOKEN_URL", "http://127.0.0.1:8080/realms/juice/protocol/openid-connect/token");
+
+using var http = new HttpClient();
+var admin = Client(api, await TokenAsync(http, tokenUrl, "notifications-admin", settings.Get("NOTIFICATIONS_ADMIN_CLIENT_SECRET", "")));
+var producer = Client(api, await TokenAsync(http, tokenUrl, "sample-producer", settings.Get("SAMPLE_PRODUCER_CLIENT_SECRET", "")));
+if (listen)
+{
+    return await Listener.RunAsync(settings, admin, producer);
+}
+
 var webhookSecret = settings.Get("SAMPLE_WEBHOOK_SECRET", "");
 if (webhookSecret.Length == 0)
 {
@@ -26,11 +38,6 @@ if (webhookSecret.Length == 0)
     Console.Error.WriteLine("SAMPLE_WEBHOOK_SECRET is not set: run deploy/local/scripts/init.sh, then start the service with run-app.sh or the app service.");
     return 1;
 }
-var tokenUrl = settings.Get("TOKEN_URL", "http://127.0.0.1:8080/realms/juice/protocol/openid-connect/token");
-
-using var http = new HttpClient();
-var admin = Client(api, await TokenAsync(http, tokenUrl, "notifications-admin", settings.Get("NOTIFICATIONS_ADMIN_CLIENT_SECRET", "")));
-var producer = Client(api, await TokenAsync(http, tokenUrl, "sample-producer", settings.Get("SAMPLE_PRODUCER_CLIENT_SECRET", "")));
 
 // The webhook receiver: on this machine's private address (the destination policy never allows loopback), allowlisted for the tenant.
 await using var receiver = await Receiver.StartAsync(webhookSecret);
