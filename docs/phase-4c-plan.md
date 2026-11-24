@@ -144,6 +144,21 @@ unless the owner says otherwise.
     the under-way link (the list takes several states); closed after the confirmation round with that one fix, by the owner's go-ahead.
 - **M38 Delivery configuration** (`p4c-05`): integrations and targets (secret references only, I53), routes, mutes, escalation policies,
   the allowlist; journey `configure.mjs` sets up the demo's email and webhook delivery in the browser and sends through it.
+  - *As built (24 Nov 2026; review rounds 1–3: 10 findings each, all fixed):* **API**: one read beyond the plan, `GET …/providers` (each channel's provider kinds this
+    deployment has, whether one `signs` and whether it `registersCallbacks`; never the inbox), so the integration form offers what can be
+    saved; `PlanningApiTests.The_providers_list_names_what_the_deployment_can_send_through`. **Pages** (menu group "Delivery"):
+    integrations (list, create), an integration (`integrations/{key}`: settings as JSON starting from the kind's example, secret reference
+    only (I53), priority, enabled; targets by address or address reference; "Register callbacks" for kinds that ask; delete, refused with
+    the API's reason once deliveries went through it), routes (type patterns, label matchers and minimum priority as fields; targets from every
+    integration), mutes (current or all, paged by the last id; cancel; one that holds a mandatory type is flagged), escalation policies
+    (steps of minutes and recipients: the route, or people through an enabled resolver handling their kind), the allowlist. Field errors show
+    on their fields by JSON pointer, a `concurrent_change` asks to reload (I54), and rows from configuration or the service are read only.
+    Creating with a key (or destination) that exists is refused in the page: the API's PUT would change that row instead. **Journey**
+    `configure.mjs` (proof point 5): tess allows the receiver, creates an SMTP and a webhook integration with a target each (a missing sender
+    shown on the settings field first) and a route to both; the email arrives in Mailpit and the webhook once, with a valid signature; a mute
+    and an escalation policy are made and undone; the route deleted, the integrations disabled (deleting them is refused: they sent), the
+    entry removed. Run against the rebuilt image (`Juice.MultiTenant.AspNetCore` 10.15.0 published), after round 3;
+    `deliveries`, `why-not`, `correlations` and `no-access` pass on the same build.
 - **M39 Content** (`p4c-06`): types, templates with preview, display groups; the templates page leaves `@juice-js/notifications` (p4c-d5).
 - **M40 People** (`p4c-07`): subscribers and aliases, local users and groups, topics, resolvers.
 - **M41 Settings and platform** (`p4c-08`): tenant settings; applications and tenant links for platform admins.

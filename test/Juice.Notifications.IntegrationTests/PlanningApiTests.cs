@@ -238,5 +238,27 @@ namespace Juice.Notifications.IntegrationTests
             // Not a platform admin: applications stay out of its reach.
             Assert.Equal(HttpStatusCode.Forbidden, (await tenantAdmin.GetAsync("/api/v1/applications", Ct)).StatusCode);
         }
+
+        /// <summary>
+        /// The Console's integration form (phase-4c-plan M38) offers what the deployment can send through: each channel's provider kinds, once
+        /// each, in order, which sign, and never the inbox (the service's own). For the tenant's admins only.
+        /// </summary>
+        [Fact]
+        public async Task The_providers_list_names_what_the_deployment_can_send_through()
+        {
+            LocalStack.RequireAvailable();
+            using var tenantAdmin = producer.App.Client(await LocalStack.TenantAdminTokenAsync());
+
+            var providers = await tenantAdmin.GetFromJsonAsync<List<ProviderResponse>>($"{Tenant}/providers", Ct);
+            Assert.Contains(new ProviderResponse("email", "smtp", false, false), providers!);
+            Assert.Contains(new ProviderResponse("webhook", "webhook", true, false), providers!);
+            Assert.DoesNotContain(providers!, p => p.Channel == "inbox");
+            var keys = providers!.Select(p => $"{p.Channel}/{p.Kind}").ToList();
+            Assert.Equal(keys.Distinct().Order(StringComparer.Ordinal), keys);
+
+            using var client = await producer.ProducerAsync();
+            var byProducer = await client.GetAsync($"{Tenant}/providers", Ct);
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantAdmin), (byProducer.StatusCode, await CodeAsync(byProducer)));
+        }
     }
 }

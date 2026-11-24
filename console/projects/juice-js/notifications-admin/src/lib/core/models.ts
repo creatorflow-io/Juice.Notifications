@@ -81,5 +81,46 @@ export interface Overview {
   openStorms: number; unfinished: number;
 }
 
+/** Who owns a configuration row: the API (editable here), the deployment's provisioning file, or the service itself (the inbox). */
+export type ManagedBy = 'api' | 'config' | 'service';
+
+/** A channel and provider kind the deployment can send through (`GET …/providers`). */
+export interface Provider { channel: string; kind: string; signs: boolean; registersCallbacks: boolean; }
+
+export interface Target { key: string; address: string | null; addressRef: string | null; enabled: boolean; managedBy: ManagedBy; updatedAt: string; }
+
+export interface Integration {
+  key: string; channel: string; kind: string; settings: Record<string, unknown>; secretRef: string | null; priority: number; enabled: boolean;
+  managedBy: ManagedBy; targets: Target[]; updatedAt: string;
+}
+
+/** What a route or a mute matches (design §6.3): type patterns, label matchers, a minimum priority. `{}` matches everything. */
+export interface Match { type?: string | string[]; labels?: Record<string, string>; minPriority?: Priority; }
+export type Priority = 'low' | 'normal' | 'high' | 'critical';
+export const PRIORITIES: Priority[] = ['low', 'normal', 'high', 'critical'];
+
+export interface Route { key: string; match: Match; targets: string[]; enabled: boolean; managedBy: ManagedBy; updatedAt: string; }
+
+export interface Mute {
+  id: string; match: Match; startsAt: string; endsAt: string | null; reason: string | null; createdBy: string | null; createdAt: string;
+  cancelledAt: string | null; appliesToMandatory: boolean;
+}
+
+/** An escalation step's recipient, as a request names one: the route's targets, or people through one of the tenant's resolvers. */
+export type EscalationRecipient =
+  | { kind: 'route' }
+  | { kind: 'user' | 'group' | 'role'; id: string; resolver: string }
+  | { kind: 'topic'; key: string; resolver: string };
+export const ESCALATION_RECIPIENT_KINDS: EscalationRecipient['kind'][] = ['route', 'user', 'group', 'role', 'topic'];
+export interface EscalationStep { afterMinutes: number; recipients: EscalationRecipient[]; }
+export interface EscalationPolicy { key: string; steps: EscalationStep[]; stopOnAcknowledge: boolean; managedBy: ManagedBy; updatedAt: string; }
+
+export interface Resolver {
+  key: string; kind: string; handles: string[]; settings: Record<string, unknown>; secretRef: string | null; enabled: boolean; managedBy: ManagedBy;
+  updatedAt: string;
+}
+
+export interface AllowlistEntry { destination: string; ports: number[]; managedBy: ManagedBy; updatedAt: string; }
+
 /** A problem the API answered with (RFC 9457), with the fields it names. */
 export interface Problem { status?: number; title?: string; detail?: string; code?: string; errors?: { pointer: string; message: string }[]; }

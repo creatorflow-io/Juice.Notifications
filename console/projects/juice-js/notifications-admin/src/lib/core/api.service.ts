@@ -1,9 +1,9 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
-import { Observable } from 'rxjs';
+import { Observable, catchError, shareReplay, throwError } from 'rxjs';
 import {
-  Correlation, CorrelationListItem, Delivery, DeliveryDetail, NotificationDetail, NotificationListItem, Overview, Page, Recipient, ReplayResult,
-  RetryResult, Storm,
+  AllowlistEntry, Correlation, CorrelationListItem, Delivery, DeliveryDetail, EscalationPolicy, EscalationStep, Integration, Match, Mute,
+  NotificationDetail, NotificationListItem, Overview, Page, Provider, Recipient, ReplayResult, Resolver, RetryResult, Route, Storm, Target,
 } from './models';
 import { NOTIFICATIONS_ADMIN_OPTIONS } from './options';
 
@@ -79,6 +79,107 @@ export class NotificationsAdminApi {
 
   correlation(tenantId: string, application: string, key: string): Observable<Correlation> {
     return this.http.get<Correlation>(this.url(tenantId, `correlations/${encodeURIComponent(key)}`), { params: this.params({ application }) });
+  }
+
+  // Delivery configuration (M38). Each write goes through the API's own commands, so it is checked and audited as any API change; a PUT
+  // sends every field the form holds (the API keeps what is left out, and takes a secret reference sent back unchanged as no new secret).
+
+  /**
+   * What the deployment can send through: fixed while it runs, so read once per tenant (the read is a tenant admin's) and shared. A read
+   * that fails is forgotten, so the next asks again.
+   */
+  providers(tenantId: string): Observable<Provider[]> {
+    let read = this.providerReads.get(tenantId);
+    if (!read) {
+      read = this.http.get<Provider[]>(this.url(tenantId, 'providers')).pipe(
+        catchError(e => { this.providerReads.delete(tenantId); return throwError(() => e); }),
+        shareReplay(1));
+      this.providerReads.set(tenantId, read);
+    }
+    return read;
+  }
+
+  private readonly providerReads = new Map<string, Observable<Provider[]>>();
+
+  integrations(tenantId: string): Observable<Integration[]> {
+    return this.http.get<Integration[]>(this.url(tenantId, 'integrations'));
+  }
+
+  putIntegration(tenantId: string, key: string, body: { channel: string; kind: string; settings: Record<string, unknown>; secretRef: string | null;
+    priority: number; enabled: boolean }): Observable<Integration> {
+    return this.http.put<Integration>(this.url(tenantId, `integrations/${encodeURIComponent(key)}`), body);
+  }
+
+  deleteIntegration(tenantId: string, key: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `integrations/${encodeURIComponent(key)}`));
+  }
+
+  /** Tells the provider where its callbacks go (Telegram's webhook): for kinds that `registersCallbacks`. */
+  registerCallbacks(tenantId: string, key: string): Observable<void> {
+    return this.http.post<void>(this.url(tenantId, `integrations/${encodeURIComponent(key)}/callbacks`), null);
+  }
+
+  putTarget(tenantId: string, integration: string, key: string, body: { address: string | null; addressRef: string | null; enabled: boolean })
+    : Observable<Target> {
+    return this.http.put<Target>(this.url(tenantId, `integrations/${encodeURIComponent(integration)}/targets/${encodeURIComponent(key)}`), body);
+  }
+
+  deleteTarget(tenantId: string, integration: string, key: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `integrations/${encodeURIComponent(integration)}/targets/${encodeURIComponent(key)}`));
+  }
+
+  routes(tenantId: string): Observable<Route[]> {
+    return this.http.get<Route[]>(this.url(tenantId, 'routes'));
+  }
+
+  putRoute(tenantId: string, key: string, body: { match: Match; targets: string[]; enabled: boolean }): Observable<Route> {
+    return this.http.put<Route>(this.url(tenantId, `routes/${encodeURIComponent(key)}`), body);
+  }
+
+  deleteRoute(tenantId: string, key: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `routes/${encodeURIComponent(key)}`));
+  }
+
+  /** The tenant's mutes, newest first: current and upcoming ones, or with `all` ended and cancelled ones too; `before` a mute's id. */
+  mutes(tenantId: string, all: boolean, before?: string | null, limit = 50): Observable<Mute[]> {
+    return this.http.get<Mute[]>(this.url(tenantId, 'mutes'), { params: this.params({ all: all || null, before, limit }) });
+  }
+
+  addMute(tenantId: string, body: { match: Match; startsAt: string | null; endsAt: string | null; reason: string | null }): Observable<Mute> {
+    return this.http.post<Mute>(this.url(tenantId, 'mutes'), body);
+  }
+
+  cancelMute(tenantId: string, id: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `mutes/${encodeURIComponent(id)}`));
+  }
+
+  escalationPolicies(tenantId: string): Observable<EscalationPolicy[]> {
+    return this.http.get<EscalationPolicy[]>(this.url(tenantId, 'escalation-policies'));
+  }
+
+  putEscalationPolicy(tenantId: string, key: string, body: { steps: EscalationStep[]; stopOnAcknowledge: boolean }): Observable<EscalationPolicy> {
+    return this.http.put<EscalationPolicy>(this.url(tenantId, `escalation-policies/${encodeURIComponent(key)}`), body);
+  }
+
+  deleteEscalationPolicy(tenantId: string, key: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `escalation-policies/${encodeURIComponent(key)}`));
+  }
+
+  resolvers(tenantId: string): Observable<Resolver[]> {
+    return this.http.get<Resolver[]>(this.url(tenantId, 'resolvers'));
+  }
+
+  allowlist(tenantId: string): Observable<AllowlistEntry[]> {
+    return this.http.get<AllowlistEntry[]>(this.url(tenantId, 'allowlist'));
+  }
+
+  putAllowlistEntry(tenantId: string, body: { destination: string; ports: number[] }): Observable<AllowlistEntry> {
+    return this.http.put<AllowlistEntry>(this.url(tenantId, 'allowlist'), body);
+  }
+
+  /** A destination can be a network (`10.20.0.0/16`), so it goes in the query. */
+  deleteAllowlistEntry(tenantId: string, destination: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, 'allowlist'), { params: this.params({ destination }) });
   }
 
   /** Acknowledge, resolve (with an outcome) or cancel, as the signed-in admin. */

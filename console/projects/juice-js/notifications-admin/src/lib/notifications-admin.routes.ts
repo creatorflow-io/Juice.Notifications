@@ -30,6 +30,12 @@ export const NOTIFICATIONS_ADMIN_ROUTES: Routes = [
       // Keys are per application: the application, then the key (a slash in it encoded in its segment).
       page('correlations/:application/:key', 'Correlation', () => import('./pages/correlation.page').then(m => m.CorrelationPage)),
       page('storms', 'Storms', () => import('./pages/storms.page').then(m => m.StormsPage)),
+      page('integrations', 'Integrations', () => import('./pages/integrations.page').then(m => m.IntegrationsPage)),
+      page('integrations/:key', 'Integration', () => import('./pages/integration.page').then(m => m.IntegrationPage)),
+      page('routes', 'Routes', () => import('./pages/routes.page').then(m => m.RoutesPage)),
+      page('mutes', 'Mutes', () => import('./pages/mutes.page').then(m => m.MutesPage)),
+      page('escalation-policies', 'Escalation policies', () => import('./pages/escalation-policies.page').then(m => m.EscalationPoliciesPage)),
+      page('allowlist', 'Destination allowlist', () => import('./pages/allowlist.page').then(m => m.AllowlistPage)),
     ],
   },
 ];
@@ -45,8 +51,23 @@ export function notificationsAdminMenus(basePath = '/', order = 1): Menus {
     { id: 'notifications', label: 'Notifications', icon: 'notifications', routerLink: goLink(basePath, 'notifications'), shortcut: 'g n' },
     { id: 'correlations', label: 'Correlations', icon: 'link', routerLink: goLink(basePath, 'correlations'), shortcut: 'g c' },
     { id: 'storms', label: 'Storms', icon: 'thunderstorm', routerLink: goLink(basePath, 'storms') },
+    group('notifications-admin-delivery', 'Delivery', 'send', [
+      { id: 'integrations', label: 'Integrations', icon: 'cable', routerLink: goLink(basePath, 'integrations'), shortcut: 'g i' },
+      { id: 'routes', label: 'Routes', icon: 'alt_route', routerLink: goLink(basePath, 'routes'), shortcut: 'g r' },
+      { id: 'mutes', label: 'Mutes', icon: 'notifications_paused', routerLink: goLink(basePath, 'mutes') },
+      { id: 'escalation-policies', label: 'Escalation policies', icon: 'escalator_warning', routerLink: goLink(basePath, 'escalation-policies') },
+      { id: 'allowlist', label: 'Destination allowlist', icon: 'shield', routerLink: goLink(basePath, 'allowlist') },
+    ]),
   ];
   return menus.map((menu, index) => ({ ...menu, order: order + index }));
+}
+
+/**
+ * A menu group, as Observability's: it links to its first page and keeps its pages' own links (`replaceChildRouterLink: false`); juice-layout
+ * only opens and closes it on a click. Group ids carry a `notifications-admin-` prefix, as a host's own menu may sit beside them.
+ */
+function group(id: string, label: string, icon: string, children: Menus): Menus[number] {
+  return { id, label, icon, routerLink: children[0].routerLink, replaceChildRouterLink: false, children };
 }
 
 /** The menu's link to a tenant page: `go(base, 'deliveries')` → `/go/deliveries`. */

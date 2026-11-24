@@ -16,6 +16,13 @@ namespace Juice.Notifications.Api
         {
             var tenant = app.MapGroup("/api/v1/tenants/{tenantId:guid}").RequireTenantAdmin().WithTags("Tenant configuration");
 
+            // What this deployment can send through (phase-4c-plan M38): each channel's provider kinds, whether one signs (must name a secret)
+            // and whether it is told where its callbacks go. The inbox is the service's own, so it isn't listed.
+            tenant.MapGet("/providers", (IEnumerable<INotificationProvider> providers) => Results.Ok(providers
+                .Where(p => p.Channel != Channels.Inbox)
+                .DistinctBy(p => (p.Channel, p.Kind))
+                .OrderBy(p => p.Channel, StringComparer.Ordinal).ThenBy(p => p.Kind, StringComparer.Ordinal)
+                .Select(p => new ProviderResponse(p.Channel, p.Kind, p.RequiresSecret, p is ICallbackRegistration))));
             tenant.MapGet("/integrations", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
                 => Results.Ok((await reader.IntegrationsAsync(tenantId, ct)).Select(ToResponse)));
             tenant.MapPut("/integrations/{key}", (Guid tenantId, string key, PutIntegrationBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)

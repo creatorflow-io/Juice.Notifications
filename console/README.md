@@ -17,6 +17,7 @@ npx ng serve                                 # http://localhost:4300, /api and /
 # With the stack and the app container up (deploy/local: docker compose --profile app up -d --build --wait):
 node e2e/signin.mjs                          # tess (tenant admin) and paul (platform admin) sign in and land in a tenant
 node e2e/no-access.mjs                       # ann (no admin role) gets the no-access page everywhere
+node e2e/configure.mjs                       # tess sets up email and webhook delivery in the browser; both arrive (M38)
 ```
 
 The local realm's Console admins are `tess` and `paul` (password `PEOPLE_TEST_PASSWORD` in `deploy/local/.env`).

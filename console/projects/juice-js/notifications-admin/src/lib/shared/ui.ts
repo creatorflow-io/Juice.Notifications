@@ -2,8 +2,8 @@ import { ChangeDetectionStrategy, Component, Pipe, PipeTransform, computed, inje
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
 import { Problem } from '../core/models';
 
-const OK = new Set(['delivered', 'accepted', 'planned', 'resolved', 'closed']);
-const WARN = new Set(['pending', 'sending', 'retrying', 'planning', 'running', 'open', 'acknowledged', 'deferred', 'muted', 'optedOut', 'truncated']);
+const OK = new Set(['delivered', 'accepted', 'planned', 'resolved', 'closed', 'enabled']);
+const WARN = new Set(['pending', 'sending', 'retrying', 'planning', 'running', 'open', 'acknowledged', 'deferred', 'muted', 'optedOut', 'truncated', 'active', 'upcoming']);
 const BAD = new Set(['failed', 'bounced', 'expired', 'resolverUnavailable']);
 
 /** A state as a badge: delivered and done green, under way or held amber, failed red, the rest grey. */

@@ -172,7 +172,7 @@ export async function until(read, done, seconds = 30) {
 
 /**
  * A webhook receiver on this machine's private IPv4 address (the service never sends to loopback), as the integration tests' Receiver:
- * answers `status()` (404 while `failing`), and keeps each request's `webhook-id` (the delivery's id) and body.
+ * answers `status()` (404 while `failing`), and keeps each request's `webhook-id` (the delivery's id), timestamp, signature and body.
  */
 export async function receiver() {
   const address = Object.values(networkInterfaces()).flat()
@@ -182,7 +182,8 @@ export async function receiver() {
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', d => body += d).on('end', () => {
-      state.received.push({ id: req.headers['webhook-id'], body, status: state.failing ? 404 : 200 });
+      state.received.push({ id: req.headers['webhook-id'], timestamp: req.headers['webhook-timestamp'], signature: req.headers['webhook-signature'],
+        body, status: state.failing ? 404 : 200 });
       res.writeHead(state.failing ? 404 : 200).end();
     });
   });

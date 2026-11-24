@@ -14,6 +14,12 @@ namespace Juice.Notifications.Api.Contracts
     /// <summary><c>PUT …/allowlist</c>: a private host or network outbound HTTP may reach, with its ports (design §13.1).</summary>
     public sealed record PutAllowlistBody(string? Destination, List<int>? Ports);
 
+    /// <summary>
+    /// <c>GET …/providers</c>: a channel and provider kind this deployment can send through. <c>Signs</c>: an integration of it must name a
+    /// secret. <c>RegistersCallbacks</c>: <c>POST …/integrations/{key}/callbacks</c> tells the provider where its callbacks go.
+    /// </summary>
+    public sealed record ProviderResponse(string Channel, string Kind, bool Signs, bool RegistersCallbacks);
+
     public sealed record IntegrationResponse(string Key, string Channel, string Kind, JsonElement Settings, string? SecretRef, int Priority, bool Enabled,
         string ManagedBy, IReadOnlyList<TargetResponse> Targets, DateTimeOffset UpdatedAt);
 
