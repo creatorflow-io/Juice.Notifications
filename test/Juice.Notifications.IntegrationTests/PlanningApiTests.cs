@@ -224,10 +224,11 @@ namespace Juice.Notifications.IntegrationTests
             await Ok(tenantAdmin.PutAsJsonAsync($"{Tenant}/integrations/own-hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
             Assert.Equal(HttpStatusCode.OK, (await tenantAdmin.GetAsync($"{Tenant}/integrations", Ct)).StatusCode);
 
+            // Another tenant than its token's is refused before the endpoint (the tenant pattern), the same for an unknown one.
             foreach (var other in new[] { ProducerApp.OtherTenant, Guid.CreateVersion7() })
             {
                 var refused = await tenantAdmin.PutAsJsonAsync($"/api/v1/tenants/{other}/integrations/x", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct);
-                Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantAdmin), (refused.StatusCode, await CodeAsync(refused)));
+                Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.TenantForbidden), (refused.StatusCode, await CodeAsync(refused)));
                 Assert.Equal(HttpStatusCode.Forbidden, (await tenantAdmin.GetAsync($"/api/v1/tenants/{other}/routes", Ct)).StatusCode);
             }
 

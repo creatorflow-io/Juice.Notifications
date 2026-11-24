@@ -168,7 +168,8 @@ namespace Juice.Notifications.IntegrationTests
             using var serviceAccount = people.App.Client(await LocalStack.TenantAdminTokenAsync());
             Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotAPerson, ""), await ProblemAsync(serviceAccount.GetAsync($"{Tenant}/me/topics", Ct)));
             using var member = people.App.Client(await LocalStack.PersonTokenAsync());
-            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantMember, ""),
+            // Another tenant than the token's: refused before the endpoint (the tenant pattern).
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.TenantForbidden, ""),
                 await ProblemAsync(member.GetAsync($"/api/v1/tenants/{ProducerApp.OtherTenant}/me/topics", Ct)));
             Assert.Equal(HttpStatusCode.Unauthorized, (await people.App.Client().GetAsync($"{Tenant}/me/topics", Ct)).StatusCode);
         }

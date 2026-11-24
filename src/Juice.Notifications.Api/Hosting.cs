@@ -97,7 +97,8 @@ namespace Juice.Notifications.Api
             services.AddScoped<Types.DeclarationHash>();
             services.AddScoped<Intake.NotificationReader>();
             services.AddScoped<Producers>();
-            services.TryAddSingleton<ITenantAccess, ClaimTenantAccess>(); // replace to answer from juice-tenants or local grants
+            // The tenant pattern: the request's tenant, its status, and who may administer it (TenantAccess.cs).
+            services.AddNotificationsTenancy(configuration);
             services.AddScoped<Configuration.ConfigurationReader>();
             services.AddScoped<Configuration.TenantSettingsReader>();
             services.AddScoped<Types.TenantTemplateReader>();
@@ -294,6 +295,8 @@ namespace Juice.Notifications.Api
             app.UseAuthentication();
             // After authentication, so a record names its user; before authorization, so refused changes are recorded too.
             app.UseNotificationsAudit();
+            // The request's tenant, checked (the tenant pattern), for the caller authentication found; before authorization, which may ask about it.
+            app.UseJuiceTenancy();
             app.UseAuthorization();
             app.UseRateLimiter();
             return app;

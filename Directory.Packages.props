@@ -11,6 +11,9 @@
     <PackageVersion Include="Juice.EF" Version="10.13.1" />
     <PackageVersion Include="Juice.EventBus.RabbitMQ" Version="10.13.1" />
     <PackageVersion Include="Juice.MediatR" Version="10.13.1" />
+    <!-- The tenant pattern (juice-docs decision record): the shared tenant resolution and access check, and the shared tenant checks. -->
+    <PackageVersion Include="Juice.MultiTenant.AspNetCore" Version="10.15.0" />
+    <PackageVersion Include="Juice.MultiTenant.TestHelper" Version="10.15.0" />
     <PackageVersion Include="Juice.MediatR.Behaviors" Version="10.13.1" />
     <PackageVersion Include="Juice.Messaging" Version="10.13.1" />
     <PackageVersion Include="Juice.Messaging.Idempotency.Caching" Version="10.13.1" />

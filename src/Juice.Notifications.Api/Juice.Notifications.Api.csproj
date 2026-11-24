@@ -14,9 +14,11 @@
     <PackageReference Include="Juice.Messaging.Local" />
     <PackageReference Include="Juice.Messaging.Idempotency.Caching" />
     <PackageReference Include="Juice.Audit.Api" />
+    <PackageReference Include="Juice.MultiTenant.AspNetCore" />
   </ItemGroup>
 
   <ItemGroup>
+    <Using Include="Juice.MultiTenant.AspNetCore" />
     <Using Include="Microsoft.AspNetCore.Builder" />
     <Using Include="Microsoft.AspNetCore.Http" />
     <Using Include="Microsoft.AspNetCore.Routing" />

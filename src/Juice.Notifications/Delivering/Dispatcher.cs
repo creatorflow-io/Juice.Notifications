@@ -33,7 +33,7 @@ namespace Juice.Notifications.Delivering
     /// </summary>
     public sealed class DispatcherStage(IEnumerable<INotificationProvider> providers, IChannelRegistry channels, IOptions<DeliveryOptions> options, IServiceScopeFactory scopes,
         ILogger<DispatcherStage> logger, People.ContactCrypto crypto, TimeProvider? clock = null,
-        ISecretResolver? secrets = null) : IStage<Delivery>
+        ISecretResolver? secrets = null, ITenantGate? tenants = null) : IStage<Delivery>
     {
         public string Name => DeliveryStageNames.Dispatcher;
 
@@ -104,6 +104,14 @@ namespace Juice.Notifications.Delivering
                     && (c.State == CorrelationState.Resolved || c.State == CorrelationState.Cancelled), ct) == correlations.Count)
             {
                 Finish(context, row, DeliveryStatus.Cancelled, null, "The correlation was resolved or cancelled before it was sent.", context.Now);
+                return;
+            }
+            // A tenant that isn't active (suspended, still being set up) has its deliveries held, not dropped: looked at again later, sent once
+            // it is active, and expired above as any other (the tenant pattern decision record).
+            if (tenants is not null && !await tenants.IsActiveAsync(row.TenantId, ct))
+            {
+                logger.LogInformation("Delivery {Delivery} held: tenant {Tenant} isn't active", row.Id, row.TenantId);
+                context.Done(row, context.Now + options.Value.TenantHold);
                 return;
             }
             if (provider is null || !integration.Enabled)
@@ -600,6 +608,8 @@ namespace Juice.Notifications.Delivering
         /// <summary>The dispatcher, the phase 1 providers (webhook, SMTP) and the <c>Delivery</c> options.</summary>
         public static IServiceCollection AddDispatching(this IServiceCollection services, StageOptions options, bool runWorkers = true)
         {
+            // Every tenant is active unless the host answers from its tenant directory (Juice.Notifications.Api).
+            Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.TryAddSingleton<ITenantGate, OpenTenantGate>(services);
             services.AddBuiltInChannels();
             services.AddContactEncryption();
             services.AddSecretResolver();

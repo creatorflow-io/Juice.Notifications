@@ -10,6 +10,9 @@ namespace Juice.Notifications.Providers
         public TimeSpan RetryBase { get; set; } = TimeSpan.FromSeconds(10);
         public TimeSpan RetryMax { get; set; } = TimeSpan.FromMinutes(10);
 
+        /// <summary>How long a delivery of a tenant that isn't active is held before it is looked at again.</summary>
+        public TimeSpan TenantHold { get; set; } = TimeSpan.FromMinutes(5);
+
         public TimeSpan ConnectTimeout { get; set; } = TimeSpan.FromSeconds(5);
         public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(10);
         /// <summary>Response bytes read from a webhook; the rest is discarded.</summary>

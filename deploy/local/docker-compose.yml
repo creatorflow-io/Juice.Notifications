@@ -87,6 +87,14 @@ services:
       Auth__Authority: http://${PUBLIC_HOST:-localhost}:8080/realms/juice
       Auth__MetadataAddress: http://keycloak:8080/realms/juice/.well-known/openid-configuration
       Auth__RequireHttpsMetadata: "false"
+      # The tenant pattern (juice-docs decision record): the local realm's tenants (README, people), active; any other is unknown.
+      Tenancy__Directory: Configured
+      Tenancy__Tenants__0__Id: 0193f0aa-0000-7000-8000-0000000000a1
+      Tenancy__Tenants__0__Identifier: local
+      Tenancy__Tenants__0__Name: Local tenant
+      Tenancy__Tenants__1__Id: 0193f0aa-0000-7000-8000-0000000000b2
+      Tenancy__Tenants__1__Identifier: other
+      Tenancy__Tenants__1__Name: Other tenant
       Delivery__AllowHttpToAllowlisted: "true"
       Delivery__SmtpServers__local__Host: mailpit
       Delivery__SmtpServers__local__Port: "1025"

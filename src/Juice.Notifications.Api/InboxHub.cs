@@ -27,6 +27,13 @@ namespace Juice.Notifications.Api
                 Context.Abort();
                 return;
             }
+            // A tenant that isn't active has no live inbox (the tenant pattern): the hub is outside the API's tenant check (its tenant is a query).
+            if (await services.GetRequiredService<ITenantDirectory>().AvailabilityAsync(tenantId, Context.ConnectionAborted) != MultiTenant.TenantAvailability.Active)
+            {
+                logger.LogInformation("Inbox hub refused connection {Connection}: tenant {Tenant} isn't active", Context.ConnectionId, tenantId);
+                Context.Abort();
+                return;
+            }
             var (person, _) = await MeEndpoints.PersonAsync(user, tenantId, services, Context.ConnectionAborted);
             if (person is not { } subscriberId)
             {

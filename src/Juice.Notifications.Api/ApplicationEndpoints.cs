@@ -19,10 +19,12 @@ namespace Juice.Notifications.Api
                 => await sender.SendAsync(new CreateApplication(body.Key, body.Name, body.ClientId, body.BrokerUser), body.Key, ct, view => $"/api/v1/applications/{view.Key}"));
             group.MapPut("/{key}", async (string key, UpdateApplicationBody body, Sender sender, CancellationToken ct)
                 => await sender.SendAsync(new UpdateApplication(key, body.Name, body.ClientId, body.Enabled, body.BrokerUser), key, ct));
-            group.MapPut("/{key}/tenants/{tenantId:guid}", async (string key, Guid tenantId, Sender sender, CancellationToken ct)
-                => await sender.SendAsync(new LinkTenant(key, tenantId), key, ct));
-            group.MapDelete("/{key}/tenants/{tenantId:guid}", async (string key, Guid tenantId, Sender sender, CancellationToken ct)
-                => await sender.SendAsync(new UnlinkTenant(key, tenantId), key, ct));
+            // Not named tenantId: the tenant pattern doesn't resolve or check it, so a platform admin links a tenant still being set up and
+            // unlinks one that is suspended, abandoned or gone.
+            group.MapPut("/{key}/tenants/{linkedTenantId:guid}", async (string key, Guid linkedTenantId, Sender sender, CancellationToken ct)
+                => await sender.SendAsync(new LinkTenant(key, linkedTenantId), key, ct));
+            group.MapDelete("/{key}/tenants/{linkedTenantId:guid}", async (string key, Guid linkedTenantId, Sender sender, CancellationToken ct)
+                => await sender.SendAsync(new UnlinkTenant(key, linkedTenantId), key, ct));
         }
 
         private static ApplicationResponse ToResponse(ApplicationView v) => new(v.Id, v.Key, v.Name, v.ClientId, v.BrokerUser, v.Enabled, v.Tenants, v.CreatedAt, v.UpdatedAt);

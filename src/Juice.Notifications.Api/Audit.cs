@@ -77,8 +77,9 @@ namespace Juice.Notifications.Api
             {
                 if (http.RequestServices.GetService<IAuditContextAccessor>() is { IsInitialized: true } accessor)
                 {
-                    // The tenant comes from the path (phase-1-plan I2), not from a tenant resolver Juice.Audit would ask.
-                    if (Guid.TryParse(http.GetRouteValue("tenantId") as string, out var tenantId))
+                    // The tenant comes from the path (phase-1-plan I2), not from a tenant resolver Juice.Audit would ask: a tenant-scoped route's, or the
+                    // tenant an application is linked to or unlinked from (a route the tenant pattern leaves alone).
+                    if (Guid.TryParse((http.GetRouteValue("tenantId") ?? http.GetRouteValue("linkedTenantId")) as string, out var tenantId))
                     {
                         accessor.AuditContext.SetTenant(tenantId.ToString());
                     }

@@ -67,6 +67,18 @@ namespace Juice.Notifications
         public const string TopicNotSelfService = "topic_not_self_service";
         /// <summary>The caller's token doesn't belong to the tenant in the path, or names no person (no subject).</summary>
         public const string NotTenantMember = "not_tenant_member";
+
+        // The tenant pattern (juice-docs decision record): the request's tenant, checked before the endpoint
+
+        /// <summary>The token names another tenant than the path (or one that isn't a tenant Id), or the tenant is unknown to a caller who may not
+        /// see every tenant: the answer is the same, so it doesn't reveal which tenants exist.</summary>
+        public const string TenantForbidden = "tenant_forbidden";
+        /// <summary>No such tenant (to a platform admin).</summary>
+        public const string TenantNotFound = "tenant_not_found";
+        /// <summary>The tenant isn't active (inactive, suspended, abandoned or never approved).</summary>
+        public const string TenantInactive = "tenant_inactive";
+        /// <summary>The tenant is still being set up (503): try again later.</summary>
+        public const string TenantStarting = "tenant_starting";
         /// <summary>The person already has this address on this channel.</summary>
         public const string ContactPointExists = "contact_point_exists";
         /// <summary>The person has as many contact points (or verification sends) as allowed; remove one, or wait.</summary>
