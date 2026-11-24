@@ -4,8 +4,11 @@ import { map } from 'rxjs';
 import { Access, AccessService } from './access.service';
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from './options';
 
-/** Why the no-access page is shown: nothing to administer, not the user's tenant (or not a tenant id), or the access couldn't be read. */
-export type NoAccessReason = 'none' | 'tenant' | 'unavailable';
+/**
+ * Why the no-access page is shown: nothing to administer, not the user's tenant (or not a tenant id), or the access couldn't be read; or,
+ * from the API's tenant refusals, a tenant the deployment doesn't know, one not active, or one still starting.
+ */
+export type NoAccessReason = 'none' | 'tenant' | 'unavailable' | 'unknown' | 'inactive' | 'starting';
 
 /** The no-access page, saying why, with the link the user opened (its "try again" goes back there). */
 function noAccess(router: Router, base: string, access: Access, reason: NoAccessReason, returnUrl: string): UrlTree {

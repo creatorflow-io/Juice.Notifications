@@ -26,6 +26,15 @@ import { NOTIFICATIONS_ADMIN_OPTIONS, normalizeBasePath } from '../core/options'
       @case ('tenant') {
         <p data-testid="no-access-tenant">The link names a tenant you don't administer, or isn't a tenant's link.</p>
       }
+      @case ('unknown') {
+        <p data-testid="no-access-unknown">The link names a tenant this deployment doesn't know.</p>
+      }
+      @case ('inactive') {
+        <p data-testid="no-access-inactive">This tenant isn't active (suspended, or being removed): its notifications can't be administered now.</p>
+      }
+      @case ('starting') {
+        <p data-testid="no-access-starting">This tenant is still being set up. Try again in a moment.</p>
+      }
       @case ('platform') {
         <p data-testid="no-access-platform">No tenant has a linked application yet. Register an application and link it to a tenant; its
           notifications are then administered here.</p>
@@ -50,7 +59,7 @@ export class NoAccessPage {
     { initialValue: EMPTY_ACCESS });
   protected readonly shown = computed(() => {
     const reason = this.reason();
-    if (reason === 'unavailable' || reason === 'tenant') return reason;
+    if (reason && reason !== 'none') return reason;
     return this.answer().allTenants ? 'platform' : 'none';
   });
 

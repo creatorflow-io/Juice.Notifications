@@ -93,9 +93,10 @@ Contact addresses and device tokens are encrypted at rest under `NOTIFICATIONS_C
 | `notifications-console` | code with PKCE (public client) | the person's realm roles, `platform_tenant` = their own attribute | the Notifications Console (phase-4c-plan I51), served by the App on `http://localhost:5280` or by `ng serve` on `http://localhost:4300`; same origin as the API, so no CORS |
 | `notifications-directory` | client credentials | realm-management `view-users`, `view-realm` | the identity resolver's directory `keycloak` (the app's `Identity:Directories:keycloak`): reads users, groups and realm roles |
 
-The app knows these two tenants, both active (`Tenancy:Directory` `Configured`, in `docker-compose.yml`): the tenant pattern refuses a
-request for any other tenant (`tenant_forbidden`, or `tenant_not_found` to a platform admin or a client's own token), and a tenant listed with another `Status`
-(`Suspended`, say) has its requests refused and its deliveries held.
+The app knows four tenants (`Tenancy:Directory` `Configured`, in `docker-compose.yml`): `local` (`…a1`) and `other` (`…b2`), the realm's;
+`spare` (`…c3`), active with no application linked (a platform admin opens it by its link); `suspended` (`…d4`), whose requests are
+refused (`tenant_inactive`) and deliveries held. The tenant pattern refuses a request for any other tenant (`tenant_forbidden`, or
+`tenant_not_found` to a platform admin or a client's own token); the Console shows its no-access page for each refusal.
 
 The person accounts belong to a tenant through the user attribute `platform_tenant` (declared in the realm's user profile, admin-only):
 

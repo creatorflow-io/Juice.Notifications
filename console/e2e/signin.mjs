@@ -23,7 +23,9 @@ try {
   check(counts().some(a => a.status === 200), `tess's bell loads her inbox counts (${counts().map(a => a.status).join(', ') || 'no call'})`, problems);
   await shot(tess, 'signin-tess');
 
-  const paul = await signIn(browser, 'paul', problems);
+  // The unknown and the suspended tenant's reads are refused by design (below); any other refusal is a problem.
+  const refusedByDesign = /\/api\/v1\/tenants\/0193f0aa-0000-7000-8000-0000000000(e5|d4)\//;
+  const paul = await signIn(browser, 'paul', problems, { onRefused: e => { if (!refusedByDesign.test(e)) problems.push(e); } });
   await paul.waitForURL(/\/tenants\/[0-9a-f-]{36}$/, { timeout: 15000 }).catch(() => {});
   check(/\/tenants\/[0-9a-f-]{36}$/.test(paul.url()), `paul lands in a tenant (${paul.url()})`, problems);
   const switcher = paul.getByTestId('tenant-switcher');
@@ -52,6 +54,16 @@ try {
   await paul.getByTestId('overview-tiles').waitFor({ timeout: 10000 }).catch(() => {});
   check(paul.url() === `${base}/tenants/${unlisted}` && await paul.getByTestId('overview-tiles').count() === 1,
     `paul opens an unlisted tenant by its link (${paul.url()})`, problems);
+
+  // A tenant the deployment doesn't know, and one suspended (deploy/local: …d4): the API refuses each for the tenant itself, and the
+  // Console shows the no-access page saying which, with the link to try again. Their refused reads are expected.
+  for (const [id, reason] of [['0193f0aa-0000-7000-8000-0000000000e5', 'unknown'], ['0193f0aa-0000-7000-8000-0000000000d4', 'inactive']]) {
+    await paul.goto(`${base}/tenants/${id}`);
+    await paul.getByTestId(`no-access-${reason}`).waitFor({ timeout: 10000 }).catch(() => {});
+    const at = new URL(paul.url());
+    check(at.pathname === '/no-access' && at.searchParams.get('reason') === reason && at.searchParams.get('returnUrl') === `/tenants/${id}`
+      && await paul.getByTestId(`no-access-${reason}`).count() === 1, `paul at a ${reason} tenant's link is told so (${paul.url()})`, problems);
+  }
 
   // A link that isn't a tenant's: the no-access page says so (not that no tenant is linked).
   await paul.goto(`${base}/tenants/not-a-tenant`);

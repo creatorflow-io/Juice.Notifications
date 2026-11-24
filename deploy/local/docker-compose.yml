@@ -95,6 +95,14 @@ services:
       Tenancy__Tenants__1__Id: 0193f0aa-0000-7000-8000-0000000000b2
       Tenancy__Tenants__1__Identifier: other
       Tenancy__Tenants__1__Name: Other tenant
+      # Known but with no application linked (a platform admin opens it by its link), and one suspended (refused, its deliveries held).
+      Tenancy__Tenants__2__Id: 0193f0aa-0000-7000-8000-0000000000c3
+      Tenancy__Tenants__2__Identifier: spare
+      Tenancy__Tenants__2__Name: Spare tenant
+      Tenancy__Tenants__3__Id: 0193f0aa-0000-7000-8000-0000000000d4
+      Tenancy__Tenants__3__Identifier: suspended
+      Tenancy__Tenants__3__Name: Suspended tenant
+      Tenancy__Tenants__3__Status: Suspended
       Delivery__AllowHttpToAllowlisted: "true"
       Delivery__SmtpServers__local__Host: mailpit
       Delivery__SmtpServers__local__Port: "1025"

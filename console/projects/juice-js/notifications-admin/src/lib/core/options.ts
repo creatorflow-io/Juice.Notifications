@@ -1,5 +1,7 @@
+import { HTTP_INTERCEPTORS } from '@angular/common/http';
 import { EnvironmentProviders, InjectionToken, makeEnvironmentProviders } from '@angular/core';
 import { Observable } from 'rxjs';
+import { TenantRefusalInterceptor } from './tenant-refusal.interceptor';
 
 /** How the host app mounts the Notifications Console pages. */
 export interface NotificationsAdminOptions {
@@ -28,9 +30,14 @@ export const NOTIFICATIONS_ADMIN_OPTIONS = new InjectionToken<NotificationsAdmin
 /** The signed-in user's id, as {@link NotificationsAdminSetup.signedIn} gives it. No default: a host must say how sign-in is known. */
 export const NOTIFICATIONS_ADMIN_SIGNED_IN = new InjectionToken<Observable<string>>('NOTIFICATIONS_ADMIN_SIGNED_IN');
 
-/** Configures the pages: where the API is, where the host mounted the routes, and how they know who is signed in. */
+/**
+ * Configures the pages: where the API is, where the host mounted the routes, and how they know who is signed in. Also registers the
+ * interceptor that sends a refused tenant (unknown, not active) to the no-access page: the host's HttpClient takes DI interceptors
+ * (`provideHttpClient(withInterceptorsFromDi())`).
+ */
 export function provideNotificationsAdmin(setup: NotificationsAdminSetup): EnvironmentProviders {
   return makeEnvironmentProviders([
+    { provide: HTTP_INTERCEPTORS, useClass: TenantRefusalInterceptor, multi: true },
     {
       provide: NOTIFICATIONS_ADMIN_OPTIONS,
       useValue: { apiBase: setup.apiBase ?? '', basePath: setup.basePath ?? '/' } satisfies NotificationsAdminOptions,
