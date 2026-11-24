@@ -57,6 +57,12 @@
   .na-field-sm { width: 160px; }
   .na-field-md { width: 220px; }
   .na-field-lg { width: 420px; max-width: 100%; }
+  .na-field-full { width: 100%; }
+  .na-code { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; }
+  .na-pre { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 0;
+    max-height: 480px; overflow: auto; }
+  .na-preview-part { margin-bottom: 12px; }
+  .na-preview-html { width: 100%; min-height: 180px; border: 1px solid var(--na-border); border-radius: 4px; background: #fff; }
   .na-form { display: flex; flex-direction: column; gap: 4px; @include mat.form-field-density(-1);
     textarea { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; } }
   .na-hint { color: var(--na-muted); font-size: 12px; margin: 0 0 4px; }

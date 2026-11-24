@@ -3,7 +3,8 @@ import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, shareReplay, throwError } from 'rxjs';
 import {
   AllowlistEntry, Correlation, CorrelationListItem, Delivery, DeliveryDetail, EscalationPolicy, EscalationStep, Integration, Match, Mute,
-  NotificationDetail, NotificationListItem, Overview, Page, Provider, Recipient, ReplayResult, Resolver, RetryResult, Route, Storm, Target,
+  DisplayGroup, MovedType, NotificationDetail, NotificationListItem, Overview, Page, Provider, Recipient, ReplayResult, Resolver, RetryResult, Route, Storm, Target,
+  TemplatePreview, TenantTemplate, TenantType, TenantTypeDetail,
 } from './models';
 import { NOTIFICATIONS_ADMIN_OPTIONS } from './options';
 
@@ -180,6 +181,58 @@ export class NotificationsAdminApi {
   /** A destination can be a network (`10.20.0.0/16`), so it goes in the query. */
   deleteAllowlistEntry(tenantId: string, destination: string): Observable<void> {
     return this.http.delete<void>(this.url(tenantId, 'allowlist'), { params: this.params({ destination }) });
+  }
+
+  // Content (M39): types and their templates (the tenant's own over the application's), the preview, display groups.
+
+  types(tenantId: string): Observable<TenantType[]> {
+    return this.http.get<TenantType[]>(this.url(tenantId, 'types'));
+  }
+
+  type(tenantId: string, key: string): Observable<TenantTypeDetail> {
+    return this.http.get<TenantTypeDetail>(this.url(tenantId, `types/${encodeURIComponent(key)}`));
+  }
+
+  template(tenantId: string, key: string, channel: string, locale: string): Observable<TenantTemplate> {
+    return this.http.get<TenantTemplate>(this.url(tenantId, `types/${encodeURIComponent(key)}/templates/${encodeURIComponent(channel)}`),
+      { params: this.params({ locale }) });
+  }
+
+  putTemplate(tenantId: string, key: string, channel: string, locale: string, body: string): Observable<TenantTemplate> {
+    return this.http.put<TenantTemplate>(this.url(tenantId, `types/${encodeURIComponent(key)}/templates/${encodeURIComponent(channel)}`), { body, locale });
+  }
+
+  /** The tenant's own template goes: the application's is in effect again. */
+  deleteTemplate(tenantId: string, key: string, channel: string, locale: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `types/${encodeURIComponent(key)}/templates/${encodeURIComponent(channel)}`),
+      { params: this.params({ locale }) });
+  }
+
+  /**
+   * Renders `body` (or the template in effect in `locale`, when null) with `data` (or a sample from the type's schema, when null); nothing
+   * is stored.
+   */
+  preview(tenantId: string, type: string, channel: string, locale: string, body: string | null, data: unknown): Observable<TemplatePreview> {
+    return this.http.post<TemplatePreview>(this.url(tenantId, 'templates/preview'), { type, channel, locale, body, data });
+  }
+
+  displayGroups(tenantId: string): Observable<DisplayGroup[]> {
+    return this.http.get<DisplayGroup[]>(this.url(tenantId, 'display-groups'));
+  }
+
+  putDisplayGroup(tenantId: string, key: string, body: { name: string; position: number | null }): Observable<DisplayGroup> {
+    return this.http.put<DisplayGroup>(this.url(tenantId, `display-groups/${encodeURIComponent(key)}`), body);
+  }
+
+  /** Types moved to it go back to their own groups; their open items follow. */
+  deleteDisplayGroup(tenantId: string, key: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `display-groups/${encodeURIComponent(key)}`));
+  }
+
+  /** Where a type's items go in this tenant: a group, or null for the one it declares. Open items move at once. */
+  moveType(tenantId: string, key: string, group: string | null): Observable<MovedType> {
+    const url = this.url(tenantId, `types/${encodeURIComponent(key)}/display-group`);
+    return group === null ? this.http.delete<MovedType>(url) : this.http.put<MovedType>(url, { group });
   }
 
   /** Acknowledge, resolve (with an outcome) or cancel, as the signed-in admin. */

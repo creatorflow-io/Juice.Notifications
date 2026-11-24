@@ -60,6 +60,9 @@ app.MapJuiceNotifications();
 // Any other path outside /api, /hubs and /health, and not a file, is a Console route. API paths keep routing's own answers (404, 405), and a
 // missing file is never answered with the index page (a stale chunk must fail, not load HTML as script).
 app.MapFallbackToFile("{*path:nonfile:regex(^(?!(api|hubs|health)(/|$)).*$)}", "index.html", ConsoleFiles.Options()).AllowAnonymous();
+// A tenant's pages name keys that may hold a dot (a type sample.build.done, a correlation deploy.v1.2), which reads as a file name above; no
+// built file lives under tenants/, so every path there is a route.
+app.MapFallbackToFile("tenants/{**path}", "index.html", ConsoleFiles.Options()).AllowAnonymous();
 app.Run();
 
 /// <summary>

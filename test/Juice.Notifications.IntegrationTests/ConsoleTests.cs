@@ -66,7 +66,9 @@ namespace Juice.Notifications.IntegrationTests
             using var data = await client.GetAsync("/media/settings-override.json", Ct);
             Assert.True(data.Headers.CacheControl?.NoCache);
 
-            foreach (var path in new[] { "/", "/tenants/0193f0aa-0000-7000-8000-0000000000a1/deliveries?status=Failed", "/applications" })
+            // Keys with a dot under a tenant (a type, a correlation) are routes too, though they look like file names.
+            foreach (var path in new[] { "/", "/tenants/0193f0aa-0000-7000-8000-0000000000a1/deliveries?status=Failed", "/applications",
+                "/tenants/0193f0aa-0000-7000-8000-0000000000a1/types/sample.build.done", "/tenants/0193f0aa-0000-7000-8000-0000000000a1/correlations/sample/deploy.v1.2" })
             {
                 using var route = await client.GetAsync(path, Ct);
                 Assert.Equal(HttpStatusCode.OK, route.StatusCode);

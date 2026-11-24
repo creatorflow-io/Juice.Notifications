@@ -23,6 +23,21 @@ namespace Juice.Notifications.Types
     /// <summary>What a template renders to, as the channel stores it (email: subject, text, html), or why it doesn't.</summary>
     public sealed record PreviewView(string Channel, JsonElement? Content, string? Error, JsonElement Data);
 
+    /// <summary>A locale's templates on a channel: whether the application declares one and the tenant has its own.</summary>
+    public sealed record TenantTypeLocale(string Locale, bool Declared, bool Overridden);
+
+    public sealed record TenantTypeChannelDetail(string Channel, bool Declared, bool Overridden, IReadOnlyList<TenantTypeLocale> Locales);
+
+    /// <summary>
+    /// A type the tenant receives, for its admins (phase-4c-plan M39): its latest version as declared, every version's hash and time, where
+    /// its inbox items go in this tenant (<c>Group</c>; <c>GroupChosen</c> when the tenant chose it, otherwise the type's own), and its
+    /// channels' templates by locale. <c>ServiceType</c>: the service's own, whose templates stay as they are.
+    /// </summary>
+    public sealed record TenantTypeDetail(
+        string Key, string Application, int Version, string Name, string Category, string DisplayGroup, string Group, bool GroupChosen,
+        NotificationPriority Priority, bool Mandatory, bool ExternalRecipients, string Correlation, JsonElement Schema, bool ServiceType,
+        IReadOnlyList<TypeVersionView> Versions, IReadOnlyList<TenantTypeChannelDetail> Channels);
+
     public sealed record PutTenantTemplate(Guid NotificationTenantId, string TypeKey, string Channel, string? Locale, string? Body)
         : MessageBase, IRequest<Outcome<TenantTemplateView>>;
 
@@ -145,13 +160,45 @@ namespace Juice.Notifications.Types
                                       && !db.Types.Any(newer => newer.ApplicationId == type.ApplicationId && newer.Key == type.Key && newer.Version > type.Version)
                                 orderby type.Key
                                 select new { type.Id, type.Key, type.Name, type.Version, Application = app.Key }).AsNoTracking().ToListAsync(ct);
-            var ids = latest.Select(t => t.Id).ToList();
-            var templates = await db.Templates.AsNoTracking().Where(t => ids.Contains(t.TypeId) && (t.TenantId == null || t.TenantId == tenantId))
-                .Select(t => new { t.TypeId, t.Channel, Tenant = t.TenantId != null }).Distinct().ToListAsync(ct);
+            var templates = await TemplatesOfAsync(tenantId, latest.Select(t => t.Id).ToList(), ct);
             return latest.Select(t => new TenantTypeView(t.Key, t.Name, t.Version, t.Application,
-                channels.All.Select(c => new TenantTypeChannel(c.Key,
-                        templates.Any(x => x.TypeId == t.Id && x.Channel == c.Key && !x.Tenant), templates.Any(x => x.TypeId == t.Id && x.Channel == c.Key && x.Tenant)))
-                    .OrderBy(c => c.Channel, StringComparer.Ordinal).ToList())).ToList();
+                ChannelsOf(templates, t.Id).Select(c => new TenantTypeChannel(c.Channel, c.Declared, c.Overridden)).ToList())).ToList();
+        }
+
+        /// <summary>Which templates the types have here, the application's and the tenant's own, by channel and locale.</summary>
+        private async Task<List<TemplateKey>> TemplatesOfAsync(Guid tenantId, List<Guid> typeIds, CancellationToken ct)
+            => (await db.Templates.AsNoTracking().Where(t => typeIds.Contains(t.TypeId) && (t.TenantId == null || t.TenantId == tenantId))
+                .Select(t => new { t.TypeId, t.Channel, t.Locale, Tenant = t.TenantId != null }).Distinct().ToListAsync(ct))
+                .Select(t => new TemplateKey(t.TypeId, t.Channel, t.Locale, t.Tenant)).ToList();
+
+        /// <summary>
+        /// Every channel of the deployment for one type: whether the application declares a template on it, whether the tenant has its own,
+        /// and the same per locale. The types list and a type's page both read it here, so they never disagree.
+        /// </summary>
+        private List<TenantTypeChannelDetail> ChannelsOf(List<TemplateKey> templates, Guid typeId) => channels.All.Select(c =>
+        {
+            var here = templates.Where(t => t.TypeId == typeId && t.Channel == c.Key).ToList();
+            var locales = here.Select(t => t.Locale).Distinct().Order(StringComparer.Ordinal)
+                .Select(l => new TenantTypeLocale(l, here.Any(t => t.Locale == l && !t.Tenant), here.Any(t => t.Locale == l && t.Tenant))).ToList();
+            return new TenantTypeChannelDetail(c.Key, here.Any(t => !t.Tenant), here.Any(t => t.Tenant), locales);
+        }).OrderBy(c => c.Channel, StringComparer.Ordinal).ToList();
+
+        private sealed record TemplateKey(Guid TypeId, string Channel, string Locale, bool Tenant);
+
+        public async Task<Outcome<TenantTypeDetail>> DetailAsync(Guid tenantId, string typeKey, CancellationToken ct)
+        {
+            if (await TenantTemplateRules.TypeAsync(db, tenantId, typeKey, ct) is not { } found)
+            {
+                return Outcome<TenantTypeDetail>.NotFound($"This tenant receives no type '{typeKey}'.");
+            }
+            var type = found.Type;
+            var versions = (await db.Types.AsNoTracking().Where(t => t.ApplicationId == type.ApplicationId && t.Key == type.Key).OrderBy(t => t.Version)
+                .ToListAsync(ct)).Select(t => TypeQueries.View(t, isNew: false)).ToList();
+            var place = await Inbox.DisplayGroupCatalog.PlaceAsync(db, tenantId, type.Key, ct);
+            var channelDetails = ChannelsOf(await TemplatesOfAsync(tenantId, [type.Id], ct), type.Id);
+            return Outcome<TenantTypeDetail>.Ok(new TenantTypeDetail(type.Key, found.Application, type.Version, type.Name, type.Category, type.DisplayGroup,
+                place.Group, place.Chosen, type.Priority, type.Mandatory, type.ExternalRecipients, type.Correlation,
+                JsonElement.Parse(type.Schema), People.ServiceTypes.IsServiceType(type.Key), versions, channelDetails));
         }
 
         public async Task<Outcome<TenantTemplateView>> GetAsync(Guid tenantId, string typeKey, string channel, string? locale, CancellationToken ct)
@@ -178,7 +225,8 @@ namespace Juice.Notifications.Types
         /// Renders a template, or the one in effect for the tenant when none is given, with the data given, or a sample from the type's schema when
         /// none is. Nothing is stored or sent; a template that fails says why, as a delivery's would.
         /// </summary>
-        public async Task<Outcome<PreviewView>> PreviewAsync(Guid tenantId, string? typeKey, string? channelKey, string? body, JsonElement? data, CancellationToken ct)
+        public async Task<Outcome<PreviewView>> PreviewAsync(Guid tenantId, string? typeKey, string? channelKey, string? locale, string? body, JsonElement? data,
+            CancellationToken ct)
         {
             if (typeKey is null || await TenantTemplateRules.TypeAsync(db, tenantId, typeKey, ct) is not { } found)
             {
@@ -193,11 +241,13 @@ namespace Juice.Notifications.Types
                 : JsonSerializer.SerializeToElement(TenantTemplateRules.Sample(JsonElement.Parse(found.Type.Schema)) ?? new JsonObject());
             if (body is null)
             {
-                var effective = await ViewAsync(db, tenantId, found.Type, channel.Key, TypeRules.DefaultLocale, ct);
+                // The template in effect in the locale asked for (the default one when none is).
+                var effective = await ViewAsync(db, tenantId, found.Type, channel.Key, locale ?? TypeRules.DefaultLocale, ct);
                 body = effective.Tenant ?? effective.Application;
                 if (body is null)
                 {
-                    return Outcome<PreviewView>.Ok(new PreviewView(channel.Key, null, $"The type has no {channel.Key} template.", sample));
+                    return Outcome<PreviewView>.Ok(new PreviewView(channel.Key, null,
+                        locale is null || locale == TypeRules.DefaultLocale ? $"The type has no {channel.Key} template." : $"The type has no {channel.Key} template in {locale}.", sample));
                 }
             }
             if (TenantTemplateRules.Problem(channel, body) is { } problem)

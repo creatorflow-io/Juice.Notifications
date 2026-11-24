@@ -91,6 +91,20 @@ namespace Juice.Notifications.Api.Contracts
 
     public sealed record TenantTypeChannelResponse(string Channel, bool Declared, bool Overridden);
 
+    /// <summary>
+    /// <c>GET …/types/{key}</c>: the type's latest version as declared, its versions, where its inbox items go in this tenant (<c>group</c>;
+    /// <c>groupChosen</c> when the tenant chose it, otherwise the type's own <c>displayGroup</c>) and its channels' templates by locale.
+    /// <c>serviceType</c>: the service's own type, whose templates can't be changed.
+    /// </summary>
+    public sealed record TenantTypeDetailResponse(
+        string Key, string Application, int Version, string Name, string Category, string DisplayGroup, string Group, bool GroupChosen,
+        NotificationPriority Priority, bool Mandatory, bool ExternalRecipients, string Correlation, JsonElement Schema, bool ServiceType,
+        IReadOnlyList<TypeVersionResponse> Versions, IReadOnlyList<TenantTypeChannelDetailResponse> Channels);
+
+    public sealed record TenantTypeChannelDetailResponse(string Channel, bool Declared, bool Overridden, IReadOnlyList<TenantTypeLocaleResponse> Locales);
+
+    public sealed record TenantTypeLocaleResponse(string Locale, bool Declared, bool Overridden);
+
     /// <summary>A channel's templates for a type version: the application's and the tenant's own (null when it has none).</summary>
     public sealed record TenantTemplateResponse(string Type, int TypeVersion, string Channel, string Locale, string? Application, string? Tenant, int? TenantVersion,
         DateTimeOffset? UpdatedAt);
@@ -99,9 +113,10 @@ namespace Juice.Notifications.Api.Contracts
     public sealed record PutTemplateBody(string? Body, string? Locale);
 
     /// <summary>
-    /// Renders <c>body</c> (or the template in effect, without one) with <c>data</c> (or a sample from the type's schema); nothing is stored.
+    /// Renders <c>body</c> (or the template in effect in <c>locale</c>, the default one without it, when there is no body) with <c>data</c> (or a
+    /// sample from the type's schema); nothing is stored.
     /// </summary>
-    public sealed record PreviewBody(string? Type, string? Channel, string? Body, JsonElement? Data);
+    public sealed record PreviewBody(string? Type, string? Channel, string? Body, JsonElement? Data, string? Locale = null);
 
     public sealed record PreviewResponse(string Channel, JsonElement? Content, string? Error, JsonElement Data);
 

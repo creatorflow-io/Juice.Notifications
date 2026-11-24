@@ -6,7 +6,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatSelectModule } from '@angular/material/select';
 import { ManagedBy, Match, PRIORITIES, Priority, Problem } from '../core/models';
-import { Observable } from 'rxjs';
+import { Observable, Subscription } from 'rxjs';
 import { problemText } from './ui';
 
 /**
@@ -58,13 +58,16 @@ export class FormErrors {
   }
 }
 
-/** Sends a form's save: busy while it runs, the API's refusal on the form's errors, `done` with what it answered. */
-export function submit<T>(call: Observable<T>, busy: WritableSignal<boolean>, errors: FormErrors, done: (value: T) => void): void {
+/**
+ * Sends a form's save: busy while it runs, the API's refusal on the form's errors (then `failed`), `done` with what it answered. The
+ * subscription lets a page that moves on (another type) drop the answer.
+ */
+export function submit<T>(call: Observable<T>, busy: WritableSignal<boolean>, errors: FormErrors, done: (value: T) => void, failed?: () => void): Subscription {
   busy.set(true);
   errors.clear();
-  call.subscribe({
+  return call.subscribe({
     next: value => { busy.set(false); done(value); },
-    error: e => { busy.set(false); errors.set(e); },
+    error: e => { busy.set(false); errors.set(e); failed?.(); },
   });
 }
 

@@ -43,6 +43,13 @@ namespace Juice.Notifications.Inbox
         }
     }
 
+    /// <summary>Where a type's items go in a tenant, and whether the tenant chose that group (columns by the context's snake-case names).</summary>
+    public sealed class GroupPlace
+    {
+        public string Group { get; init; } = "";
+        public bool Chosen { get; init; }
+    }
+
     /// <summary>
     /// A tenant's display group catalog (design D12, phase-2-plan I24): seeded with the three built-ins on first use (remembered per tenant in this
     /// process: built-ins are never deleted), and where a type's items go, by the database's <c>notifications.inbox_group</c> (<see cref="InboxSql"/>).
@@ -96,6 +103,13 @@ namespace Juice.Notifications.Inbox
         /// <summary>Where a type's items go in the tenant now.</summary>
         public static Task<string> GroupForAsync(NotificationsDbContext db, Guid tenantId, string typeKey, CancellationToken ct)
             => db.Database.SqlQuery<string>($"SELECT notifications.inbox_group({tenantId}, {typeKey}) AS \"Value\"").SingleAsync(ct);
+
+        /// <summary>Where a type's items go in the tenant now, and whether the tenant chose it (not the type's own), in one round trip.</summary>
+        public static Task<GroupPlace> PlaceAsync(NotificationsDbContext db, Guid tenantId, string typeKey, CancellationToken ct)
+            => db.Database.SqlQuery<GroupPlace>($"""
+                SELECT notifications.inbox_group({tenantId}, {typeKey}) AS "group",
+                       EXISTS (SELECT 1 FROM notifications.type_display_groups t WHERE t.tenant_id = {tenantId} AND t.type_key = {typeKey}) AS chosen
+                """).SingleAsync(ct);
 
         /// <summary>
         /// Puts the tenant's open items in <paramref name="groupKey"/>, or of <paramref name="typeKey"/>, where their types go now, in one statement;

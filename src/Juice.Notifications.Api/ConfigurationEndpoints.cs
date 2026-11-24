@@ -82,6 +82,20 @@ namespace Juice.Notifications.Api
             tenant.MapGet("/types", async (Guid tenantId, Types.TenantTemplateReader reader, CancellationToken ct)
                 => Results.Ok((await reader.TypesAsync(tenantId, ct)).Select(t => new TenantTypeResponse(t.Key, t.Name, t.Version, t.Application,
                     t.Channels.Select(c => new TenantTypeChannelResponse(c.Channel, c.Declared, c.Overridden)).ToList()))));
+            tenant.MapGet("/types/{key}", async (Guid tenantId, string key, Types.TenantTemplateReader reader, CancellationToken ct) =>
+            {
+                var found = await reader.DetailAsync(tenantId, key, ct);
+                if (ApiResults.Failure(found) is { } failure)
+                {
+                    return failure;
+                }
+                var d = found.Value!;
+                return Results.Ok(new TenantTypeDetailResponse(d.Key, d.Application, d.Version, d.Name, d.Category, d.DisplayGroup, d.Group, d.GroupChosen,
+                    d.Priority, d.Mandatory, d.ExternalRecipients, d.Correlation, d.Schema, d.ServiceType,
+                    d.Versions.Select(v => new TypeVersionResponse(v.Key, v.Version, v.Name, v.SchemaHash, v.CreatedAt)).ToList(),
+                    d.Channels.Select(c => new TenantTypeChannelDetailResponse(c.Channel, c.Declared, c.Overridden,
+                        c.Locales.Select(l => new TenantTypeLocaleResponse(l.Locale, l.Declared, l.Overridden)).ToList())).ToList()));
+            });
             tenant.MapGet("/types/{key}/templates/{channel}", async (Guid tenantId, string key, string channel, string? locale, Types.TenantTemplateReader reader,
                 CancellationToken ct) =>
             {
@@ -96,7 +110,7 @@ namespace Juice.Notifications.Api
                 => DeleteAsync(mediator, db, new Types.DeleteTenantTemplate(tenantId, key, channel, locale), ct));
             tenant.MapPost("/templates/preview", async (Guid tenantId, PreviewBody body, Types.TenantTemplateReader reader, CancellationToken ct) =>
             {
-                var preview = await reader.PreviewAsync(tenantId, body.Type, body.Channel, body.Body, body.Data, ct);
+                var preview = await reader.PreviewAsync(tenantId, body.Type, body.Channel, body.Locale, body.Body, body.Data, ct);
                 return ApiResults.Failure(preview)
                     ?? Results.Ok(new PreviewResponse(preview.Value!.Channel, preview.Value.Content, preview.Value.Error, preview.Value.Data));
             });

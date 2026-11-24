@@ -122,5 +122,37 @@ export interface Resolver {
 
 export interface AllowlistEntry { destination: string; ports: number[]; managedBy: ManagedBy; updatedAt: string; }
 
+/** A type the tenant receives, at its latest version, and which channels have a template: the application's (`declared`) or its own. */
+export interface TenantType {
+  key: string; name: string; version: number; application: string; channels: { channel: string; declared: boolean; overridden: boolean }[];
+}
+
+/** One type in full (`GET …/types/{key}`): its latest version as declared, its versions, its group here and its templates by locale. */
+export interface TenantTypeDetail {
+  key: string; application: string; version: number; name: string; category: string;
+  /** The group the type declares; `group` is where its items go here (`groupChosen` when the tenant chose it). */
+  displayGroup: string; group: string; groupChosen: boolean;
+  priority: Priority; mandatory: boolean; externalRecipients: boolean; correlation: string; schema: unknown;
+  /** The service's own type: its templates stay as they are. */
+  serviceType: boolean;
+  versions: { key: string; version: number; name: string; schemaHash: string; createdAt: string }[];
+  channels: { channel: string; declared: boolean; overridden: boolean; locales: { locale: string; declared: boolean; overridden: boolean }[] }[];
+}
+
+/** A channel's template for a locale: the application's text and the tenant's own (null when none; `passthrough` sends the data as is). */
+export interface TenantTemplate {
+  type: string; typeVersion: number; channel: string; locale: string; application: string | null; tenant: string | null; tenantVersion: number | null;
+  updatedAt: string | null;
+}
+
+/** A rendering, as the channel stores it (email: subject, text, html), or why it didn't render; `data` is what it rendered with. */
+export interface TemplatePreview { channel: string; content: Record<string, unknown> | null; error: string | null; data: unknown; }
+
+/** An inbox display group (design D12): the three built-ins can be renamed, not deleted; `types` are those the tenant moved here. */
+export interface DisplayGroup { key: string; name: string; position: number; builtIn: boolean; types: string[]; updatedAt: string; }
+
+/** A type moved to a group (or back to its own): where its items go now, and how many open ones moved. */
+export interface MovedType { type: string; group: string; chosen: boolean; itemsMoved: number; }
+
 /** A problem the API answered with (RFC 9457), with the fields it names. */
 export interface Problem { status?: number; title?: string; detail?: string; code?: string; errors?: { pointer: string; message: string }[]; }

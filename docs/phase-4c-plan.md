@@ -160,6 +160,28 @@ unless the owner says otherwise.
     entry removed. Run against the rebuilt image (`Juice.MultiTenant.AspNetCore` 10.15.0 published), after round 3;
     `deliveries`, `why-not`, `correlations` and `no-access` pass on the same build.
 - **M39 Content** (`p4c-06`): types, templates with preview, display groups; the templates page leaves `@juice-js/notifications` (p4c-d5).
+  - *As built (24 Nov 2026; review round 1: 9 findings, all fixed):* **API**: one read beyond the plan, `GET …/types/{key}` (tenant admins): the latest version as declared (category,
+    priority, mandatory, external recipients, correlation, schema), every version's hash and time, where its inbox items go in this tenant
+    (`group`, `groupChosen`; `displayGroup` is the type's own; the database's `inbox_group`, so a declared group the tenant lacks reads
+    `general`), its channels' templates by locale, and `serviceType` (the service's own: templates fixed);
+    `TemplateEditingTests.A_types_detail_names_its_versions_its_group_here_and_its_templates_by_locale`. **Hosting**: every path under
+    `tenants/` is a Console route (a type key `sample.build.done` or a correlation key `deploy.v1.2` read as a file name, so a deep link or a
+    refresh answered 401); `ConsoleTests` checks both. **Pages** (menu group "Content"): types (find by key, name or application; which
+    channels have a template, the tenant's own marked), a type (`types/{key}`: facts, display group (the type's own or a group of the
+    tenant's; open items move at once), the template editor by channel and locale with the preview beside it, rendered by the API half a
+    second after the last keystroke with the schema's sample (shown, to change) or typed data, an email's HTML in a frame sandboxed with
+    nothing allowed; save as the tenant's own, revert, use the application's again; channel and locale locked while there are unsaved
+    changes; versions; schema), display groups (add, rename, reorder; delete one not built in, its types back in their own). **Library**
+    (p4c-d5): the templates page, its routes, API calls and models removed from `@juice-js/notifications` (juice-layout, working tree, not committed: nothing in M39 depends on it, the old page still works against the same API; it ships with that library's next release, a
+    breaking change for its next release). **Journey** `content.mjs`: tess finds a fresh two-version type, previews the application's inbox
+    template with the schema's example, sees a template that doesn't parse fail in the preview and on save, saves the tenant's own (ben's
+    item renders with it), adds a display group and moves the type into it (ben's next item lands there), then puts both back. **Review round 1** (9 findings): a late preview no longer writes its sample into
+    the data field (the sample is shown apart, for the type it was made for, so it sends no second preview either); unsaved text survives a
+    Refresh or a change stored meanwhile (kept, with a notice; Revert puts back what is stored now); a save or move answered after the page
+    moved to another type is dropped, and "saved" is cleared; an empty editor previews the template in effect in the locale picked
+    (`PreviewBody.locale`, the default without it); the detail reads the group and the choice in one query and shares the per-channel
+    template count with the types list; a `MovedType` model; the detail test cleans up in `finally` and checks the preview by locale;
+    `content.mjs` checks the vi preview and that a Refresh keeps unsaved text.
 - **M40 People** (`p4c-07`): subscribers and aliases, local users and groups, topics, resolvers.
 - **M41 Settings and platform** (`p4c-08`): tenant settings; applications and tenant links for platform admins.
 - **M42 Proof points and acceptance** (`p4c-g1` … `p4c-g3`): §6, `phase-4c-acceptance.md`, a demo script, and design.md updated (§4.2,

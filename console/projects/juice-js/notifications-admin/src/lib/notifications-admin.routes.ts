@@ -36,6 +36,9 @@ export const NOTIFICATIONS_ADMIN_ROUTES: Routes = [
       page('mutes', 'Mutes', () => import('./pages/mutes.page').then(m => m.MutesPage)),
       page('escalation-policies', 'Escalation policies', () => import('./pages/escalation-policies.page').then(m => m.EscalationPoliciesPage)),
       page('allowlist', 'Destination allowlist', () => import('./pages/allowlist.page').then(m => m.AllowlistPage)),
+      page('types', 'Types', () => import('./pages/types.page').then(m => m.TypesPage)),
+      page('types/:key', 'Type', () => import('./pages/type.page').then(m => m.TypePage)),
+      page('display-groups', 'Display groups', () => import('./pages/display-groups.page').then(m => m.DisplayGroupsPage)),
     ],
   },
 ];
@@ -57,6 +60,10 @@ export function notificationsAdminMenus(basePath = '/', order = 1): Menus {
       { id: 'mutes', label: 'Mutes', icon: 'notifications_paused', routerLink: goLink(basePath, 'mutes') },
       { id: 'escalation-policies', label: 'Escalation policies', icon: 'escalator_warning', routerLink: goLink(basePath, 'escalation-policies') },
       { id: 'allowlist', label: 'Destination allowlist', icon: 'shield', routerLink: goLink(basePath, 'allowlist') },
+    ]),
+    group('notifications-admin-content', 'Content', 'article', [
+      { id: 'types', label: 'Types', icon: 'category', routerLink: goLink(basePath, 'types'), shortcut: 'g t' },
+      { id: 'display-groups', label: 'Display groups', icon: 'tab', routerLink: goLink(basePath, 'display-groups') },
     ]),
   ];
   return menus.map((menu, index) => ({ ...menu, order: order + index }));
