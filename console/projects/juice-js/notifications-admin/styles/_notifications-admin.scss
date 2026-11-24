@@ -6,7 +6,8 @@
 //
 // colors() writes the --na-* custom properties the pages read, from an Angular Material (M2) theme: text, background, card and divider
 // from its background and foreground palettes, links from primary, errors from warn; "ok" and "warn" from Material's green and amber.
-// The defaults sit under zero-specificity :where() selectors, so the app's colors() wins whatever the order.
+// Without colors(), the pages follow juice-layout's layout.theme() when the app has it. The defaults sit under zero-specificity :where()
+// selectors, so the app's colors() wins whatever the order.
 @use '@angular/material' as mat;
 @use 'sass:color';
 @use 'sass:map';
@@ -78,16 +79,21 @@
   .na-bad { background: var(--na-bad-bg); color: var(--na-bad); }
 }
 
-// The defaults: indigo on white, and the same under juice-layout's dark mode (.dark).
+// The defaults: juice-layout's --juice-* tokens when the app has layout.theme() (Material 3), so the pages show the
+// palette the viewer picked, light and dark, like the rest of the app; else indigo on white, and the same under
+// juice-layout's dark mode (.dark).
+@mixin _defaults($values) {
+  @each $name, $value in $values {
+    --na-#{$name}: var(--juice-#{$name}, #{$value});
+  }
+}
 :where(:root) {
-  --na-surface: #fff; --na-border: rgba(0, 0, 0, .12); --na-text: rgba(0, 0, 0, .87); --na-muted: rgba(0, 0, 0, .6); --na-accent: #303f9f;
-  --na-ok: #2e7d32; --na-ok-bg: #e3efe3; --na-warn: #bf360c; --na-warn-bg: #f6e4dc; --na-bad: #d32f2f; --na-bad-bg: #f9e0e0;
-  --na-none: #616161; --na-none-bg: #eee;
+  @include _defaults((surface: #fff, border: rgba(0, 0, 0, .12), text: rgba(0, 0, 0, .87), muted: rgba(0, 0, 0, .6), accent: #303f9f,
+    ok: #2e7d32, ok-bg: #e3efe3, warn: #bf360c, warn-bg: #f6e4dc, bad: #d32f2f, bad-bg: #f9e0e0, none: #616161, none-bg: #eee));
 }
 :where(.dark) {
-  --na-surface: #424242; --na-border: rgba(255, 255, 255, .12); --na-text: #fff; --na-muted: rgba(255, 255, 255, .7); --na-accent: #9fa8da;
-  --na-ok: #81c784; --na-ok-bg: #4d5e4e; --na-warn: #ffd54f; --na-warn-bg: #6b6143; --na-bad: #e57373; --na-bad-bg: #6b4d4d;
-  --na-none: #bdbdbd; --na-none-bg: #555;
+  @include _defaults((surface: #424242, border: rgba(255, 255, 255, .12), text: #fff, muted: rgba(255, 255, 255, .7), accent: #9fa8da,
+    ok: #81c784, ok-bg: #4d5e4e, warn: #ffd54f, warn-bg: #6b6143, bad: #e57373, bad-bg: #6b4d4d, none: #bdbdbd, none-bg: #555));
 }
 
 @include _layout();
