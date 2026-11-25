@@ -46,6 +46,44 @@ docker compose -f deploy/local/docker-compose.yml up -d --wait
 dotnet test Juice.Notifications.slnx
 ```
 
+## Packages and CI
+
+Besides the image, the service ships as libraries for a host app of the customer's own:
+
+| Package | Feed | Contents |
+|---|---|---|
+| `Juice.Notifications.Api` (NuGet) | nuget.org; alpha/beta on GitHub Packages | `AddJuiceNotifications()`, `UseJuiceNotifications()`, `MapJuiceNotifications()`: the API and the workers. Depends on `Juice.Notifications` and `.Api.Contracts`; a host adds `.EF.PostgreSQL` (the database), `.Messaging` (RabbitMQ intake) and the `.Providers.*` it sends with, all published |
+| `@juice-js/notifications-admin` (npm) | npmjs | `provideNotificationsAdmin()`, `NOTIFICATIONS_ADMIN_ROUTES`, `notificationsAdminMenus()` and the page styles |
+
+`src/Juice.Notifications.App` and `console/src` are the reference host and app: they use the packages the way a customer would.
+
+Publishing (`.github/workflows`, as in Juice.Observability): the backend and the console library are versioned and released independently.
+
+| Package | Its next version lives in | Release tag |
+|---|---|---|
+| `Juice.Notifications.*` | `<VersionPrefix>` in `Directory.Build.props` | `api-<version>` |
+| `@juice-js/notifications-admin` | `"version"` in `console/projects/juice-js/notifications-admin/package.json` | `console-<version>` |
+
+| You do | You get |
+|---|---|
+| push to `main`, `dev/**` | build and test only (`build.yml`) |
+| push to `release/**` that changes `src/**` (or the props / `nuget.config`) | build and test, then, if they pass, NuGet alphas at `<VersionPrefix>-alpha.<run>` on GitHub Packages (`build.yml`) |
+| push to `release/**` that changes `console/projects/juice-js/notifications-admin/**` | build and test, then, if they pass, an npm alpha at `<version>-alpha.<run>` under `@alpha` (`build.yml`); run Build by hand on the branch to publish both |
+| create a GitHub release on `main` tagged `api-0.1.0` | the backend at 0.1.0 on nuget.org (`release.yml`) |
+| create a GitHub release on `main` tagged `console-0.1.0` | the console library at 0.1.0 on npm under `latest` |
+| the same, on `release/0.x` | a patch of an older line; npm under `release-0.x`, never replacing `latest` |
+| the same, with a pre-release version (`api-0.1.0-beta.1`, `console-0.1.0-rc.1`) | a beta or rc: nuget.org as a pre-release, npm under the label (`beta`, `rc`) |
+
+Each next version is the one to release: raise it after a release so alphas sort above it. Tags have no `v`. nuget.org takes
+the push through trusted publishing: its policy names owner `creatorflow-io`, repository `Juice.Notifications`, workflow
+`release.yml`.
+
+The console library calls the API over HTTP, so record which versions work together:
+
+| `@juice-js/notifications-admin` | needs `Juice.Notifications.Api` |
+|---|---|
+| 0.1.x | 0.1.x |
+
 ## Run the service
 
 ```bash
