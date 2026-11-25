@@ -5,6 +5,7 @@ using Juice.Notifications.Applications;
 using Juice.Notifications.Configuration;
 using Juice.Notifications.Data;
 using Juice.Notifications.Delivering;
+using Juice.Notifications.Hosting;
 using Juice.Notifications.Planning;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -72,36 +73,19 @@ namespace Juice.Notifications.Api
         {
             var connectionString = configuration.GetConnectionString("Notifications")
                 ?? throw new InvalidOperationException("ConnectionStrings:Notifications is required.");
-            services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, connectionString));
-            // Browser apps on other origins (Cors:Origins; none by default).
-            services.AddNotificationsCors(configuration);
+            // The pipeline (Juice.Notifications.Hosting), with people; then the service's own parts.
+            services.AddNotificationsPipeline(configuration, (_, options) => NotificationsDbContext.Configure(options, connectionString));
             // A send that is under way finishes and is recorded on shutdown (the dispatcher doesn't cancel sends): up to about 27 s for SMTP, plus
             // recording and saving. The container's stop grace period must be longer still (deploy/local: stop_grace_period).
             services.Configure<HostOptions>(host => host.ShutdownTimeout = host.ShutdownTimeout < TimeSpan.FromSeconds(45) ? TimeSpan.FromSeconds(45) : host.ShutdownTimeout);
-            services.TryAddSingleton(TimeProvider.System);
-            services.AddHostedService<DatabaseMigrator>();
-            // After the migrator, before the stages: hosted services start in order (phase-1-plan I12).
-            services.AddConfigurationProvisioning(configuration);
-
-            services.AddMediatR(mediator => mediator.RegisterServicesFromAssemblyContaining<CreateApplication>(includeNonPublicTypes: true));
-            services.AddScoped(typeof(IPipelineBehavior<,>), typeof(NotificationsTransactionBehavior<,>));
-            services.AddNotificationsMessaging(configuration);
+            // Browser apps on other origins (Cors:Origins; none by default).
+            services.AddNotificationsCors(configuration);
 
             services.AddScoped<ApplicationReader>();
             services.AddScoped<ApplicationEndpoints.Sender>();
-
-            // Channels (design D24): phase 1 registers webhook and email; their provider packages take this over (phase-1-plan M6).
-            services.AddBuiltInChannels();
-            services.AddSingleton<Types.DataSchemas>();
-            services.AddScoped<Types.TypeReader>();
-            services.AddScoped<Types.DeclarationHash>();
-            services.AddScoped<Intake.NotificationReader>();
             services.AddScoped<Producers>();
             // The tenant pattern: the request's tenant, its status, and who may administer it (TenantAccess.cs).
             services.AddNotificationsTenancy(configuration);
-            services.AddScoped<Configuration.ConfigurationReader>();
-            services.AddScoped<Configuration.TenantSettingsReader>();
-            services.AddScoped<Types.TenantTemplateReader>();
             services.AddScoped<People.SubscriberReader>();
             services.AddScoped<People.DirectoryReader>();
             services.AddScoped<People.PreferenceReader>();
@@ -113,48 +97,23 @@ namespace Juice.Notifications.Api
             services.AddScoped<People.DeviceRegistry>();
             services.AddHostedService<People.ServiceTypesProvisioner>();
             services.Configure<People.DeviceOptions>(configuration.GetSection(People.DeviceOptions.Section));
-            services.AddScoped<History.DeliveryHistory>();
-            // The Console's reads (phase-4c-plan I52); the overview is kept 30 seconds per tenant.
-            services.AddScoped<History.Investigation>();
             services.AddScoped<CorrelationEndpoints.Owners>();
-            services.AddMemoryCache();
             // Display groups and the inbox (phase-2-plan M15).
             services.AddScoped<Inbox.DisplayGroupReader>();
             services.AddScoped<Inbox.PersonInboxReader>();
             services.AddScoped<Inbox.PersonInboxEditor>();
             services.AddScoped<Inbox.DisplayGroupEditor>();
-            // Correlations (phase-3-plan M20).
-            services.AddScoped<Correlations.CorrelationLifecycle>();
             // Provider callbacks (phase-4-plan I40): anonymous, verified per provider, limited per integration.
             services.Configure<Callbacks.CallbackOptions>(configuration.GetSection(Callbacks.CallbackOptions.Section));
-            services.Configure<Storms.StormOptions>(configuration.GetSection(Storms.StormOptions.Section));
-            services.Configure<Retention.RetentionOptions>(configuration.GetSection(Retention.RetentionOptions.Section));
-            services.Configure<Providers.SecretsOptions>(configuration.GetSection(Providers.SecretsOptions.Section));
             services.AddScoped<Callbacks.ProviderCallbacks>();
             services.AddScoped<People.ChatLinks>();
             services.AddCallbackLimits(configuration);
-
-            // The pipeline stages (design §4.1). Their workers run unless Stages:Run is false (a host that only takes requests).
-            var runStages = configuration.GetValue("Stages:Run", true);
-            services.AddPlanning(configuration.GetSection("Stages:Planner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages);
-            services.Configure<Planning.ResolverOptions>(configuration.GetSection(Planning.ResolverOptions.Section));
-            services.Configure<Planning.IdentityOptions>(configuration.GetSection(Planning.IdentityOptions.Section));
-            services.AddDeliveryPlanning(configuration.GetSection("Stages:DeliveryPlanner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages);
-            services.Configure<Providers.DeliveryOptions>(configuration.GetSection(Providers.DeliveryOptions.Section));
-            // A dispatcher lease covers connect + request timeouts with room to spare (design §11).
-            var dispatcher = new Stages.StageOptions { Lease = TimeSpan.FromSeconds(60) };
-            configuration.GetSection("Stages:Dispatcher").Bind(dispatcher); // settings override the defaults one by one
-            services.AddDispatching(dispatcher, runStages);
             // After the dispatcher's silent default: inbox changes are told through the hub.
             services.AddInboxHub(configuration);
-            if (runStages)
+            if (configuration.GetValue("Stages:Run", true))
             {
                 services.AddHostedService<People.DeviceSweep>();
-                services.AddSingleton<Retention.RetentionWorker>();
-                services.AddHostedService(sp => sp.GetRequiredService<Retention.RetentionWorker>());
             }
-            services.AddSingleton<Stages.BacklogMonitor>();
-            services.AddHostedService(sp => sp.GetRequiredService<Stages.BacklogMonitor>());
             services.ConfigureHttpJsonOptions(options =>
                 options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
@@ -164,58 +123,6 @@ namespace Juice.Notifications.Api
                 context.ProblemDetails.Extensions["traceId"] = System.Diagnostics.Activity.Current?.TraceId.ToString() ?? context.HttpContext.TraceIdentifier);
             services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
             return services;
-        }
-
-        /// <summary>
-        /// The outbox in this database, on the <c>local</c> route: a message is dispatched in this process right after its transaction commits, and
-        /// delivered from the outbox, with retries, if that fails or the process stops first. Stage hand-offs don't use it (phase-1-plan I3); messages
-        /// that leave the service will (events to producers, phase 3).
-        /// </summary>
-        public static IServiceCollection AddNotificationsMessaging(this IServiceCollection services, IConfiguration? configuration = null)
-        {
-            // Events to producers (phase-3-plan I37): raised as rows, moved into the outbox by the relay, published on the events route.
-            var events = configuration?.GetSection(Events.EventsOptions.Section).Get<Events.EventsOptions>() ?? new Events.EventsOptions();
-            if (configuration is not null)
-            {
-                services.Configure<Events.EventsOptions>(configuration.GetSection(Events.EventsOptions.Section));
-            }
-            Events.ProducerEventsRegistration.AddProducerEvents(services, runRelay: events.Enabled && configuration?.GetValue("Stages:Run", true) != false);
-            var messaging = services.AddMessaging();
-            messaging.AddOutbox();
-            messaging.AddLocalChannel();
-            messaging.AddLocalPublisher();
-            messaging.AddIdempotencyInMemory();
-            messaging.AddMessageService<NotificationsDbContext>();
-            messaging.AddPublishingPolicies<NotificationsRoutes>();
-            messaging.AddDelivery(delivery =>
-            {
-                delivery.AddDeliveryPolicies(options => options.DefaultPolicy = new PolicyConfiguration
-                {
-                    Interval = TimeSpan.FromSeconds(2), BatchSize = 50, Timeout = TimeSpan.FromMinutes(1),
-                    InitialRetryDelay = TimeSpan.FromSeconds(5), RetryDelayMultiplier = 2, MaxRetryAttempts = 10,
-                });
-                delivery.AddDeliveryProcessor<NotificationsDbContext>(NotificationsRoutes.Local);
-                if (events.Enabled)
-                {
-                    delivery.AddDeliveryProcessor<NotificationsDbContext>(Events.EventsRouting.Publisher);
-                }
-            });
-            return services;
-        }
-
-        /// <summary>
-        /// Events to producers go to RabbitMQ (the <c>events</c> producer, its topic exchange; the routing key is the event's name,
-        /// <c>{app}.notification.{event}</c>); everything else takes the <c>local</c> route.
-        /// </summary>
-        private sealed class NotificationsRoutes(Microsoft.Extensions.Options.IOptions<Events.EventsOptions> events) : IMessagePublishingPolicy
-        {
-            public const string Local = "local";
-            private static readonly IReadOnlyCollection<PublishRoute> LocalRoutes = [new PublishRoute(Local, string.Empty)];
-
-            public ValueTask<IReadOnlyCollection<PublishRoute>> ResolveAsync(PolicyResolveContext context)
-                => ValueTask.FromResult<IReadOnlyCollection<PublishRoute>>(events.Value.Enabled && context.EventType == nameof(Events.NotificationEvent)
-                    ? [new PublishRoute(Events.EventsRouting.Publisher, events.Value.Exchange)]
-                    : LocalRoutes);
         }
 
         /// <summary>JWT bearer from the configured issuer; every endpoint needs a signed-in caller unless it says otherwise.</summary>
@@ -322,38 +229,6 @@ namespace Juice.Notifications.Api
             app.MapHub<InboxHub>(InboxHub.Path, options => options.CloseOnAuthenticationExpiration = true);
             return app;
         }
-    }
-
-    /// <summary>Configuration section <c>Database</c>.</summary>
-    public sealed class DatabaseOptions
-    {
-        public const string Section = "Database";
-
-        /// <summary>Apply pending migrations at start. On for the local stack; a deployment may migrate separately instead.</summary>
-        public bool Migrate { get; set; }
-    }
-
-    /// <summary>Applies migrations before anything else starts, when <c>Database:Migrate</c> is true.</summary>
-    internal sealed class DatabaseMigrator(IServiceScopeFactory scopes, IConfiguration configuration, ILogger<DatabaseMigrator> logger) : IHostedService
-    {
-        public async Task StartAsync(CancellationToken cancellationToken)
-        {
-            var options = configuration.GetSection(DatabaseOptions.Section).Get<DatabaseOptions>() ?? new DatabaseOptions();
-            if (!options.Migrate)
-            {
-                return;
-            }
-            await using var scope = scopes.CreateAsyncScope();
-            var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
-            var pending = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList();
-            if (pending.Count > 0)
-            {
-                logger.LogInformation("Applying {Count} migration(s): {Migrations}", pending.Count, string.Join(", ", pending));
-                await db.Database.MigrateAsync(cancellationToken);
-            }
-        }
-
-        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     internal sealed class DatabaseHealthCheck(NotificationsDbContext db) : IHealthCheck

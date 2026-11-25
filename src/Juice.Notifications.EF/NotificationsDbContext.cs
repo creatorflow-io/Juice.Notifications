@@ -80,15 +80,25 @@ namespace Juice.Notifications.Data
 
         /// <summary>PostgreSQL, snake_case, migrations from <paramref name="migrationsAssembly"/>. Call it when configuring the context.</summary>
         public static void Configure(DbContextOptionsBuilder options, string connectionString, string? migrationsAssembly = "Juice.Notifications.EF.PostgreSQL")
-            => options.UseNpgsql(connectionString, npgsql =>
-                {
-                    npgsql.MigrationsHistoryTable("__ef_migrations_history", Schema);
-                    if (migrationsAssembly is not null)
-                    {
-                        npgsql.MigrationsAssembly(migrationsAssembly);
-                    }
-                })
-                .UseSnakeCaseNamingConvention();
+            => options.UseNpgsql(connectionString, npgsql => Npgsql(npgsql, migrationsAssembly)).UseSnakeCaseNamingConvention();
+
+        /// <summary>
+        /// On a connection the host owns (embedded, phase-5-plan I59): the context writes in the host's transaction, which it enlists in, and
+        /// neither opens nor closes the connection.
+        /// </summary>
+        public static void Configure(DbContextOptionsBuilder options, System.Data.Common.DbConnection connection,
+            string? migrationsAssembly = "Juice.Notifications.EF.PostgreSQL")
+            => options.UseNpgsql(connection, npgsql => Npgsql(npgsql, migrationsAssembly)).UseSnakeCaseNamingConvention();
+
+        private static void Npgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.NpgsqlDbContextOptionsBuilder npgsql, string? migrationsAssembly)
+        {
+            // Its own history table, in its own schema (phase-5-plan I60): a host's migrations and these never meet.
+            npgsql.MigrationsHistoryTable("__ef_migrations_history", Schema);
+            if (migrationsAssembly is not null)
+            {
+                npgsql.MigrationsAssembly(migrationsAssembly);
+            }
+        }
 
         protected override void ConfigureModel(ModelBuilder model)
         {

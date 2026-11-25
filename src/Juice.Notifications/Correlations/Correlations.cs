@@ -120,7 +120,9 @@ namespace Juice.Notifications.Correlations
             }
             var now = clock.GetUtcNow();
             List<(Guid Subscriber, Guid Item)> items;
-            await using (var transaction = await db.Database.BeginTransactionAsync(ct))
+            // Its own transaction; or, embedded, the host's one it was called in (phase-5-plan I59), which the host commits.
+            var own = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
+            await using (own)
             {
                 var correlation = await db.Correlations.SingleOrDefaultAsync(c => c.TenantId == tenantId && c.ApplicationId == applicationId && c.Key == key, ct);
                 if (correlation is null)
@@ -135,7 +137,10 @@ namespace Juice.Notifications.Correlations
                 }
                 if (result == Change.None)
                 {
-                    await transaction.RollbackAsync(ct);
+                    if (own is not null)
+                    {
+                        await own.RollbackAsync(ct);
+                    }
                     return Outcome<CorrelationView>.Ok(await ViewAsync(db, correlation, ct));
                 }
                 correlation.UpdatedAt = now;
@@ -176,7 +181,12 @@ namespace Juice.Notifications.Correlations
                 }
                 items = await db.InboxItems.AsNoTracking().Where(i => i.TenantId == tenantId && i.CorrelationId == correlation.Id)
                     .Select(i => new { i.SubscriberId, i.Id }).ToListAsync(ct) is var rows ? rows.Select(r => (r.SubscriberId, r.Id)).ToList() : [];
-                await transaction.CommitAsync(ct);
+                if (own is null)
+                {
+                    // The host commits it, later. Only the embedded host calls in a transaction of its own, and it has no inbox: no item to tell.
+                    return Outcome<CorrelationView>.Ok(await ViewAsync(db, correlation, ct));
+                }
+                await own.CommitAsync(ct);
                 var view = await ViewAsync(db, correlation, ct);
                 // Committed: every person with an item of it sees the new state (I35).
                 foreach (var person in items.GroupBy(i => i.Subscriber))

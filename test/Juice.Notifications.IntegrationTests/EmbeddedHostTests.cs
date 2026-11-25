@@ -1,0 +1,396 @@
+using System.Text.Json;
+using Juice.Notifications.Data;
+using Juice.Notifications.Embedded;
+using Juice.Notifications.Types;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using static Juice.Notifications.IntegrationTests.DeliveryTests;
+
+namespace Juice.Notifications.IntegrationTests
+{
+    /// <summary>
+    /// Embedded hosting (phase-5-plan M43, I57–I63, I74): the pipeline in a minimal host of its own, with its own <see cref="DbContext"/> on the
+    /// same database, as Observability will run it. A request is written in the host's transaction, so it commits or rolls back with the host's
+    /// change; a committed one is delivered even when the host stops before planning it; the same key twice is one request; and the container
+    /// holds nothing of the service's.
+    /// </summary>
+    public sealed class EmbeddedHostTests : IAsyncLifetime
+    {
+        private static CancellationToken Ct => TestContext.Current.CancellationToken;
+        private static readonly Guid Tenant = Guid.Parse("0193f0aa-0000-7000-8000-0000000e0b01");
+        private const string Type = "host.thing.happened";
+        private readonly ScratchDatabase _database = new();
+
+        public async ValueTask InitializeAsync()
+        {
+            await _database.InitializeAsync();
+            if (!LocalStack.Available)
+            {
+                return;
+            }
+            // The host's own schema and table, beside the pipeline's (I60: neither references the other).
+            await using var db = new HostDbContext(new DbContextOptionsBuilder<HostDbContext>().UseNpgsql(_database.ConnectionString).Options);
+            await db.Database.ExecuteSqlRawAsync("CREATE SCHEMA host; CREATE TABLE host.things (id uuid PRIMARY KEY, name text NOT NULL);");
+        }
+
+        public ValueTask DisposeAsync() => _database.DisposeAsync();
+
+        [Fact]
+        public async Task A_rolled_back_host_transaction_leaves_no_request()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+
+            await host.InTransactionAsync(async (db, client) =>
+            {
+                db.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "rolled back" });
+                await db.SaveChangesAsync(Ct);
+                var accepted = await client.SendAsync(Notification("rollback-1"), Ct);
+                Assert.False(accepted.Duplicate);
+                return false; // roll back
+            });
+
+            await using var notifications = _database.Context();
+            Assert.Empty(await notifications.Requests.ToListAsync(Ct));
+            Assert.Empty(await notifications.Notifications.ToListAsync(Ct));
+            await using var check = host.HostContext();
+            Assert.Empty(await check.Things.ToListAsync(Ct));
+        }
+
+        [Fact]
+        public async Task A_committed_request_is_delivered_after_the_host_stops_before_planning_it()
+        {
+            LocalStack.RequireAvailable();
+            await using var receiver = await Receiver.StartAsync();
+            Guid id;
+            await using (var first = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false, receiver))
+            {
+                id = await first.InTransactionAsync(async (db, client) =>
+                {
+                    db.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "committed" });
+                    await db.SaveChangesAsync(Ct);
+                    return (await client.SendAsync(Notification("commit-1"), Ct)).Id;
+                });
+                // Told to wake the planner once committed (its stages are off here).
+                Assert.Equal(1, first.CommittedActions);
+            }
+            await using (var db = _database.Context())
+            {
+                Assert.True(await db.Requests.AnyAsync(r => r.Id == id, Ct), "the request committed with the host's change");
+                Assert.Empty(await db.Deliveries.ToListAsync(Ct));
+            }
+            Assert.Empty(receiver.Requests);
+
+            await using var second = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: true, receiver);
+            for (var i = 0; i < 300 && !receiver.Requests.Any(); i++)
+            {
+                await Task.Delay(100, Ct);
+            }
+            if (receiver.Requests.IsEmpty)
+            {
+                // Where it stopped, for the failure's message.
+                await using var db = _database.Context();
+                var notification = await db.Notifications.AsNoTracking().SingleAsync(n => n.RequestId == id, Ct);
+                var recipients = await db.Recipients.AsNoTracking().Where(r => r.NotificationId == notification.Id).Select(r => r.Outcome).ToListAsync(Ct);
+                var deliveries = await db.Deliveries.AsNoTracking().Select(d => d.Status).ToListAsync(Ct);
+                var allowed = await db.Allowlist.AsNoTracking().Select(a => a.Destination).ToListAsync(Ct);
+                var attempts = await db.Attempts.AsNoTracking().Select(a => a.Outcome + " " + a.StatusCode + " " + a.Error).ToListAsync(Ct);
+                Assert.Fail($"Not delivered: notification {notification.State}, recipients [{string.Join(", ", recipients)}], deliveries [{string.Join(", ", deliveries)}], attempts [{string.Join("; ", attempts)}], allowlist [{string.Join(", ", allowed)}], receiver {receiver.Url}");
+            }
+            var received = Assert.Single(receiver.Requests);
+            Assert.Contains("\"n\":1", received.Body);
+        }
+
+        [Fact]
+        public async Task The_same_key_twice_is_one_request_and_no_new_work()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var first = await host.InTransactionAsync(async (_, client) => await client.SendAsync(Notification("dup-1"), Ct));
+            var again = await host.InTransactionAsync(async (_, client) => await client.SendAsync(Notification("dup-1") with { Data = Data(2) }, Ct));
+
+            Assert.False(first.Duplicate);
+            Assert.True(again.Duplicate);
+            Assert.Equal(first.Id, again.Id);
+            await using var db = _database.Context();
+            Assert.Single(await db.Requests.ToListAsync(Ct));
+            Assert.Single(await db.Notifications.ToListAsync(Ct));
+            Assert.Equal(1, host.CommittedActions); // the duplicate wakes nothing
+        }
+
+        [Fact]
+        public async Task Without_a_transaction_a_send_is_refused_and_people_are_no_recipients_here()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await using (var scope = host.Services.CreateAsyncScope())
+            {
+                var client = scope.ServiceProvider.GetRequiredService<INotificationClient>();
+                var refused = await Assert.ThrowsAsync<NotificationRefusedException>(() => client.SendAsync(Notification("no-tx"), Ct));
+                Assert.Equal(ErrorCodes.NoTransaction, refused.Code);
+            }
+
+            // Embedded has no people (design §4.2): a user is refused at intake as the HTTP API refuses it, and nothing is written.
+            var person = await Assert.ThrowsAsync<NotificationRefusedException>(() => host.InTransactionAsync(async (_, client) =>
+                await client.SendAsync(Notification("person") with { Recipients = [new NotificationRecipientSpec(RecipientKinds.User, Id: "ann")] }, Ct)));
+            Assert.Contains(person.Errors, e => e.Pointer.StartsWith("/recipients/0", StringComparison.Ordinal));
+            await using var db = _database.Context();
+            Assert.Empty(await db.Requests.ToListAsync(Ct));
+        }
+
+        [Fact]
+        public async Task A_correlation_is_resolved_in_the_host_transaction_and_its_rollback_keeps_it_open()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await host.InTransactionAsync(async (_, client) => await client.SendAsync(Notification("corr-1") with { CorrelationKey = "alert:1" }, Ct));
+
+            // Resolved inside the host's transaction, which then rolls back: still open.
+            await host.InTransactionAsync(async (_, client) =>
+            {
+                Assert.Equal(CorrelationState.Resolved, await client.ResolveAsync("alert:1", "fixed", "host", Ct));
+                return false;
+            });
+            Assert.Equal(CorrelationState.Open, await StateAsync());
+
+            var acknowledged = await host.InTransactionAsync(async (_, client) => await client.AcknowledgeAsync("alert:1", "ann", Ct));
+            Assert.Equal(CorrelationState.Acknowledged, acknowledged);
+            Assert.Equal(CorrelationState.Resolved, await host.InTransactionAsync(async (_, client) => await client.ResolveAsync("alert:1", "fixed", "host", Ct)));
+            Assert.Equal(CorrelationState.Resolved, await StateAsync());
+
+            async Task<CorrelationState> StateAsync()
+            {
+                await using var db = _database.Context();
+                return (await db.Correlations.SingleAsync(c => c.Key == "alert:1", Ct)).State;
+            }
+        }
+
+        [Fact]
+        public async Task The_setup_is_provisioned_and_each_change_reaches_the_host_audit_sink()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await using var db = _database.Context();
+            var app = await db.Applications.SingleAsync(a => a.Key == "host", Ct);
+            Assert.Equal(EmbeddedApplicationProvisioner.ClientId("host"), app.ClientId);
+            Assert.True(await db.ApplicationTenants.AnyAsync(t => t.ApplicationId == app.Id && t.TenantId == Tenant, Ct));
+            Assert.True(await db.Types.AnyAsync(t => t.ApplicationId == app.Id && t.Key == Type, Ct));
+            // The provisioning file's rows (the receiver's integration, target, route and allowlist entry), each heard by the host's sink.
+            Assert.Contains(host.Audit.Changes, c => c.Table == "integrations" && c.Change == "Inserted" && c.TenantId == Tenant.ToString()
+                && c.User == Configuration.ConfigurationProvisioner.Actor);
+            Assert.Contains(host.Audit.Changes, c => c.Table == "routes");
+            // Once each: the save dispatches a change's event, and nothing dispatches it again.
+            Assert.Single(host.Audit.Changes, c => c.Table == "integrations");
+            // Not the host's own rows: its context raises its changes through the same mediator.
+            await host.InTransactionAsync(async (hostDb, _) =>
+            {
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "not audited here" });
+                await hostDb.SaveChangesAsync(Ct);
+                return true;
+            });
+            Assert.DoesNotContain(host.Audit.Changes, c => c.Table == "things");
+
+            // Started again, the application renamed: one application, with the new name; its link and its unchanged type stay as they are.
+            await using var again = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false, applicationName: "The host, renamed");
+            Assert.Equal("The host, renamed", (await db.Applications.AsNoTracking().SingleAsync(a => a.Key == "host", Ct)).Name);
+            Assert.Single(await db.Types.Where(t => t.Key == Type).ToListAsync(Ct));
+        }
+
+        [Fact]
+        public void The_container_holds_nothing_of_the_service()
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddJuiceNotificationsEmbedded(new ConfigurationBuilder().Build(), EmbeddedHost.Configure("Host=localhost;Database=none"));
+            var named = services.SelectMany(d => new[] { d.ServiceType, d.ImplementationType, d.ImplementationInstance?.GetType() })
+                .Where(t => t is not null).Select(t => t!.FullName ?? t.Name).Distinct().ToList();
+            string[] forbidden = ["Microsoft.AspNetCore.Authentication", "Microsoft.AspNetCore.SignalR", "RabbitMQ", "Juice.EventBus.RabbitMQ", "Juice.Audit",
+                "Juice.MultiTenant", "Juice.Notifications.Api", "Juice.Notifications.Messaging", "Juice.Notifications.People.IdentityRecipientResolver",
+                "Juice.Notifications.People.ServiceTypesProvisioner"];
+            Assert.DoesNotContain(named, n => forbidden.Any(f => n.StartsWith(f, StringComparison.Ordinal)));
+            // And as the container answers (a factory registration names no type above): none of the service's parts resolve.
+            using (var provider = services.BuildServiceProvider())
+            {
+                Assert.Null(provider.GetService<Microsoft.AspNetCore.Authentication.IAuthenticationSchemeProvider>());
+                Assert.Null(provider.GetService<Microsoft.AspNetCore.SignalR.IHubContext<Api.InboxHub>>());
+                Assert.Null(provider.GetService<Api.Producers>());
+                Assert.Null(provider.GetService<Juice.MultiTenant.AspNetCore.ITenantAccess>());
+                Assert.Null(provider.GetService<Planning.IIdentityDirectory>());
+                Assert.DoesNotContain(provider.GetServices<Planning.IRecipientResolver>(), r => r is Planning.IdentityRecipientResolver);
+            }
+            // The pipeline is there: intake's client and the stages.
+            Assert.Contains(services, d => d.ServiceType == typeof(INotificationClient));
+            Assert.Contains(services, d => d.ImplementationType == typeof(Delivering.DispatcherStage) || d.ServiceType == typeof(Delivering.DispatcherStage));
+        }
+
+        private static NotificationToSend Notification(string key) => new(Type, key) { Data = Data(1) };
+
+        private static JsonElement Data(int n) => JsonSerializer.SerializeToElement(new { n });
+
+        // The host's side: its own context, its table, and its transaction as the pipeline sees it.
+
+        internal sealed class Thing
+        {
+            public Guid Id { get; set; }
+            public required string Name { get; set; }
+        }
+
+        internal sealed class HostDbContext(DbContextOptions<HostDbContext> options) : DbContext(options)
+        {
+            public DbSet<Thing> Things => Set<Thing>();
+
+            protected override void OnModelCreating(ModelBuilder model)
+                => model.Entity<Thing>(e => { e.ToTable("things", "host"); e.Property(t => t.Id).HasColumnName("id"); e.Property(t => t.Name).HasColumnName("name"); });
+        }
+
+        /// <summary>The host's transaction (I59), as Observability's adapter gives <c>PlatformDbContext</c>'s; commit actions run once it commits.</summary>
+        internal sealed class HostTransaction(HostDbContext db, EmbeddedHost.Committed committed) : INotificationTransaction
+        {
+            public System.Data.Common.DbConnection? Connection => db.Database.GetDbConnection();
+
+            public System.Data.Common.DbTransaction? Transaction => db.Database.CurrentTransaction?.GetDbTransaction();
+
+            public List<Action> OnCommit { get; } = [];
+
+            public bool OnCommitted(Action action)
+            {
+                OnCommit.Add(action);
+                committed.Count++;
+                return true;
+            }
+        }
+
+        internal sealed class RecordingSink : INotificationsAuditSink
+        {
+            public System.Collections.Concurrent.ConcurrentQueue<NotificationsDataChange> Changes { get; } = new();
+
+            public ValueTask RecordAsync(NotificationsDataChange change, CancellationToken cancellationToken)
+            {
+                Changes.Enqueue(change);
+                return ValueTask.CompletedTask;
+            }
+        }
+
+        internal sealed class EmbeddedHost : IAsyncDisposable
+        {
+            public sealed class Committed
+            {
+                public int Count { get; set; }
+            }
+
+            private readonly IHost _host;
+            private readonly string _connectionString;
+
+            private EmbeddedHost(IHost host, string connectionString)
+            {
+                _host = host;
+                _connectionString = connectionString;
+            }
+
+            public IServiceProvider Services => _host.Services;
+
+            public RecordingSink Audit => _host.Services.GetRequiredService<RecordingSink>();
+
+            /// <summary>How many commit actions the pipeline asked for (one per new request).</summary>
+            public int CommittedActions => _host.Services.GetRequiredService<Committed>().Count;
+
+            public static Action<NotificationsEmbeddedOptions> Configure(string connectionString, string applicationName = "The host") => o =>
+            {
+                o.ConnectionString = connectionString;
+                o.TenantId = Tenant;
+                o.ApplicationKey = "host";
+                o.ApplicationName = applicationName;
+                o.Types.Add(new TypeDeclaration(Type, "A thing happened", "things", null, null, null, null,
+                    JsonSerializer.SerializeToElement(new { type = "object" }), CorrelationRules.Optional, null, null,
+                    JsonSerializer.SerializeToElement(new { webhook = "passthrough" })));
+            };
+
+            public static async Task<EmbeddedHost> StartAsync(string connectionString, bool runStages, Receiver? receiver = null,
+                string applicationName = "The host")
+            {
+                var builder = Host.CreateApplicationBuilder();
+                var settings = new Dictionary<string, string?>
+                {
+                    ["Notifications:Database:Migrate"] = "true",
+                    ["Notifications:Stages:Run"] = runStages ? "true" : "false",
+                    ["Notifications:Stages:Planner:Poll"] = "00:00:00.2",
+                    ["Notifications:Stages:DeliveryPlanner:Poll"] = "00:00:00.2",
+                    ["Notifications:Stages:Dispatcher:Poll"] = "00:00:00.2",
+                    // The receiver is plain http on this machine's private address, allowlisted (as the local stack allows).
+                    ["Notifications:Delivery:AllowHttpToAllowlisted"] = "true",
+                };
+                if (receiver is not null)
+                {
+                    var path = Path.Combine(Path.GetTempPath(), $"embedded-provisioning-{Guid.NewGuid():N}.json");
+                    await File.WriteAllTextAsync(path, $$"""
+                        { "tenants": { "{{Tenant}}": {
+                            "integrations": { "hooks": { "channel": "webhook", "kind": "webhook", "secretRef": "{{TestHooks.SecretRef}}",
+                                                         "targets": { "receiver": { "address": "{{receiver.Url}}" } } } },
+                            "routes": { "all": { "match": { "type": "host.*" }, "targets": ["receiver"] } },
+                            "allowlist": [ { "destination": "{{receiver.Address}}", "ports": [{{receiver.Port}}] } ]
+                        } } }
+                        """);
+                    settings["Notifications:Provisioning:Path"] = path;
+                }
+                else
+                {
+                    // A route and an integration all the same, so the audit sink has setup rows to hear.
+                    var path = Path.Combine(Path.GetTempPath(), $"embedded-provisioning-{Guid.NewGuid():N}.json");
+                    await File.WriteAllTextAsync(path, $$"""
+                        { "tenants": { "{{Tenant}}": {
+                            "integrations": { "hooks": { "channel": "webhook", "kind": "webhook", "secretRef": "{{TestHooks.SecretRef}}",
+                                                         "targets": { "receiver": { "address": "https://hooks.example.com/in" } } } },
+                            "routes": { "all": { "match": { "type": "host.*" }, "targets": ["receiver"] } }
+                        } } }
+                        """);
+                    settings["Notifications:Provisioning:Path"] = path;
+                }
+                builder.Configuration.AddInMemoryCollection(settings);
+                builder.Services.AddDbContext<HostDbContext>(o => o.UseNpgsql(connectionString));
+                builder.Services.AddSingleton<Committed>();
+                builder.Services.AddScoped<HostTransaction>();
+                builder.Services.AddScoped<INotificationTransaction>(sp => sp.GetRequiredService<HostTransaction>());
+                builder.Services.AddSingleton<RecordingSink>();
+                builder.Services.AddSingleton<INotificationsAuditSink>(sp => sp.GetRequiredService<RecordingSink>());
+                builder.Services.AddJuiceNotificationsEmbedded(builder.Configuration.GetSection("Notifications"), Configure(connectionString, applicationName));
+                var host = builder.Build();
+                await host.StartAsync(Ct);
+                return new EmbeddedHost(host, connectionString);
+            }
+
+            public HostDbContext HostContext() => new(new DbContextOptionsBuilder<HostDbContext>().UseNpgsql(_connectionString).Options);
+
+            /// <summary>
+            /// <paramref name="work"/> in one host transaction, committed when it returns true (or a non-boolean result) and rolled back when it
+            /// returns false or throws; the commit actions run after a commit, as the host would run them.
+            /// </summary>
+            public async Task<T> InTransactionAsync<T>(Func<HostDbContext, INotificationClient, Task<T>> work)
+            {
+                await using var scope = _host.Services.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<HostDbContext>();
+                await using var transaction = await db.Database.BeginTransactionAsync(Ct);
+                var result = await work(db, scope.ServiceProvider.GetRequiredService<INotificationClient>());
+                if (result is false)
+                {
+                    await transaction.RollbackAsync(Ct);
+                    return result;
+                }
+                await transaction.CommitAsync(Ct);
+                foreach (var action in scope.ServiceProvider.GetRequiredService<HostTransaction>().OnCommit)
+                {
+                    action();
+                }
+                return result;
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                await _host.StopAsync(CancellationToken.None);
+                _host.Dispose();
+            }
+        }
+    }
+}

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Embedded hosting (design §4.2, phase-5-plan I57): the pipeline inside a product's own host, on its PostgreSQL, writing requests in its
+       transaction. Not the service: no authentication, tenancy middleware, people, inbox, RabbitMQ or services/audit. -->
+  <PropertyGroup>
+    <Description>Juice Notifications, embedded: the notification pipeline in a product's own host and database, sending in the host's transaction.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
+    <ProjectReference Include="..\Juice.Notifications.EF.PostgreSQL\Juice.Notifications.EF.PostgreSQL.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Juice.Notifications.Tests" />
+    <InternalsVisibleTo Include="Juice.Notifications.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

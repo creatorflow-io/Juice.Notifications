@@ -5,6 +5,7 @@
     <Project Path="src/Juice.Notifications.EF/Juice.Notifications.EF.csproj" />
     <Project Path="src/Juice.Notifications.EF.PostgreSQL/Juice.Notifications.EF.PostgreSQL.csproj" />
     <Project Path="src/Juice.Notifications.Messaging/Juice.Notifications.Messaging.csproj" />
+    <Project Path="src/Juice.Notifications.Embedded/Juice.Notifications.Embedded.csproj" />
     <Project Path="src/Juice.Notifications.Providers.Chat/Juice.Notifications.Providers.Chat.csproj" />
     <Project Path="src/Juice.Notifications.Providers.Email/Juice.Notifications.Providers.Email.csproj" />
     <Project Path="src/Juice.Notifications.Providers.Push/Juice.Notifications.Providers.Push.csproj" />

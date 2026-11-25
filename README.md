@@ -53,6 +53,7 @@ Besides the image, the service ships as libraries for a host app of the customer
 | Package | Feed | Contents |
 |---|---|---|
 | `Juice.Notifications.Api` (NuGet) | nuget.org; alpha/beta on GitHub Packages | `AddJuiceNotifications()`, `UseJuiceNotifications()`, `MapJuiceNotifications()`: the API and the workers. Depends on `Juice.Notifications` and `.Api.Contracts`; a host adds `.EF.PostgreSQL` (the database), `.Messaging` (RabbitMQ intake) and the `.Providers.*` it sends with, all published |
+| `Juice.Notifications.Embedded` (NuGet) | as above | `AddJuiceNotificationsEmbedded()`: the pipeline inside a product's own host and PostgreSQL (design §4.2), with `INotificationClient` writing in the host's transaction. No authentication, tenancy middleware, people, inbox, RabbitMQ or `services/audit`; the host gives its transaction (`INotificationTransaction`) and, if it keeps one, an audit sink (`INotificationsAuditSink`) |
 | `@juice-js/notifications-admin` (npm) | npmjs | `provideNotificationsAdmin()`, `NOTIFICATIONS_ADMIN_ROUTES`, `notificationsAdminMenus()` and the page styles |
 
 `src/Juice.Notifications.App` and `console/src` are the reference host and app: they use the packages the way a customer would.

@@ -38,6 +38,11 @@ namespace Juice.Notifications
         public const string UnknownType = "unknown_type";
         /// <summary>A request is malformed; <c>errors</c> lists each field.</summary>
         public const string InvalidRequest = "invalid_request";
+        /// <summary>
+        /// Embedded (phase-5-plan I59): a client call with no transaction of the host's open. The request is written in the host's transaction,
+        /// so it commits or rolls back with the host's own change; without one there is nothing to write it in.
+        /// </summary>
+        public const string NoTransaction = "no_transaction";
         /// <summary>The request's data doesn't match its type version's schema; <c>errors</c> has a JSON pointer for each problem.</summary>
         public const string InvalidData = "invalid_data";
         /// <summary>The type doesn't allow external recipients, or the recipient's kind isn't available yet.</summary>

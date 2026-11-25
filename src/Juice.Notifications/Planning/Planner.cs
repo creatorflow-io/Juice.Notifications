@@ -512,19 +512,26 @@ namespace Juice.Notifications.Planning
 
     public static class PlanningRegistration
     {
-        public static IServiceCollection AddPlanning(this IServiceCollection services, StageOptions options, bool runWorkers = true)
+        /// <remarks>
+        /// <c>people</c>: people as recipients (the local, topic and identity resolvers, and the service's own contact-point one). Off (embedded, design §4.2),
+        /// requests name routes and addresses only.
+        /// </remarks>
+        public static IServiceCollection AddPlanning(this IServiceCollection services, StageOptions options, bool runWorkers = true, bool people = true)
         {
             services.AddSingleton<IRecipientResolver, RouteRecipientResolver>();
             services.AddSingleton<IRecipientResolver, StaticAddressResolver>();
-            services.AddSingleton<IRecipientResolver, StaticContactPointResolver>();
-            services.AddSingleton<IRecipientResolver, LocalRecipientResolver>();
-            services.AddSingleton<IRecipientResolver, TopicRecipientResolver>();
-            // The identity resolver reads the deployment's directories (Identity:Directories; phase-2-plan M16).
-            services.AddSingleton<IRecipientResolver, IdentityRecipientResolver>();
-            services.TryAddSingleton<IIdentityDirectory, KeycloakIdentityDirectory>();
-            // Says which directory is wrong and how (IdentityOptions.Problem).
-            services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<IdentityOptions>, IdentityOptionsValidation>());
-            services.AddOptions<IdentityOptions>().ValidateOnStart();
+            if (people)
+            {
+                services.AddSingleton<IRecipientResolver, StaticContactPointResolver>();
+                services.AddSingleton<IRecipientResolver, LocalRecipientResolver>();
+                services.AddSingleton<IRecipientResolver, TopicRecipientResolver>();
+                // The identity resolver reads the deployment's directories (Identity:Directories; phase-2-plan M16).
+                services.AddSingleton<IRecipientResolver, IdentityRecipientResolver>();
+                services.TryAddSingleton<IIdentityDirectory, KeycloakIdentityDirectory>();
+                // Says which directory is wrong and how (IdentityOptions.Problem).
+                services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<IdentityOptions>, IdentityOptionsValidation>());
+                services.AddOptions<IdentityOptions>().ValidateOnStart();
+            }
             services.AddOptions<ResolverOptions>()
                 .Validate(o => o.MaxRecipients is > 0 and <= 1_000_000 && o.WaitLimit >= TimeSpan.Zero && o.RetryMin > TimeSpan.Zero
                     && o.RetryMax >= o.RetryMin && o.CacheSeconds >= 0,

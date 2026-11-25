@@ -6,6 +6,10 @@
     <PackageReference Include="JsonSchema.Net" />
     <PackageReference Include="Scriban" />
     <PackageReference Include="MailKit" />
+    <!-- The outbox and its local route (Hosting/Pipeline.cs): both hosting modes run them. -->
+    <PackageReference Include="Juice.Messaging.Outbox.Delivery" />
+    <PackageReference Include="Juice.Messaging.Local" />
+    <PackageReference Include="Juice.Messaging.Idempotency.Caching" />
   </ItemGroup>
 
   <ItemGroup>
