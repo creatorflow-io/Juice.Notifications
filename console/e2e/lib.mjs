@@ -191,3 +191,128 @@ export async function receiver() {
   const port = server.address().port;
   return Object.assign(state, { address, port, url: `http://${address}:${port}/hook`, close: () => new Promise(r => server.close(r)) });
 }
+
+/** A person's token (`tess`, `ann`, …) through the people-test client, as the Console's would carry the same roles. */
+export async function personToken(user) {
+  const r = await fetch(`${keycloak}/realms/juice/protocol/openid-connect/token`, { method: 'POST',
+    body: new URLSearchParams({ grant_type: 'password', client_id: 'people-test', username: user, password: env.PEOPLE_TEST_PASSWORD }) });
+  if (!r.ok) throw new Error(`token for ${user}: ${r.status}`);
+  return (await r.json()).access_token;
+}
+
+/** A call with `token` that never throws: its status and text (a refusal is what the proof points look for). */
+export async function attempt(token, method, path, body) {
+  const r = await fetch(`${base}${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body) });
+  return { status: r.status, text: await r.text() };
+}
+
+/**
+ * Every page under `/tenants/{tenant}` (the Console's routes), each with the API read it starts from, for proof points 1 and 2. `ids` names a
+ * row of the tenant for each detail page: delivery, notification, correlation (the sample application's key), integration, type, subscriber.
+ */
+export function tenantPages(tenant, ids) {
+  const e = encodeURIComponent;
+  const api = path => `/api/v1/tenants/${tenant}/${path}`;
+  // [the route as the Console declares it, the path opened, the read it starts from]
+  return [
+    ['', '', 'overview'], ['deliveries', 'deliveries', 'deliveries'], ['deliveries/:id', `deliveries/${ids.delivery}`, `deliveries/${ids.delivery}`],
+    ['notifications', 'notifications', 'notifications'],
+    ['notifications/:id', `notifications/${ids.notification}`, `notifications/${ids.notification}`],
+    ['correlations', 'correlations', 'correlations'],
+    ['correlations/:application/:key', `correlations/sample/${e(ids.correlation)}`, `correlations/${e(ids.correlation)}?application=sample`],
+    ['storms', 'storms', 'storms'], ['integrations', 'integrations', 'integrations'],
+    ['integrations/:key', `integrations/${ids.integration}`, 'integrations'], ['routes', 'routes', 'routes'], ['mutes', 'mutes', 'mutes'],
+    ['escalation-policies', 'escalation-policies', 'escalation-policies'], ['allowlist', 'allowlist', 'allowlist'], ['types', 'types', 'types'],
+    ['types/:key', `types/${ids.type}`, `types/${ids.type}`], ['display-groups', 'display-groups', 'display-groups'],
+    ['subscribers', 'subscribers', 'subscribers'], ['subscribers/:id', `subscribers/${ids.subscriber}`, `subscribers/${ids.subscriber}`],
+    ['groups', 'groups', 'groups'], ['topics', 'topics', 'topics'], ['resolvers', 'resolvers', 'resolvers'], ['settings', 'settings', 'settings'],
+  ].map(([declared, route, read]) => ({ declared, route: `/tenants/${tenant}${route ? `/${route}` : ''}`, api: api(read) }));
+}
+
+/**
+ * The Console's tenant routes its route list declares (`NOTIFICATIONS_ADMIN_ROUTES`, the children of `tenants/:tenantId`) that
+ * {@link tenantPages} doesn't walk, and those it walks that aren't declared: both empty, or "every page" in a proof point would skip one.
+ */
+export function uncoveredTenantRoutes() {
+  const source = readFileSync(fileURLToPath(new URL('../projects/juice-js/notifications-admin/src/lib/notifications-admin.routes.ts', import.meta.url)), 'utf8');
+  const children = source.slice(source.indexOf("path: 'tenants/:tenantId'"));
+  const declared = [...children.slice(0, children.indexOf('\n    ],')).matchAll(/page\('([^']*)'/g)].map(m => m[1]);
+  const walked = tenantPages('t', {}).map(p => p.declared);
+  return { missing: declared.filter(d => !walked.includes(d)), extra: walked.filter(w => !declared.includes(w)), declared: declared.length };
+}
+
+/**
+ * Whether `text` holds `secret`: as written, as a JSON string escapes it (`+` for `+`, `\/`; System.Text.Json escapes more than
+ * JSON.stringify does), or URL-encoded. A secret with such characters (a base64 key) would otherwise be missed in an API answer.
+ */
+export function holds(text, secret) {
+  const unescaped = text.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/\\\//g, '/');
+  return [text, unescaped].some(t => t.includes(secret) || t.includes(encodeURIComponent(secret)));
+}
+
+/**
+ * Rows in `tenant` for {@link tenantPages}' detail pages, made as the API (idempotent per `run`): a webhook to `hook` (allowlisted), a type
+ * routed to it with a correlation, one notification sent and its delivery, and a local user.
+ */
+export async function seedTenant(tenant, run, hook) {
+  const at = path => `/api/v1/tenants/${tenant}/${path}`;
+  await adminApi('POST', '/api/v1/applications', { key: 'sample', name: 'Sample', clientId: 'sample-producer' }, { allow: [409] });
+  await adminApi('PUT', `/api/v1/applications/sample/tenants/${tenant}`);
+  await adminApi('PUT', at('allowlist'), { destination: hook.address, ports: [hook.port] });
+  const integration = `e2e-seed-${run}`;
+  await adminApi('PUT', at(`integrations/${integration}`), { channel: 'webhook', kind: 'webhook', secretRef: 'env:NOTIFICATIONS_SECRET_TEST_HOOK' });
+  await adminApi('PUT', at(`integrations/${integration}/targets/${integration}`), { address: hook.url });
+  const type = `sample.e2e.seed${run}`;
+  await producerApi('PUT', '/api/v1/applications/sample/types', { key: type, name: `E2E seed ${run}`, category: 'e2e', correlation: 'optional',
+    schema: { type: 'object' }, templates: { webhook: 'passthrough' } });
+  await adminApi('PUT', at(`routes/${integration}`), { match: { type }, targets: [integration] });
+  const correlation = `seed/${run}`;
+  const notification = (await call(await clientToken('sample-producer', 'SAMPLE_PRODUCER_CLIENT_SECRET'), 'POST', at('notifications'),
+    { type, idempotencyKey: `seed-${run}`, correlationKey: correlation, data: { run } })).id;
+  const deliveries = await until(async () => (await adminApi('GET', at(`notifications/${notification}`))).deliveries, ds => ds.length > 0, 30);
+  const user = await adminApi('PUT', at(`local-users/e2e-seed-${run}`), { name: `Seed ${run}` });
+  return { delivery: deliveries[0]?.id, notification, correlation, integration, type, subscriber: user.id };
+}
+
+/**
+ * Every answer `page` gets from the Console's origin from now on, with its body, for the proof points that search them. `read()` waits for
+ * the bodies still being read, then gives the answers and those whose body couldn't be read (an API answer among them is a check's
+ * blind spot, so the proof points fail on it).
+ */
+export function collectAnswers(page) {
+  const answers = [];
+  const reading = [];
+  page.on('response', r => {
+    if (!r.url().startsWith(base)) return;
+    const answer = { url: r.url(), status: r.status(), text: null };
+    answers.push(answer);
+    // Nothing to read: no content, or a redirect.
+    if (r.status() === 204 || (r.status() >= 300 && r.status() < 400)) {
+      answer.text = '';
+      return;
+    }
+    reading.push(r.text().then(t => { answer.text = t; }, () => {}));
+  });
+  // What the hubs push (the bell's inbox over SignalR) is read too: not an HTTP answer, but the Console shows it.
+  const host = new URL(base).host;
+  page.on('websocket', ws => {
+    if (new URL(ws.url()).host !== host) return;
+    ws.on('framereceived', f => answers.push({ url: `${ws.url().split('?')[0]} (pushed)`, status: 101, pushed: true,
+      text: typeof f.payload === 'string' ? f.payload : f.payload.toString('utf8') }));
+  });
+  return {
+    async read() {
+      await Promise.all(reading);
+      return { answers, unread: answers.filter(a => a.text === null && a.url.includes('/api/')) };
+    },
+  };
+}
+
+/** The rows {@link seedTenant} made stop sending: its route removed and its integration disabled (one that has sent can't be deleted). */
+export async function unseed(tenant, ids) {
+  const at = path => `/api/v1/tenants/${tenant}/${path}`;
+  await adminApi('DELETE', at(`routes/${ids.integration}`), undefined, { allow: [404] });
+  await adminApi('PUT', at(`integrations/${ids.integration}`), { channel: 'webhook', kind: 'webhook', secretRef: 'env:NOTIFICATIONS_SECRET_TEST_HOOK',
+    enabled: false });
+}

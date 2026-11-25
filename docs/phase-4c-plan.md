@@ -247,6 +247,28 @@ unless the owner says otherwise.
     (22 checks).
 - **M42 Proof points and acceptance** (`p4c-g1` … `p4c-g3`): §6, `phase-4c-acceptance.md`, a demo script, and design.md updated (§4.2,
   §15 layout, §16 phases, §19 decision 21).
+  - *As built (25 Nov 2026):* `phase-4c-acceptance.md` records the gate. Proof point 1 by `tenant.mjs` (new): cara's tenant seeded with
+    rows of its own, every page of it (detail pages by their ids) the no-access page for tess with none of them shown and no call made,
+    her token refused every read those pages start from and four changes, paul answered each read (so the refusals are the tenant's), her
+    own tenant's pages never naming cara's rows. Proof point 2: `no-access.mjs` takes every page and the applications; the guards stop
+    ann before a page loads, so the refused call each page must make is asked with her token (paul answered each). Proof point 6 by
+    `secrets.mjs` (new): the stack's secrets and the tests' signing secret (named by a seeded integration that signed a delivery) searched
+    in every page's text, field and answer, for tess and paul. Shared in `lib.mjs`: `tenantPages` (every route with its read),
+    `seedTenant`, `personToken`, `attempt`. Demo `deploy/local/scripts/demo-console.sh` (a receiver of its own on the machine's address:
+    the stack's ports are loopback only). design.md: §4.2 (the Console), §15 (`console/`), §16 (phase 4c) and decision **23** (21 and 22
+    are the owner's phase 5 decisions), left uncommitted for the owner. Deferred #48: settings have no version.
+  - *Review round 1 (25 Nov 2026):* 4 findings, all fixed (journeys and demo only). The answers `tenant.mjs` and `secrets.mjs` search
+    were read as they came, so one still being read when the search ran, or cut off by the next page (an overview refresh, a template
+    preview: seen on the first run of the stricter check), went unsearched; and a body that couldn't be read counted as empty text.
+    `collectAnswers` (lib) now waits for every body, each page's before the next opens, and the checks fail on an API answer left unread.
+    The seeded integration and route stayed live after a run, sending to a receiver that was gone (`unseed`: the route removed, the
+    integration disabled; one that has sent can't be deleted). The demo now waits for its receiver to answer before sending, so a wrong
+    `PUBLIC_HOST` or a taken port is said at once instead of a minute's wait for a failure that never comes.
+  - *Review round 2 (25 Nov 2026):* 3 findings, all fixed (journeys only). A secret was searched only as written: System.Text.Json writes
+    `+` as `+`, so a base64 key with one (`init.sh` makes them at random) would pass unseen; `holds` also searches the JSON-unescaped
+    text and the URL-encoded form. What the hubs push (the bell's inbox over SignalR) wasn't searched; `collectAnswers` now reads their
+    frames. "Every page" was a list of its own, so a page added later would be skipped silently; the three journeys now check it against
+    the Console's route list (`uncoveredTenantRoutes`). Also: the seeded integrations earlier runs left enabled were disabled.
 
 ---
 
