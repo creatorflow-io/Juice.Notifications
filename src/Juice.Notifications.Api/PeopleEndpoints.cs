@@ -63,6 +63,9 @@ namespace Juice.Notifications.Api
                     DirectoryConflict, ct));
             tenant.MapDelete("/topics/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => ApiResults.SendAsync(mediator, db, new DeleteTopic(tenantId, key), _ => Results.NoContent(), DirectoryConflict, ct));
+            tenant.MapGet("/topics/{key}/subscribers", async (Guid tenantId, string key, DirectoryReader reader, CancellationToken ct)
+                => await reader.TopicSubscribersAsync(tenantId, key, ct) is { } subscribers ? Results.Ok(subscribers.Select(ToResponse))
+                    : ApiResults.NotFound("No such topic."));
             tenant.MapPut("/topics/{key}/subscribers/{subscriberId:guid}", (Guid tenantId, string key, Guid subscriberId, IMediator mediator,
                 NotificationsDbContext db, CancellationToken ct)
                 => ApiResults.SendAsync(mediator, db, new Subscribe(tenantId, key, subscriberId, BySelf: false), _ => Results.NoContent(), DirectoryConflict, ct));

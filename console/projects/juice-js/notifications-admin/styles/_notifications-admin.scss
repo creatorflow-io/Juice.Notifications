@@ -80,7 +80,9 @@
   .na-table { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--na-surface);
     th { text-align: left; font-weight: 500; color: var(--na-muted); font-size: 12px; padding: 8px; border-bottom: 1px solid var(--na-border); }
     td { padding: 6px 8px; border-bottom: 1px solid var(--na-border); vertical-align: top; }
-    a { color: var(--na-accent); } }
+    a { color: var(--na-accent); }
+    // The row whose details are open below the table (a group's members, a topic's subscribers).
+    tr.na-selected td { background: color-mix(in srgb, var(--na-accent) 8%, transparent); } }
   .na-kv { border-collapse: collapse; font-size: 14px;
     th { text-align: left; font-weight: 500; color: var(--na-muted); padding: 3px 16px 3px 0; vertical-align: top; white-space: nowrap; }
     td { padding: 3px 0; } }

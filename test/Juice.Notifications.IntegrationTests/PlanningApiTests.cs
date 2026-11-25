@@ -260,5 +260,27 @@ namespace Juice.Notifications.IntegrationTests
             var byProducer = await client.GetAsync($"{Tenant}/providers", Ct);
             Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantAdmin), (byProducer.StatusCode, await CodeAsync(byProducer)));
         }
+
+        /// <summary>
+        /// <c>GET …/resolver-kinds</c> (phase-4c-plan M40): what a tenant's resolver can be here and the recipient kinds each handles; never the
+        /// built-in route and address. For the tenant's admins only.
+        /// </summary>
+        [Fact]
+        public async Task The_resolver_kinds_name_what_a_tenants_resolver_can_be()
+        {
+            LocalStack.RequireAvailable();
+            using var tenantAdmin = producer.App.Client(await LocalStack.TenantAdminTokenAsync());
+
+            var kinds = (await tenantAdmin.GetFromJsonAsync<List<ResolverKindResponse>>($"{Tenant}/resolver-kinds", Ct))!;
+            Assert.Equal(["group", "user"], Assert.Single(kinds, k => k.Kind == "local").Handles);
+            Assert.Equal(["topic"], Assert.Single(kinds, k => k.Kind == "topic").Handles);
+            Assert.Equal(["group", "role", "user"], Assert.Single(kinds, k => k.Kind == "identity").Handles);
+            Assert.DoesNotContain(kinds, k => k.Kind is "route" or "address");
+            Assert.Equal(kinds.Select(k => k.Kind).Order(StringComparer.Ordinal), kinds.Select(k => k.Kind));
+
+            using var client = await producer.ProducerAsync();
+            var byProducer = await client.GetAsync($"{Tenant}/resolver-kinds", Ct);
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantAdmin), (byProducer.StatusCode, await CodeAsync(byProducer)));
+        }
     }
 }

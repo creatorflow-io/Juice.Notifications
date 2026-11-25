@@ -143,6 +143,11 @@ namespace Juice.Notifications.IntegrationTests
             // An admin adds someone to a topic people can't join themselves.
             var dee = await OkAsync<SubscriberResponse>(admin.PutAsJsonAsync($"{Tenant}/local-users/dee", new PutLocalUserBody("Dee", null, null), Ct));
             await NoContentAsync(admin.PutAsync($"{Tenant}/topics/ops.private/subscribers/{dee.Id}", null, Ct));
+            // Each topic's subscribers: the one an admin added, the one who joined themselves.
+            Assert.Equal([dee.Id], (await OkAsync<List<SubscriberResponse>>(admin.GetAsync($"{Tenant}/topics/ops.private/subscribers", Ct))).Select(s => s.Id));
+            Assert.Equal([(self.Id, "oidc")], (await OkAsync<List<SubscriberResponse>>(admin.GetAsync($"{Tenant}/topics/billing.service:alerts/subscribers", Ct)))
+                .Select(s => (s.Id, s.Source)));
+            Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync($"{Tenant}/topics/no.such/subscribers", Ct)).StatusCode);
             Assert.Equal([("billing.service:alerts", 1), ("ops.private", 1)], (await OkAsync<List<TopicResponse>>(admin.GetAsync($"{Tenant}/topics", Ct)))
                 .Select(t => (t.Key, t.Subscribers)));
 

@@ -20,6 +20,12 @@ namespace Juice.Notifications.Api.Contracts
     /// </summary>
     public sealed record ProviderResponse(string Channel, string Kind, bool Signs, bool RegistersCallbacks);
 
+    /// <summary>
+    /// <c>GET …/resolver-kinds</c>: a resolver kind this deployment has, which a tenant's resolver can be (<c>PUT …/resolvers/{key}</c>), and
+    /// the recipient kinds it can handle.
+    /// </summary>
+    public sealed record ResolverKindResponse(string Kind, IReadOnlyList<string> Handles);
+
     public sealed record IntegrationResponse(string Key, string Channel, string Kind, JsonElement Settings, string? SecretRef, int Priority, bool Enabled,
         string ManagedBy, IReadOnlyList<TargetResponse> Targets, DateTimeOffset UpdatedAt);
 

@@ -120,6 +120,27 @@ export interface Resolver {
   updatedAt: string;
 }
 
+/** What a tenant's resolver can be in this deployment, and the recipient kinds it can handle. */
+export interface ResolverKind { kind: string; handles: string[]; }
+
+/** Another identity linked to a subscriber: requests naming it reach the subscriber. */
+export interface Alias { source: string; externalId: string; linkedBy: string | null; linkedAt: string; }
+
+/**
+ * A person the tenant notifies, by the identity they were first seen as (`source`, `externalId`: `local` for a local user). `mergedInto`: their
+ * identity is linked into another subscriber, who receives for them.
+ */
+export interface Subscriber {
+  id: string; source: string; externalId: string; name: string | null; locale: string | null; timeZone: string | null; mergedInto: string | null;
+  aliases: Alias[]; createdAt: string;
+}
+
+/** A local group (the `local` resolver's `group`) and how many are in it. */
+export interface Group { key: string; name: string; members: number; updatedAt: string; }
+
+/** A topic: requests name it to reach its subscribers; self-service ones people join and leave themselves. */
+export interface Topic { key: string; name: string; selfService: boolean; subscribers: number; updatedAt: string; }
+
 export interface AllowlistEntry { destination: string; ports: number[]; managedBy: ManagedBy; updatedAt: string; }
 
 /** A type the tenant receives, at its latest version, and which channels have a template: the application's (`declared`) or its own. */

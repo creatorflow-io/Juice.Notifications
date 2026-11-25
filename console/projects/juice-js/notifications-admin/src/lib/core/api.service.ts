@@ -3,7 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, shareReplay, throwError } from 'rxjs';
 import {
   AllowlistEntry, Correlation, CorrelationListItem, Delivery, DeliveryDetail, EscalationPolicy, EscalationStep, Integration, Match, Mute,
-  DisplayGroup, MovedType, NotificationDetail, NotificationListItem, Overview, Page, Provider, Recipient, ReplayResult, Resolver, RetryResult, Route, Storm, Target,
+  DisplayGroup, Group, MovedType, ResolverKind, Subscriber, Topic, NotificationDetail, NotificationListItem, Overview, Page, Provider, Recipient, ReplayResult, Resolver, RetryResult, Route, Storm, Target,
   TemplatePreview, TenantTemplate, TenantType, TenantTypeDetail,
 } from './models';
 import { NOTIFICATIONS_ADMIN_OPTIONS } from './options';
@@ -168,6 +168,91 @@ export class NotificationsAdminApi {
 
   resolvers(tenantId: string): Observable<Resolver[]> {
     return this.http.get<Resolver[]>(this.url(tenantId, 'resolvers'));
+  }
+
+  // People (M40): resolvers, subscribers and their aliases, local users, groups, topics.
+  resolverKinds(tenantId: string): Observable<ResolverKind[]> {
+    return this.http.get<ResolverKind[]>(this.url(tenantId, 'resolver-kinds'));
+  }
+
+  /** Creates or replaces; the kind of an existing resolver is fixed. */
+  putResolver(tenantId: string, key: string, body: { kind: string; handles: string[]; settings: unknown; secretRef: string | null; enabled: boolean }): Observable<Resolver> {
+    return this.http.put<Resolver>(this.url(tenantId, `resolvers/${encodeURIComponent(key)}`), body);
+  }
+
+  deleteResolver(tenantId: string, key: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `resolvers/${encodeURIComponent(key)}`));
+  }
+
+  /** A page in creation order after `after`; of one source, or of one identity (an alias's finds the subscriber it is linked to). */
+  subscribers(tenantId: string, query: { source?: string; externalId?: string; after?: string | null; limit?: number }): Observable<Subscriber[]> {
+    return this.http.get<Subscriber[]>(this.url(tenantId, 'subscribers'), { params: this.params(query) });
+  }
+
+  subscriber(tenantId: string, id: string): Observable<Subscriber> {
+    return this.http.get<Subscriber>(this.url(tenantId, `subscribers/${encodeURIComponent(id)}`));
+  }
+
+  linkAlias(tenantId: string, id: string, body: { source: string; externalId: string }): Observable<Subscriber> {
+    return this.http.post<Subscriber>(this.url(tenantId, `subscribers/${encodeURIComponent(id)}/aliases`), body);
+  }
+
+  /** An external id can hold anything a source uses (slashes included), so the identity goes in the query. */
+  unlinkAlias(tenantId: string, id: string, source: string, externalId: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `subscribers/${encodeURIComponent(id)}/aliases`), { params: this.params({ source, externalId }) });
+  }
+
+  /** Adds or changes a local user (a subscriber of source `local`). */
+  putLocalUser(tenantId: string, id: string, body: { name: string | null; locale: string | null; timeZone: string | null }): Observable<Subscriber> {
+    return this.http.put<Subscriber>(this.url(tenantId, `local-users/${encodeURIComponent(id)}`), body);
+  }
+
+  groups(tenantId: string): Observable<Group[]> {
+    return this.http.get<Group[]>(this.url(tenantId, 'groups'));
+  }
+
+  putGroup(tenantId: string, key: string, body: { name: string }): Observable<Group> {
+    return this.http.put<Group>(this.url(tenantId, `groups/${encodeURIComponent(key)}`), body);
+  }
+
+  deleteGroup(tenantId: string, key: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `groups/${encodeURIComponent(key)}`));
+  }
+
+  groupMembers(tenantId: string, key: string): Observable<Subscriber[]> {
+    return this.http.get<Subscriber[]>(this.url(tenantId, `groups/${encodeURIComponent(key)}/members`));
+  }
+
+  addGroupMember(tenantId: string, key: string, subscriberId: string): Observable<void> {
+    return this.http.put<void>(this.url(tenantId, `groups/${encodeURIComponent(key)}/members/${encodeURIComponent(subscriberId)}`), null);
+  }
+
+  removeGroupMember(tenantId: string, key: string, subscriberId: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `groups/${encodeURIComponent(key)}/members/${encodeURIComponent(subscriberId)}`));
+  }
+
+  topics(tenantId: string): Observable<Topic[]> {
+    return this.http.get<Topic[]>(this.url(tenantId, 'topics'));
+  }
+
+  putTopic(tenantId: string, key: string, body: { name: string; selfService: boolean }): Observable<Topic> {
+    return this.http.put<Topic>(this.url(tenantId, `topics/${encodeURIComponent(key)}`), body);
+  }
+
+  deleteTopic(tenantId: string, key: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `topics/${encodeURIComponent(key)}`));
+  }
+
+  topicSubscribers(tenantId: string, key: string): Observable<Subscriber[]> {
+    return this.http.get<Subscriber[]>(this.url(tenantId, `topics/${encodeURIComponent(key)}/subscribers`));
+  }
+
+  subscribe(tenantId: string, key: string, subscriberId: string): Observable<void> {
+    return this.http.put<void>(this.url(tenantId, `topics/${encodeURIComponent(key)}/subscribers/${encodeURIComponent(subscriberId)}`), null);
+  }
+
+  unsubscribe(tenantId: string, key: string, subscriberId: string): Observable<void> {
+    return this.http.delete<void>(this.url(tenantId, `topics/${encodeURIComponent(key)}/subscribers/${encodeURIComponent(subscriberId)}`));
   }
 
   allowlist(tenantId: string): Observable<AllowlistEntry[]> {

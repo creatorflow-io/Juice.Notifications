@@ -39,6 +39,11 @@ export const NOTIFICATIONS_ADMIN_ROUTES: Routes = [
       page('types', 'Types', () => import('./pages/types.page').then(m => m.TypesPage)),
       page('types/:key', 'Type', () => import('./pages/type.page').then(m => m.TypePage)),
       page('display-groups', 'Display groups', () => import('./pages/display-groups.page').then(m => m.DisplayGroupsPage)),
+      page('subscribers', 'Subscribers', () => import('./pages/subscribers.page').then(m => m.SubscribersPage)),
+      page('subscribers/:id', 'Subscriber', () => import('./pages/subscriber.page').then(m => m.SubscriberPage)),
+      page('groups', 'Groups', () => import('./pages/groups.page').then(m => m.GroupsPage)),
+      page('topics', 'Topics', () => import('./pages/topics.page').then(m => m.TopicsPage)),
+      page('resolvers', 'Resolvers', () => import('./pages/resolvers.page').then(m => m.ResolversPage)),
     ],
   },
 ];
@@ -64,6 +69,12 @@ export function notificationsAdminMenus(basePath = '/', order = 1): Menus {
     group('notifications-admin-content', 'Content', 'article', [
       { id: 'types', label: 'Types', icon: 'category', routerLink: goLink(basePath, 'types'), shortcut: 'g t' },
       { id: 'display-groups', label: 'Display groups', icon: 'tab', routerLink: goLink(basePath, 'display-groups') },
+    ]),
+    group('notifications-admin-people', 'People', 'groups', [
+      { id: 'subscribers', label: 'Subscribers', icon: 'person', routerLink: goLink(basePath, 'subscribers'), shortcut: 'g s' },
+      { id: 'groups', label: 'Groups', icon: 'group', routerLink: goLink(basePath, 'groups') },
+      { id: 'topics', label: 'Topics', icon: 'campaign', routerLink: goLink(basePath, 'topics') },
+      { id: 'resolvers', label: 'Resolvers', icon: 'person_search', routerLink: goLink(basePath, 'resolvers') },
     ]),
   ];
   return menus.map((menu, index) => ({ ...menu, order: order + index }));

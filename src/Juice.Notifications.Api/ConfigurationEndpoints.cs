@@ -132,6 +132,10 @@ namespace Juice.Notifications.Api
             tenant.MapDelete("/allowlist", (Guid tenantId, string destination, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteAllowlistEntry(tenantId, destination), ct));
 
+            // What a resolver can be here: the configurable implementations (route and address are built in, never a tenant's).
+            tenant.MapGet("/resolver-kinds", (IEnumerable<Planning.IRecipientResolver> resolvers) => Results.Ok(resolvers
+                .Where(r => r.Configurable).DistinctBy(r => r.Key).OrderBy(r => r.Key, StringComparer.Ordinal)
+                .Select(r => new ResolverKindResponse(r.Key, r.Kinds.Order(StringComparer.Ordinal).ToList()))));
             tenant.MapGet("/resolvers", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
                 => Results.Ok((await reader.ResolversAsync(tenantId, ct)).Select(ToResponse)));
             tenant.MapPut("/resolvers/{key}", (Guid tenantId, string key, PutResolverBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)

@@ -183,6 +183,40 @@ unless the owner says otherwise.
     template count with the types list; a `MovedType` model; the detail test cleans up in `finally` and checks the preview by locale;
     `content.mjs` checks the vi preview and that a Refresh keeps unsaved text.
 - **M40 People** (`p4c-07`): subscribers and aliases, local users and groups, topics, resolvers.
+  - *As built (24 Nov 2026):* **API**: two reads beyond the plan, `GET …/resolver-kinds` (the configurable resolvers this deployment has and
+    the recipient kinds each can handle; `PlanningApiTests.The_resolver_kinds_name_what_a_tenants_resolver_can_be`) and
+    `GET …/topics/{key}/subscribers` (as a group's members; `DirectoryApiTests`). **Pages** (menu group "People"): subscribers (found by
+    source or by an identity, their own or a linked one; paged by the last id; "new local user", checked as new first, then their page), a
+    subscriber (`subscribers/{id}`: identity and details; a local user's name, locale and time zone changed (an emptied one refused: the
+    API keeps what is stored); linked identities, linked and unlinked, linking another subscriber's identity links them in), groups and
+    topics (add, rename, delete; a self-service flag on topics; members or subscribers below the list, added by identity (looked up
+    first: nobody known by it is said on the field) and removed), resolvers (the deployment's kinds; a new one handles all its kind can
+    and starts from its settings; the kind fixed once created; a stored kind or handle the deployment no longer has shown, not hidden;
+    a secret reference changed, never emptied; rows from configuration read only). **Journey** `people.mjs`: tess adds a local and a
+    topic resolver (an identity one naming no directory is refused on its settings), a local user (locale changed, an emptied name
+    refused), links an identity and finds them by it, puts them in a new group and a new topic, sees a request naming each reach them,
+    then takes it all down in the Console (the local user stays: the API deletes none). The integration suite runs with the App container
+    stopped: it shares the stack's database and broker queue and takes the tests' work (intermittent failures otherwise).
+  - *Review round 1 (25 Nov 2026): 6 findings, all fixed; Console only.* (1) Saves on the groups, topics and resolvers pages and the new
+    local user's add weren't dropped when the page was reused for another tenant: a group added for one opened its members in the next,
+    and a new local user opened a subscriber page under the wrong tenant. (2) The same in the members panel when another group or topic
+    is opened (the add's answer wiped what was typed for the next). Both now go through a shared `Pending` (forms.ts; the type page's own
+    list moved onto it, `rowAction` returns its subscription). (3) Linking an identity read the subscriber again and reset the local
+    user's fields, losing what was typed and not saved: a field still showing what was read takes the new value, one typed over keeps
+    the typing (as the type page's editor). (4) "New local user" looked the id up with a limit of one: when that local user was merged
+    into another, the other came first, the check passed and the PUT changed the existing local user's details. (5) Adding a member by
+    an identity merged into another subscriber found two and refused ("more than one"): it now adds the subscriber the identity
+    reaches, the one it is linked to (`reachedBy`). (6) A merged local user's page offered their details to change, which no request
+    reads (the subscriber they are linked into receives with its own): it now says to change them there. `people.mjs` grows to 28
+    checks: a time zone typed survives the link, a second local user linked in (merged; their page has no form; can't be added again;
+    added to the group by their identity, dee goes in), both identities unlinked at the end. The other seven journeys pass.
+  - *Review round 2 (25 Nov 2026): 3 findings, all fixed; Console only.* (1) The local user's "Saved." stayed while their details were
+    typed over, as if the new text were saved: typing takes it away (as the type page's). (2) Refresh on a subscriber's page kept the
+    local-user form's refusal and "Saved.". (3) "New local user" with an id linked to another subscriber as an alias (no local user of
+    its own) went to the API and came back a 409 naming a subscriber id: the lookup already finds who it is linked to, so the field
+    says so by name and nothing is sent. Also checked and left as is: the resolver kinds take each key's first implementation, as the
+    planner and the resolver PUT do; the server checks a local user's id itself (the Console's pattern is a hint); the subscribers
+    page's 50 a page is under the API's 200. `people.mjs` grows to 31 checks; the other seven journeys pass.
 - **M41 Settings and platform** (`p4c-08`): tenant settings; applications and tenant links for platform admins.
 - **M42 Proof points and acceptance** (`p4c-g1` … `p4c-g3`): §6, `phase-4c-acceptance.md`, a demo script, and design.md updated (§4.2,
   §15 layout, §16 phases, §19 decision 21).

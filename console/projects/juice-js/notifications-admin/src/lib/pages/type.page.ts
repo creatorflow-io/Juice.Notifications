@@ -9,10 +9,10 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { RouterLink } from '@angular/router';
-import { Subscription, catchError, debounceTime, map, of, switchMap } from 'rxjs';
+import { catchError, debounceTime, map, of, switchMap } from 'rxjs';
 import { NotificationsAdminApi } from '../core/api.service';
 import { TemplatePreview, TenantTypeDetail } from '../core/models';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, submit, whenChanged } from '../shared/forms';
+import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { TenantLinkPipe, problemText } from '../shared/ui';
 
@@ -234,7 +234,7 @@ export class TypePage {
   /** The type being worked on: answers for another (the page reused) are dropped. */
   private readonly at = computed(() => `${this.tenantId()}|${this.key()}`);
   /** Saves and moves still running, for the type they were sent for. */
-  private pending: Subscription[] = [];
+  private readonly pending = new Pending();
   /** Which template the editor holds (another channel or locale fills it afresh), and the text it was filled with. */
   private held = '';
 
@@ -274,8 +274,7 @@ export class TypePage {
     // Another type (the page reused): start from its first channel with a template.
     whenChanged(() => this.at(), () => {
       // Whatever the last type's saves and moves answer is no longer this page's.
-      this.pending.forEach(s => s.unsubscribe());
-      this.pending = [];
+      this.pending.cancel();
       this.busy.set(false);
       this.channel.set(null);
       this.locale.set(DEFAULT_LOCALE);
@@ -318,11 +317,6 @@ export class TypePage {
     }
   }
 
-  /** A save or move for this type; dropped if the page moves on to another. */
-  private track(s: Subscription): void {
-    this.pending = [...this.pending.filter(p => !p.closed), s];
-  }
-
   protected groupName(key: string): string {
     const group = this.groups.value()?.find(g => g.key === key);
     return group ? `${group.name} (${key})` : key;
@@ -361,7 +355,7 @@ export class TypePage {
   protected save(): void {
     const t = this.template.value();
     if (!t) return;
-    this.track(submit(this.api.putTemplate(this.tenantId(), this.key(), t.channel, t.locale, this.body()), this.busy, this.errors, () => {
+    this.pending.track(submit(this.api.putTemplate(this.tenantId(), this.key(), t.channel, t.locale, this.body()), this.busy, this.errors, () => {
       this.saved.set('Saved: the tenant\'s own from now on.');
       this.template.reload();
       this.detail.reload();
@@ -371,7 +365,7 @@ export class TypePage {
   protected remove(): void {
     const t = this.template.value();
     if (!t) return;
-    this.track(submit(this.api.deleteTemplate(this.tenantId(), this.key(), t.channel, t.locale), this.busy, this.errors, () => {
+    this.pending.track(submit(this.api.deleteTemplate(this.tenantId(), this.key(), t.channel, t.locale), this.busy, this.errors, () => {
       this.confirmingRemove.set(false);
       this.saved.set('The application\'s template is in effect again.');
       this.template.reload();
@@ -382,7 +376,7 @@ export class TypePage {
   /** The group the type's items go to here: '' puts it back in the one it declares. Open items move at once. */
   protected move(group: string): void {
     this.moved.set('');
-    this.track(submit(this.api.moveType(this.tenantId(), this.key(), group || null), this.busy, this.groupErrors, answer => {
+    this.pending.track(submit(this.api.moveType(this.tenantId(), this.key(), group || null), this.busy, this.groupErrors, answer => {
       this.moved.set(`Its items go to ${this.groupName(answer.group)} now; ${answer.itemsMoved} open item(s) moved.`);
       this.detail.reload();
       this.groups.reload();

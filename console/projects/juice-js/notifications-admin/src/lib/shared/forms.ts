@@ -76,13 +76,30 @@ export function submit<T>(call: Observable<T>, busy: WritableSignal<boolean>, er
  * `done` (on success) or `failed`.
  */
 export function rowAction(call: Observable<unknown>, o: { busy: WritableSignal<boolean>; error: WritableSignal<string>; disarm: () => void;
-  done: () => void; failed?: () => void }): void {
+  done: () => void; failed?: () => void }): Subscription {
   o.busy.set(true);
   o.error.set('');
-  call.subscribe({
+  return call.subscribe({
     next: () => { o.busy.set(false); o.disarm(); o.done(); },
     error: e => { o.busy.set(false); o.disarm(); o.error.set(problemText(e)); o.failed?.(); },
   });
+}
+
+/**
+ * Saves still running for what a page shows now: `cancel` drops their answers when it moves on (another tenant, type, subscriber or
+ * group), so one sent for the last never lands on the next.
+ */
+export class Pending {
+  private running: Subscription[] = [];
+
+  track(s: Subscription): void {
+    this.running = [...this.running.filter(p => !p.closed), s];
+  }
+
+  cancel(): void {
+    this.running.forEach(s => s.unsubscribe());
+    this.running = [];
+  }
 }
 
 /**

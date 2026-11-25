@@ -309,10 +309,31 @@ namespace Juice.Notifications.People
                                  where m.TenantId == tenantId && m.GroupId == found.Id
                                  orderby s.Id
                                  select s).AsNoTracking().ToListAsync(ct);
-            var ids = members.Select(s => s.Id).ToArray();
+            return await ViewsAsync(tenantId, members, ct);
+        }
+
+        /// <summary>The topic's subscribers (those an admin added and those who joined themselves), or null when there is no such topic.</summary>
+        public async Task<IReadOnlyList<SubscriberView>?> TopicSubscribersAsync(Guid tenantId, string key, CancellationToken ct)
+        {
+            var found = await db.Topics.AsNoTracking().SingleOrDefaultAsync(t => t.TenantId == tenantId && t.Key == key, ct);
+            if (found is null)
+            {
+                return null;
+            }
+            var subscribers = await (from t in db.TopicSubscriptions
+                                     join s in db.Subscribers on new { t.TenantId, Id = t.SubscriberId } equals new { s.TenantId, s.Id }
+                                     where t.TenantId == tenantId && t.TopicId == found.Id
+                                     orderby s.Id
+                                     select s).AsNoTracking().ToListAsync(ct);
+            return await ViewsAsync(tenantId, subscribers, ct);
+        }
+
+        private async Task<IReadOnlyList<SubscriberView>> ViewsAsync(Guid tenantId, List<Subscriber> subscribers, CancellationToken ct)
+        {
+            var ids = subscribers.Select(s => s.Id).ToArray();
             var aliases = (await db.SubscriberAliases.AsNoTracking().Where(a => a.TenantId == tenantId && ids.Contains(a.SubscriberId)).ToListAsync(ct))
                 .ToLookup(a => a.SubscriberId);
-            return members.Select(s => SubscriberQueries.View(s, aliases[s.Id])).ToList();
+            return subscribers.Select(s => SubscriberQueries.View(s, aliases[s.Id])).ToList();
         }
 
         public async Task<IReadOnlyList<TopicView>> TopicsAsync(Guid tenantId, CancellationToken ct)
