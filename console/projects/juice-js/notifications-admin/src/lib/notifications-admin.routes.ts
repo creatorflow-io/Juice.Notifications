@@ -1,6 +1,6 @@
 import { Routes } from '@angular/router';
 import { Menus } from '@juice-js/core';
-import { goGuard, homeGuard, tenantGuard } from './core/guards';
+import { goGuard, homeGuard, platformGuard, tenantGuard } from './core/guards';
 import { under } from './core/options';
 
 function page(path: string, title: string, load: Routes[number]['loadComponent']): Routes[number] {
@@ -16,6 +16,9 @@ export const NOTIFICATIONS_ADMIN_ROUTES: Routes = [
   { path: '', pathMatch: 'full', canActivate: [homeGuard], children: [] },
   page('no-access', 'No access', () => import('./pages/no-access.page').then(m => m.NoAccessPage)),
   { path: 'go', children: [{ path: '**', canActivate: [goGuard], children: [] }] },
+  // The platform's, outside any tenant: platform admins only (reached from the tenant bar, or the home when no tenant is linked yet).
+  { ...page('applications', 'Applications', () => import('./pages/applications.page').then(m => m.ApplicationsPage)), canActivate: [platformGuard] },
+  { ...page('applications/:key', 'Application', () => import('./pages/application.page').then(m => m.ApplicationPage)), canActivate: [platformGuard] },
   {
     path: 'tenants/:tenantId',
     canActivate: [tenantGuard],
@@ -44,13 +47,15 @@ export const NOTIFICATIONS_ADMIN_ROUTES: Routes = [
       page('groups', 'Groups', () => import('./pages/groups.page').then(m => m.GroupsPage)),
       page('topics', 'Topics', () => import('./pages/topics.page').then(m => m.TopicsPage)),
       page('resolvers', 'Resolvers', () => import('./pages/resolvers.page').then(m => m.ResolversPage)),
+      page('settings', 'Settings', () => import('./pages/settings.page').then(m => m.SettingsPage)),
     ],
   },
 ];
 
 /**
  * The side menu (juice-layout), linking under `basePath`. Tenant pages link through `go/…`, so one menu serves every tenant. Investigation
- * first; configuration grouped after (phase-4c-plan §4). Each milestone adds its pages here.
+ * first; configuration grouped after (phase-4c-plan §4). The platform's applications are not in it: the menu is the same for everyone and can't
+ * follow the access read, so platform admins reach them from the tenant bar.
  */
 export function notificationsAdminMenus(basePath = '/', order = 1): Menus {
   const menus: Menus = [
@@ -76,6 +81,7 @@ export function notificationsAdminMenus(basePath = '/', order = 1): Menus {
       { id: 'topics', label: 'Topics', icon: 'campaign', routerLink: goLink(basePath, 'topics') },
       { id: 'resolvers', label: 'Resolvers', icon: 'person_search', routerLink: goLink(basePath, 'resolvers') },
     ]),
+    { id: 'settings', label: 'Settings', icon: 'settings', routerLink: goLink(basePath, 'settings') },
   ];
   return menus.map((menu, index) => ({ ...menu, order: order + index }));
 }

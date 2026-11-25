@@ -14,16 +14,16 @@ import { problemText } from './ui';
  * conflict, a refusal) as one sentence. A change raced by another (`concurrent_change`) says to reload.
  */
 export class FormErrors {
-  private readonly problem = signal<{ body: Problem | null; text: string } | null>(null);
+  private readonly problem = signal<{ body: Problem | null; text: string; local?: boolean } | null>(null);
 
   /** The API's errors, by pointer; empty when it gave none. */
   readonly fields = computed(() => this.problem()?.body?.errors ?? []);
   /** Whether the save lost a race: the row changed (or appeared) since the form read it. */
   readonly conflict = computed(() => this.problem()?.body?.code === 'concurrent_change');
-  /** The sentence for the whole form: the API's own, or the reload advice for a conflict. */
+  /** The sentence for the whole form: the API's own, or the reload advice for a conflict; none for the form's own refusal (nothing was sent). */
   readonly summary = computed(() => {
     const p = this.problem();
-    if (!p) return '';
+    if (!p || p.local) return '';
     if (this.conflict()) return 'Someone changed this meanwhile. Reload to see what is there now, then make your change again.';
     return this.fields().length ? 'The API refused some fields: see below.' : p.text;
   });
@@ -35,7 +35,7 @@ export class FormErrors {
 
   /** A pointer's own error, as from the form (a JSON text that doesn't parse, before anything is sent). */
   local(pointer: string, message: string): void {
-    this.problem.set({ body: { errors: [{ pointer, message }] }, text: message });
+    this.problem.set({ body: { errors: [{ pointer, message }] }, text: message, local: true });
   }
 
   clear(): void {

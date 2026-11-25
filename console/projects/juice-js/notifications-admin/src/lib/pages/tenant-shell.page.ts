@@ -3,22 +3,24 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatSelectModule } from '@angular/material/select';
-import { Router, RouterOutlet } from '@angular/router';
+import { Router, RouterLink, RouterOutlet } from '@angular/router';
 import { AccessService, AccessTenant, EMPTY_ACCESS, sameId } from '../core/access.service';
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
 
 /**
  * A tenant's pages (`/tenants/{id}/…`), under a bar naming the tenant. Someone who administers more than one picks another there and
- * stays on the same page in it (phase-4c-plan p4c-d2); a tenant admin has one and sees only its name.
+ * stays on the same page in it (phase-4c-plan p4c-d2); a tenant admin has one and sees only its name. A platform admin also finds the
+ * applications here.
  */
 @Component({
   selector: 'na-tenant-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, MatFormFieldModule, MatSelectModule, RouterOutlet],
+  imports: [FormsModule, MatFormFieldModule, MatSelectModule, RouterLink, RouterOutlet],
   styles: `
     .na-tenant-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--mat-sys-outline-variant, #ddd); }
     .na-tenant-bar .label { color: var(--mat-sys-on-surface-variant, #555); font-size: 13px; }
     .na-tenant-bar .name { font-weight: 500; }
+    .na-tenant-bar .platform { margin-left: auto; }
     .na-tenant-bar mat-form-field { width: 440px; }
     .na-tenant-page { padding: 16px; }
   `,
@@ -34,6 +36,9 @@ import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
       } @else if (current(); as t) {
         <span class="name" data-testid="tenant-name">{{ label(t) }}</span>
       }
+      @if (loaded().platformAdmin) {
+        <a class="platform" [routerLink]="applications" data-testid="platform-applications">Applications and their tenants</a>
+      }
     </div>
     <div class="na-tenant-page"><router-outlet /></div>`,
 })
@@ -41,9 +46,11 @@ export class TenantShellPage {
   private readonly access = inject(AccessService);
   private readonly router = inject(Router);
   private readonly base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
+  /** The platform's pages, for a platform admin (the menu, the same for everyone, has none). */
+  protected readonly applications = under(this.base, 'applications');
   readonly tenantId = input.required<string>();
 
-  private readonly loaded = toSignal(this.access.load(), { initialValue: EMPTY_ACCESS });
+  protected readonly loaded = toSignal(this.access.load(), { initialValue: EMPTY_ACCESS });
   // The listed tenants, and this one when it was opened by its link without being listed (a platform admin's, every tenant theirs).
   protected readonly tenants = computed(() => {
     const listed = this.loaded().tenants;

@@ -141,6 +141,18 @@ export interface Group { key: string; name: string; members: number; updatedAt: 
 /** A topic: requests name it to reach its subscribers; self-service ones people join and leave themselves. */
 export interface Topic { key: string; name: string; selfService: boolean; subscribers: number; updatedAt: string; }
 
+/** A tenant's settings: a null field takes the deployment's default, given beside it. */
+export interface TenantSettings {
+  stormThreshold: number | null; defaultStormThreshold: number; requestRetentionDays: number | null; defaultRequestRetentionDays: number;
+  contentRetentionDays: number | null; defaultContentRetentionDays: number; updatedAt: string | null;
+}
+
+/** An application (platform admins): what sends, as which client and broker user, and for which tenants. */
+export interface Application {
+  id: string; key: string; name: string; clientId: string; brokerUser: string | null; enabled: boolean; tenants: string[]; createdAt: string;
+  updatedAt: string;
+}
+
 export interface AllowlistEntry { destination: string; ports: number[]; managedBy: ManagedBy; updatedAt: string; }
 
 /** A type the tenant receives, at its latest version, and which channels have a template: the application's (`declared`) or its own. */

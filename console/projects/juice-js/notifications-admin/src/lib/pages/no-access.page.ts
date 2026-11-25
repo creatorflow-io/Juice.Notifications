@@ -1,21 +1,21 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { MatButtonModule } from '@angular/material/button';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { of, switchMap } from 'rxjs';
 import { AccessService, EMPTY_ACCESS } from '../core/access.service';
 import { NoAccessReason } from '../core/guards';
-import { NOTIFICATIONS_ADMIN_OPTIONS, normalizeBasePath } from '../core/options';
+import { NOTIFICATIONS_ADMIN_OPTIONS, normalizeBasePath, under } from '../core/options';
 
 /**
  * Where the guards send someone with nothing to open here (phase-4c-plan p4c-d3), saying why: the access couldn't be read; the tenant in a
- * link isn't theirs (or isn't a tenant id); or they administer no tenant at all (a platform admin: no tenant has a linked application yet).
+ * link isn't theirs (or isn't a tenant id); the platform's pages without being a platform admin; or they administer no tenant at all (a platform admin: no tenant has a linked application yet).
  * "Try again" reads the access afresh and goes back to the link they opened. The Console is for administration: a person's own
  * notifications are in their product's bell.
  */
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MatButtonModule],
+  imports: [MatButtonModule, RouterLink],
   styles: `:host { display: block; max-width: 640px; padding: 32px 16px; }`,
   template: `
     <h1>No access here</h1>
@@ -36,8 +36,16 @@ import { NOTIFICATIONS_ADMIN_OPTIONS, normalizeBasePath } from '../core/options'
         <p data-testid="no-access-starting">This tenant is still being set up. Try again in a moment.</p>
       }
       @case ('platform') {
-        <p data-testid="no-access-platform">No tenant has a linked application yet. Register an application and link it to a tenant; its
-          notifications are then administered here.</p>
+        @if (answer().platformAdmin) {
+          <p data-testid="no-access-platform">No tenant has a linked application yet. <a [routerLink]="applications">Register an application</a>
+            and link it to a tenant; its notifications are then administered here.</p>
+        } @else {
+          <p data-testid="no-access-platform">No tenant has a linked application yet. Once a platform admin registers one and links it to a
+            tenant, its notifications are administered here.</p>
+        }
+      }
+      @case ('platform-only') {
+        <p data-testid="no-access-platform-only">Applications and their tenants are kept by platform admins, and your account isn't one.</p>
       }
       @default {
         <p data-testid="no-access">Your account doesn't administer the notifications of any tenant. Your own notifications are in the bell of
@@ -50,12 +58,13 @@ export class NoAccessPage {
   private readonly access = inject(AccessService);
   private readonly router = inject(Router);
   private readonly base = normalizeBasePath(inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath);
+  protected readonly applications = under(this.base, 'applications');
   /** The guard's reason, and the link the user opened (query parameters). */
   readonly reason = input<NoAccessReason>();
   readonly returnUrl = input<string>();
 
   // Read only for "nothing to administer", where the answer picks the text: the other reasons name it already.
-  private readonly answer = toSignal(toObservable(this.reason).pipe(switchMap(r => r === 'none' || !r ? this.access.load() : of(EMPTY_ACCESS))),
+  protected readonly answer = toSignal(toObservable(this.reason).pipe(switchMap(r => r === 'none' || !r ? this.access.load() : of(EMPTY_ACCESS))),
     { initialValue: EMPTY_ACCESS });
   protected readonly shown = computed(() => {
     const reason = this.reason();

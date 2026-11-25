@@ -218,6 +218,33 @@ unless the owner says otherwise.
     planner and the resolver PUT do; the server checks a local user's id itself (the Console's pattern is a hint); the subscribers
     page's 50 a page is under the API's 200. `people.mjs` grows to 31 checks; the other seven journeys pass.
 - **M41 Settings and platform** (`p4c-08`): tenant settings; applications and tenant links for platform admins.
+  - *As built (25 Nov 2026):* no API change: the pages use `GET/PUT …/settings` and `/api/v1/applications` as they are. **Settings**
+    (`settings`, a top-level menu item): the storm threshold and the two retentions, each empty for the deployment's default (shown
+    beside it); checked as the API checks them (content no longer than requests, as typed or by default) before sending; a reload keeps
+    what was typed. **Applications** (`applications`, `applications/{key}`, outside `/tenants`, `platformGuard`): list and add (key,
+    name, client id, broker user; a key taken and the API's unnamed-field rules said on their fields); an application's details (only the
+    fields changed are sent; an emptied broker user is sent as `""`, removed), enabled or not, and its tenants (link by id, with the known
+    tenants offered; unlink after a confirmation; "has sent for this tenant" said on the row); the access is read again after a link or
+    unlink, so the switcher follows. The service's own application (`notifications`) is only shown. **Reaching them**: not in the side menu
+    (juice-layout's menu is the same for everyone and filters only a group's children, once, before the access is read), so a platform
+    admin has "Applications and their tenants" in the tenant bar; the home sends a platform admin with no tenant yet to the applications
+    (where the first is linked), and the no-access page links there; anyone else gets the no-access page (`platform-only`). **Also fixed**
+    (all pages, since M38): a form's own refusal (a field checked before sending) showed the sentence "The API refused some fields" though
+    nothing was sent; it now has no sentence (`FormErrors.local`). **Journey** `platform.mjs` (19 checks): tess refused content longer
+    than requests, saves the three settings and empties them back to the defaults, has no applications link and is refused the page; paul
+    goes there from the tenant bar, adds an application (a key taken refused on the field with no API sentence, a client id in use
+    refused by the API), renames it, removes its broker user and disables it, links and unlinks the tests' tenant (a bad id refused on the
+    field), is refused the sample application's link (it has sent for the tenant), and sees the service's own application read only. The
+    applications stay (the API deletes none). Not walked: the home for a platform admin with no tenant at all (the stack always has some).
+  - *Review round 1 (25 Nov 2026):* 2 findings, both fixed. An add still running when the user left the applications page took them to
+    the new application from wherever they had gone; the add is now dropped with the page (`platform.mjs` delays the add and moves to
+    the sample application: 20 checks). The no-access page's "no tenant has a linked application yet" linked anyone with every tenant
+    to the applications, though a host's `ITenantAccess` can grant every tenant without the platform admin role; the link is now only
+    for a platform admin (not walked: the stack has no such user).
+  - *Review round 2 (25 Nov 2026):* 2 findings, both fixed. Requests kept fewer days than content's default take their content with
+    them (the sweep removes the deliveries), but an empty content field said it kept the default: its hint now gives the days it comes to.
+    A refused unlink's sentence, and a row armed to unlink, stayed through a later link; a link drops both. `platform.mjs` checks each
+    (22 checks).
 - **M42 Proof points and acceptance** (`p4c-g1` … `p4c-g3`): §6, `phase-4c-acceptance.md`, a demo script, and design.md updated (§4.2,
   §15 layout, §16 phases, §19 decision 21).
 

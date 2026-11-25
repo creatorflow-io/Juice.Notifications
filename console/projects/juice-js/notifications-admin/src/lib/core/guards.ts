@@ -5,10 +5,11 @@ import { Access, AccessService } from './access.service';
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from './options';
 
 /**
- * Why the no-access page is shown: nothing to administer, not the user's tenant (or not a tenant id), or the access couldn't be read; or,
- * from the API's tenant refusals, a tenant the deployment doesn't know, one not active, or one still starting.
+ * Why the no-access page is shown: nothing to administer, not the user's tenant (or not a tenant id), the platform's pages without being a
+ * platform admin, or the access couldn't be read; or, from the API's tenant refusals, a tenant the deployment doesn't know, one not active,
+ * or one still starting.
  */
-export type NoAccessReason = 'none' | 'tenant' | 'unavailable' | 'unknown' | 'inactive' | 'starting';
+export type NoAccessReason = 'none' | 'tenant' | 'platform-only' | 'unavailable' | 'unknown' | 'inactive' | 'starting';
 
 /** The no-access page, saying why, with the link the user opened (its "try again" goes back there). */
 function noAccess(router: Router, base: string, access: Access, reason: NoAccessReason, returnUrl: string): UrlTree {
@@ -17,14 +18,18 @@ function noAccess(router: Router, base: string, access: Access, reason: NoAccess
   return tree;
 }
 
-/** The Console's home: the tenant being worked in (or the first the user administers), else the no-access page. */
+/**
+ * The Console's home: the tenant being worked in (or the first the user administers); for a platform admin with none yet (no tenant has a
+ * linked application), the applications, where one is linked; else the no-access page.
+ */
 export const homeGuard: CanActivateFn = (_, state) => {
   const access = inject(AccessService);
   const router = inject(Router);
   const base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
   return access.load().pipe(map(a => {
     const tenant = access.pick(a);
-    return tenant ? router.parseUrl(under(base, `tenants/${tenant}`)) : noAccess(router, base, a, 'none', state.url);
+    if (tenant) return router.parseUrl(under(base, `tenants/${tenant}`));
+    return a.platformAdmin ? router.parseUrl(under(base, 'applications')) : noAccess(router, base, a, 'none', state.url);
   }));
 };
 
@@ -58,4 +63,12 @@ export const tenantGuard: CanActivateFn = (route, state) => {
     access.use(tenant);
     return true;
   }));
+};
+
+/** The platform's pages (applications): platform admins only, as the API requires. */
+export const platformGuard: CanActivateFn = (_, state) => {
+  const access = inject(AccessService);
+  const router = inject(Router);
+  const base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
+  return access.load().pipe(map(a => a.platformAdmin || noAccess(router, base, a, 'platform-only', state.url)));
 };

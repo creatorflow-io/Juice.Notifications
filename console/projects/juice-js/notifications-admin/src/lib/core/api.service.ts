@@ -4,7 +4,7 @@ import { Observable, catchError, shareReplay, throwError } from 'rxjs';
 import {
   AllowlistEntry, Correlation, CorrelationListItem, Delivery, DeliveryDetail, EscalationPolicy, EscalationStep, Integration, Match, Mute,
   DisplayGroup, Group, MovedType, ResolverKind, Subscriber, Topic, NotificationDetail, NotificationListItem, Overview, Page, Provider, Recipient, ReplayResult, Resolver, RetryResult, Route, Storm, Target,
-  TemplatePreview, TenantTemplate, TenantType, TenantTypeDetail,
+  Application, TemplatePreview, TenantSettings, TenantTemplate, TenantType, TenantTypeDetail,
 } from './models';
 import { NOTIFICATIONS_ADMIN_OPTIONS } from './options';
 
@@ -16,7 +16,7 @@ export interface DeliveryFilter {
   status?: string; channel?: string; integration?: string; type?: string; request?: string; from?: string; to?: string;
 }
 
-/** The tenant's reads and actions the pages use, each under `/api/v1/tenants/{tenantId}`. */
+/** The tenant's reads and actions the pages use, each under `/api/v1/tenants/{tenantId}`; and the platform's applications. */
 @Injectable({ providedIn: 'root' })
 export class NotificationsAdminApi {
   private readonly http = inject(HttpClient);
@@ -253,6 +253,46 @@ export class NotificationsAdminApi {
 
   unsubscribe(tenantId: string, key: string, subscriberId: string): Observable<void> {
     return this.http.delete<void>(this.url(tenantId, `topics/${encodeURIComponent(key)}/subscribers/${encodeURIComponent(subscriberId)}`));
+  }
+
+  // Settings and platform (M41).
+  settings(tenantId: string): Observable<TenantSettings> {
+    return this.http.get<TenantSettings>(this.url(tenantId, 'settings'));
+  }
+
+  /** Replaces all three: a null field returns to the deployment's default. */
+  putSettings(tenantId: string, body: { stormThreshold: number | null; requestRetentionDays: number | null; contentRetentionDays: number | null }):
+    Observable<TenantSettings> {
+    return this.http.put<TenantSettings>(this.url(tenantId, 'settings'), body);
+  }
+
+  private platform(path: string): string {
+    return `${this.apiBase}/api/v1/${path}`;
+  }
+
+  applications(): Observable<Application[]> {
+    return this.http.get<Application[]>(this.platform('applications'));
+  }
+
+  application(key: string): Observable<Application> {
+    return this.http.get<Application>(this.platform(`applications/${encodeURIComponent(key)}`));
+  }
+
+  createApplication(body: { key: string; name: string; clientId: string; brokerUser: string | null }): Observable<Application> {
+    return this.http.post<Application>(this.platform('applications'), body);
+  }
+
+  /** Only the fields given change; a broker user of "" removes it. */
+  updateApplication(key: string, body: { name?: string; clientId?: string; enabled?: boolean; brokerUser?: string }): Observable<Application> {
+    return this.http.put<Application>(this.platform(`applications/${encodeURIComponent(key)}`), body);
+  }
+
+  linkTenant(key: string, tenantId: string): Observable<Application> {
+    return this.http.put<Application>(this.platform(`applications/${encodeURIComponent(key)}/tenants/${encodeURIComponent(tenantId)}`), null);
+  }
+
+  unlinkTenant(key: string, tenantId: string): Observable<Application> {
+    return this.http.delete<Application>(this.platform(`applications/${encodeURIComponent(key)}/tenants/${encodeURIComponent(tenantId)}`));
   }
 
   allowlist(tenantId: string): Observable<AllowlistEntry[]> {
