@@ -87,6 +87,10 @@ namespace Juice.Notifications.Delivering
             => db.DeliveryItems.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.RecipientId == row.Id);
 
         /// <summary>A recipient's outcome once delivery planning is through with it (Planned: it has deliveries).</summary>
+        /// <summary>Whether a delivery planned now is dry (phase-5-plan I67): fixed at planning, so a backlog keeps the mode it was planned in.</summary>
+        internal static bool DryRun(StageContext context)
+            => context.Services.GetService<Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions>>()?.Value.DryRun ?? false;
+
         private static void Counted(StageContext context, NotificationRecipient row)
             => context.AfterCommit.Add(() => Telemetry.Recipients.Add(1, new KeyValuePair<string, object?>("outcome", row.Outcome.ToString())));
 
@@ -161,6 +165,7 @@ namespace Juice.Notifications.Delivering
                     Id = id, TenantId = row.TenantId, Channel = destination.Channel, IntegrationId = destination.Integration.Id, DestinationKey = destination.Key,
                     DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0, Locale = template?.Locale ?? Types.TypeRules.DefaultLocale,
                     RendererVersion = TemplateRenderer.Version, Content = content, Priority = request.Priority, Mandatory = type.Mandatory, CreatedAt = context.Now,
+                    DryRun = DryRun(context),
                     Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed, FailureCheckDue = problem is not null,
                     FailureCategory = problem is null ? null : category,
                     LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? context.Now : null, CompletedAt = problem is null ? null : context.Now,

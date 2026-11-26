@@ -208,6 +208,15 @@ namespace Juice.Notifications.Delivering
                 return;
             }
 
+            if (row.DryRun)
+            {
+                // Dry run (phase-5-plan I67): every check a send makes has passed, and the rendered body is on the row. Recorded as what would have
+                // gone out; nothing is sent and no attempt is made, so the provider never sees it.
+                row.FirstAttemptAt ??= context.Now;
+                Finish(context, row, DeliveryStatus.WouldSend, null, null, context.Now);
+                return;
+            }
+
             // The producer's trace continues here, so the provider call (a webhook's HTTP request carries it on) links back to the request.
             using var activity = Telemetry.StartStep("notifications.dispatch", origin?.TraceParent, ActivityKind.Client);
             activity?.SetTag("notifications.delivery_id", row.Id);

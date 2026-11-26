@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using static Juice.Notifications.IntegrationTests.DeliveryTests;
 
@@ -431,6 +432,41 @@ namespace Juice.Notifications.IntegrationTests
                 await Task.Delay(50, Ct);
             }
             Assert.Fail("The release never waited on the other transaction.");
+        }
+
+        /// <summary>
+        /// An embedded host that registers its own <c>IOptions&lt;DeliveryOptions&gt;</c> in dry run, past the settings (the M44-0 review's case):
+        /// its deliveries end as would-send and the provider is never called, because the planner and the dispatcher read the same resolved options.
+        /// </summary>
+        [Fact]
+        public async Task A_host_registering_its_own_dry_run_options_records_would_send_and_sends_nothing()
+        {
+            LocalStack.RequireAvailable();
+            var provider = new ScriptedProvider(Channels.Webhook, "fake");
+            var provisioning = $$"""
+                { "tenants": { "{{Tenant}}": {
+                    "integrations": { "fake-hooks": { "channel": "webhook", "kind": "fake", "targets": { "fake-target": { "address": "https://hooks.example.com/in" } } } },
+                    "routes": { "all": { "match": { "type": "host.*" }, "targets": ["fake-target"] } }
+                } } }
+                """;
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: true, services: s =>
+            {
+                s.AddSingleton<INotificationProvider>(provider);
+                s.Replace(ServiceDescriptor.Singleton<Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions>>(
+                    Microsoft.Extensions.Options.Options.Create(new Providers.DeliveryOptions { DryRun = true })));
+            }, provisioning: provisioning);
+            var request = await host.InTransactionAsync(async (_, client) => (await client.SendAsync(Notification("dry-1"), Ct)).Id);
+
+            Delivery? delivery = null;
+            for (var i = 0; i < 300 && delivery?.Status != DeliveryStatus.WouldSend; i++)
+            {
+                await Task.Delay(100, Ct);
+                await using var db = _database.Context();
+                delivery = await db.Deliveries.AsNoTracking().SingleOrDefaultAsync(d => db.DeliveryItems.Any(x => x.DeliveryId == d.Id && x.RequestId == request), Ct);
+            }
+            Assert.NotNull(delivery);
+            Assert.Equal((DeliveryStatus.WouldSend, true, 0), (delivery.Status, delivery.DryRun, delivery.Attempts));
+            Assert.Equal(0, provider.Sends);
         }
 
         [Fact]
