@@ -23,6 +23,16 @@ namespace Juice.Notifications.Tests
         [InlineData(ManagedBy.WebhooksAlias, ManagedBy.WebhooksAlias, null)]
         [InlineData(ManagedBy.Api, ManagedBy.WebhooksAlias, ErrorCodes.ManagedByApi)]
         [InlineData(ManagedBy.Configuration, ManagedBy.WebhooksAlias, ErrorCodes.ManagedByConfiguration)]
+        // The alias's configuration (M46c): every other writer is refused as by a deployment's configuration; it keeps to its own rows, and takes
+        // over the alias's (an endpoint made through the producer's API, then declared in its configuration).
+        [InlineData(ManagedBy.AliasConfig, null, ErrorCodes.ManagedByConfiguration)]
+        [InlineData(ManagedBy.AliasConfig, ManagedBy.WebhooksAlias, ErrorCodes.ManagedByConfiguration)]
+        [InlineData(ManagedBy.AliasConfig, ManagedBy.Configuration, ErrorCodes.ManagedByConfiguration)]
+        [InlineData(ManagedBy.AliasConfig, ManagedBy.AliasConfig, null)]
+        [InlineData(ManagedBy.WebhooksAlias, ManagedBy.AliasConfig, null)]
+        [InlineData(null, ManagedBy.AliasConfig, null)]
+        [InlineData(ManagedBy.Api, ManagedBy.AliasConfig, ErrorCodes.ManagedByApi)]
+        [InlineData(ManagedBy.Configuration, ManagedBy.AliasConfig, ErrorCodes.ManagedByConfiguration)]
         public void Each_owner_keeps_to_its_own_rows(string? owner, string? caller, string? refused)
         {
             var outcome = ConfigurationHandlers.Owned<bool>(owner, caller, "route ops");
@@ -38,6 +48,7 @@ namespace Juice.Notifications.Tests
         {
             Assert.Equal(ManagedBy.Api, ConfigurationHandlers.Caller(null));
             Assert.Equal(ManagedBy.WebhooksAlias, ConfigurationHandlers.Caller(ManagedBy.WebhooksAlias));
+            Assert.Equal(ManagedBy.AliasConfig, ConfigurationHandlers.Caller(ManagedBy.AliasConfig));
             Assert.Throws<ArgumentException>(() => ConfigurationHandlers.Caller(ManagedBy.Service));
             Assert.Throws<ArgumentException>(() => ConfigurationHandlers.Caller("someone"));
         }

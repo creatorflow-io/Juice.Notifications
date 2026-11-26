@@ -131,7 +131,7 @@ namespace Juice.Notifications.Configuration
         internal static bool IsSecretRef(string? value, Providers.DeliveryOptions options, string? owner) => owner switch
         {
             ManagedBy.Configuration => IsProvisionedSecretRef(value),
-            ManagedBy.WebhooksAlias => value is null || value.Length <= 500 && !value.Contains('\0') && Providers.SecretReferences.IsAllowedFromAlias(value, options),
+            ManagedBy.WebhooksAlias or ManagedBy.AliasConfig => value is null || value.Length <= 500 && !value.Contains('\0') && Providers.SecretReferences.IsAllowedFromAlias(value, options),
             _ => IsSecretRef(value, options),
         };
 
@@ -149,7 +149,7 @@ namespace Juice.Notifications.Configuration
             => IsSecretRef(reference, options, owner) ? null : new FieldError(pointer, $"{what} is one only the deployment may name: {remedy}");
 
         internal static string SecretRefRule(string what, Providers.DeliveryOptions options, string? owner)
-            => owner == ManagedBy.WebhooksAlias
+            => owner is ManagedBy.WebhooksAlias or ManagedBy.AliasConfig
                 ? $"{what} is named, never sent: " + (options.AliasSecretEnvPrefix is { Length: > 0 } p ? $"env:{p}NAME" : "no environment variable")
                     + (options.AliasSecretDirectory is { Length: > 0 } ? ", or file: in the alias's secret folder" : "") + " (the alias's limits, Delivery:AliasSecret*)."
                 : SecretRefRule(what, options, owner == ManagedBy.Configuration);
@@ -325,13 +325,18 @@ namespace Juice.Notifications.Configuration
         internal static Outcome<T>? Owned<T>(string? owner, string? caller, string what)
         {
             var by = Caller(caller);
-            if (owner is null || owner == by || owner == ManagedBy.Service || owner == ManagedBy.Api && by == ManagedBy.Configuration)
+            // Configuration takes over the API's rows, as the provisioning file always has; the alias's configuration takes over the alias's (an
+            // endpoint first made through the producer's API, then declared in its configuration), as legacy's provisioning took over its API rows.
+            if (owner is null || owner == by || owner == ManagedBy.Service || owner == ManagedBy.Api && by == ManagedBy.Configuration
+                || owner == ManagedBy.WebhooksAlias && by == ManagedBy.AliasConfig)
             {
                 return null;
             }
             return owner switch
             {
                 ManagedBy.Configuration => ConfigManaged<T>(what),
+                ManagedBy.AliasConfig => Outcome<T>.Conflict(ErrorCodes.ManagedByConfiguration,
+                    $"The {what} comes from the producer's deployment configuration (the webhooks alias's); change it there."),
                 ManagedBy.WebhooksAlias => Outcome<T>.Conflict(ErrorCodes.ManagedByAlias,
                     $"The {what} belongs to the webhooks alias until cutover; change it through /webhooks."),
                 _ => Outcome<T>.Conflict(ErrorCodes.ManagedByApi, $"The {what} was made through the API; it isn't {by}'s to change."),
@@ -342,8 +347,8 @@ namespace Juice.Notifications.Configuration
         internal static string Caller(string? managedBy) => managedBy switch
         {
             null or ManagedBy.Api => ManagedBy.Api,
-            ManagedBy.Configuration or ManagedBy.WebhooksAlias => managedBy,
-            _ => throw new ArgumentException($"A setup write is made by the API (null), {ManagedBy.Configuration} or {ManagedBy.WebhooksAlias}, not '{managedBy}'.", nameof(managedBy)),
+            ManagedBy.Configuration or ManagedBy.WebhooksAlias or ManagedBy.AliasConfig => managedBy,
+            _ => throw new ArgumentException($"A setup write is made by the API (null), {ManagedBy.Configuration}, {ManagedBy.WebhooksAlias} or {ManagedBy.AliasConfig}, not '{managedBy}'.", nameof(managedBy)),
         };
         private static Outcome<T> ServiceManaged<T>()
             => Outcome<T>.Conflict(ErrorCodes.ManagedByService, $"The integration {Inbox.InboxIntegrations.Key} is the service's own (the inbox); it can't be changed or deleted, and it has no targets.");
@@ -585,6 +590,7 @@ namespace Juice.Notifications.Configuration
                             ManagedBy.Configuration => $"its targets are set in the deployment's configuration, under {integration.Key}",
                             // An alias row isn't the API's to give a secret: its targets come from the producer's own API (M46-3 review).
                             ManagedBy.WebhooksAlias => $"its targets are set through the producer's own API, which manages {integration.Key}",
+                            ManagedBy.AliasConfig => $"its targets are set in the producer's deployment configuration, under {integration.Key}",
                             _ => $"give {integration.Key} a secret of yours first (its secretRef), then its targets",
                         }) is { } integrationOutOfReach)
                 {

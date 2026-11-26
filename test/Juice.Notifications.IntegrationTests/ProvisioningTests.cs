@@ -309,6 +309,45 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal((ManagedBy.Configuration, 0, "new@juice.local"), (legacy.ManagedBy, legacy.Priority, legacy.Settings.GetProperty("from").GetString()));
         }
 
+        /// <summary>
+        /// Rows the webhooks alias wrote from its producer's own configuration (<c>alias-config</c>, M46c) are neither this file's nor the API's:
+        /// loading a file that doesn't list them leaves them, a file naming their key is refused, and the admin API and the alias's own API get
+        /// <c>managed_by_configuration</c>, as legacy answered for a configuration-declared endpoint.
+        /// </summary>
+        [Fact]
+        public async Task Alias_config_rows_are_left_alone_by_the_file_the_api_and_the_alias()
+        {
+            LocalStack.RequireAvailable();
+            async Task<Outcome<T>> SendAsync<T>(Juice.MediatR.IRequest<Outcome<T>> command)
+            {
+                await using var scope = _app.Services.CreateAsyncScope();
+                using var context = NotificationsMessageContext.Begin("test");
+                return (await scope.ServiceProvider.GetRequiredService<Juice.MediatR.IMediator>().Send(command, Ct))!;
+            }
+            var settings = JsonElement.Parse("""{ "server": "local", "from": "alias@juice.local" }""");
+            var made = await SendAsync(new PutIntegration(Tenant, "from-alias-file", "email", "smtp", settings, null, 0, true) { ManagedBy = ManagedBy.AliasConfig });
+            Assert.True(made.Kind is OutcomeKind.Ok or OutcomeKind.Created, $"{made.Kind} {made.Code} {made.Message}");
+
+            await ProvisionAsync(Initial);
+
+            using var admin = await AdminAsync();
+            Assert.Equal(ManagedBy.AliasConfig, (await IntegrationsAsync(admin))["from-alias-file"].ManagedBy);
+            var claimed = await Assert.ThrowsAsync<InvalidOperationException>(() => ProvisionAsync(Initial.Replace("\"mail\":",
+                "\"from-alias-file\": { \"channel\": \"email\", \"kind\": \"smtp\", \"settings\": { \"server\": \"local\", \"from\": \"file@juice.local\" } },\n\"mail\":")));
+            Assert.Contains("from-alias-file", claimed.Message);
+            using (var edit = await admin.PutAsJsonAsync($"{Url}/integrations/from-alias-file", new PutIntegrationBody("email", "smtp", null, null, null, false), Ct))
+            {
+                Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.ManagedByConfiguration), (edit.StatusCode, await CodeAsync(edit)));
+            }
+            Assert.Equal(ErrorCodes.ManagedByConfiguration,
+                (await SendAsync(new PutIntegration(Tenant, "from-alias-file", null, null, null, null, null, false) { ManagedBy = ManagedBy.WebhooksAlias })).Code);
+            Assert.Equal(ErrorCodes.ManagedByConfiguration, (await SendAsync(new DeleteIntegration(Tenant, "from-alias-file") { ManagedBy = ManagedBy.WebhooksAlias })).Code);
+            var kept = (await IntegrationsAsync(admin))["from-alias-file"];
+            Assert.Equal((ManagedBy.AliasConfig, true, "alias@juice.local"), (kept.ManagedBy, kept.Enabled, kept.Settings.GetProperty("from").GetString()));
+            // Its own writer changes it, and takes over what the alias made through the producer's API (declared in its configuration later).
+            Assert.Equal(OutcomeKind.Ok, (await SendAsync(new PutIntegration(Tenant, "from-alias-file", null, null, null, null, null, false) { ManagedBy = ManagedBy.AliasConfig })).Kind);
+        }
+
         [Fact]
         public async Task A_file_the_checks_refuse_changes_nothing_and_says_where()
         {
