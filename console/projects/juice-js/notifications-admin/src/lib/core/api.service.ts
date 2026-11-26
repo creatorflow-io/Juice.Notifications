@@ -133,7 +133,7 @@ export class NotificationsAdminApi {
     return this.http.get<Route[]>(this.url(tenantId, 'routes'));
   }
 
-  putRoute(tenantId: string, key: string, body: { match: Match; targets: string[]; enabled: boolean }): Observable<Route> {
+  putRoute(tenantId: string, key: string, body: { match: Match; targets: string[]; enabled: boolean; digestSeconds?: number }): Observable<Route> {
     return this.http.put<Route>(this.url(tenantId, `routes/${encodeURIComponent(key)}`), body);
   }
 

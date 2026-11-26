@@ -104,7 +104,8 @@ export interface Match { type?: string | string[]; labels?: Record<string, strin
 export type Priority = 'low' | 'normal' | 'high' | 'critical';
 export const PRIORITIES: Priority[] = ['low', 'normal', 'high', 'critical'];
 
-export interface Route { key: string; match: Match; targets: string[]; enabled: boolean; managedBy: ManagedBy; updatedAt: string; }
+/** A route; `digestSeconds` (0–3600, phase 5 M46-1): what reaches it goes as one digest per window and type; 0 (or an older API's none) at once. */
+export interface Route { key: string; match: Match; targets: string[]; enabled: boolean; managedBy: ManagedBy; updatedAt: string; digestSeconds?: number; }
 
 export interface Mute {
   id: string; match: Match; startsAt: string; endsAt: string | null; reason: string | null; createdBy: string | null; createdAt: string;
