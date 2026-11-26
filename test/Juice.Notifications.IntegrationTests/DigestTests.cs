@@ -278,6 +278,7 @@ namespace Juice.Notifications.IntegrationTests
         [Theory]
         [InlineData("{\"n\": {{ items | array.size }}}", 1)]
         [InlineData("{\"id\": {{ delivery.id | json.encode }}}", 2)]
+        [InlineData("{\"id\": {{ this.delivery.id | json.encode }}}", 2)] // QA (M46-0): through this
         public async Task A_digest_is_rendered_once_unless_its_template_reads_the_delivery(string body, int renders)
         {
             LocalStack.RequireAvailable();

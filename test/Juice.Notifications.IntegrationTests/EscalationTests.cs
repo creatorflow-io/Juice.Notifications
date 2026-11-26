@@ -304,5 +304,43 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.Equal(3, await check.Deliveries.CountAsync(d => d.IntegrationId == integrationId, Ct));
             }
         }
+
+        /// <summary>
+        /// QA (M46-0): a step that names a missing route by key, planned again (a replanned step), records the unreached route once and fails
+        /// nothing: the step's own record is the only one, as for a route it reaches.
+        /// </summary>
+        [Fact]
+        public async Task A_replanned_step_naming_a_missing_route_records_it_once()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                db.EscalationPolicies.Add(new EscalationPolicy
+                {
+                    TenantId = Tenant, Key = "to-gone", DefinitionHash = "h", UpdatedAt = Seed.Now,
+                    Steps = """[{"afterMinutes":5,"recipients":[{"kind":"route","key":"gone"},{"id":"lead","kind":"group","resolver":"staff"}]}]""",
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+            var (id, _) = await NotificationAsync("to-gone");
+            await DrainAsync<Notification, PlannerStage>("planner");
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            await DrainAsync<Notification, PlannerStage>("planner");
+
+            await using (var db = _database.Context())
+            {
+                await db.Notifications.Where(n => n.Id == id).ExecuteUpdateAsync(s => s
+                    .SetProperty(n => n.State, NotificationState.Planning).SetProperty(n => n.NextAt, _clock.GetUtcNow()), Ct);
+            }
+            await DrainAsync<Notification, PlannerStage>("planner");
+
+            await using var check = _database.Context();
+            var named = await check.Recipients.AsNoTracking().Where(r => r.NotificationId == id && r.EscalationStep == 1)
+                .Select(r => new { r.NamedAs, r.Outcome }).ToListAsync(Ct);
+            Assert.Single(named, r => r.NamedAs == "route:gone" && r.Outcome == RecipientOutcome.Failed);
+            Assert.Equal(named.Count, named.Select(r => r.NamedAs).Distinct().Count());
+            Assert.Contains(named, r => r.NamedAs.StartsWith("subscriber:"));
+        }
     }
 }

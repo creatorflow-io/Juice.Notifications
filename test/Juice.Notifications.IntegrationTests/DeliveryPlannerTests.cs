@@ -286,6 +286,8 @@ namespace Juice.Notifications.IntegrationTests
         [Theory]
         [InlineData("Subject: hi\nHello {{ data.host }} [{{ escalation.step }}]", 1)]
         [InlineData("Subject: hi\nid={{ delivery.id }}", 3)]
+        [InlineData("Subject: hi\nid={{ this.delivery.id }}", 3)] // QA (M46-0): through this
+        [InlineData("Subject: hi\n{{ with delivery }}id={{ id }}{{ end }}", 3)] // QA (M46-0): through with
         public async Task A_channel_is_rendered_once_unless_its_template_reads_the_delivery(string body, int renders)
         {
             LocalStack.RequireAvailable();
