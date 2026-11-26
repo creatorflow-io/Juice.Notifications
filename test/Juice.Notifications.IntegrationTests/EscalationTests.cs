@@ -218,6 +218,8 @@ namespace Juice.Notifications.IntegrationTests
         [InlineData(-2, null, false, 3)] // a recent event: what is left of the wait
         [InlineData(null, null, true, 7)] // no occurrence after a 2-minute delay: 2 + 5
         [InlineData(0, null, true, 5)] // an occurrence after a 2-minute delay: from the event
+        [InlineData(-30 * 24 * 60, null, false, 0)] // 30 days old: clamped to 7 days, due at once
+        [InlineData(60, null, false, 10)] // an hour ahead: clamped to 5 minutes ahead, then the 5-minute wait
         public async Task The_first_step_is_due_its_wait_after_the_event_when_there_is_one_and_from_its_start_otherwise(int? occurredMinutesAgo,
             int? acceptedMinutesAgo, bool delayed, int dueInMinutes)
         {
@@ -243,6 +245,46 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.Contains(("lee", 1, RecipientOutcome.Planned), await PeopleAsync(id));
             }
         }
+        /// <summary>Each clamp (M45-n) is counted, by direction, on notifications.requests_occurred_at_clamped; one within bounds isn't.</summary>
+        [Fact]
+        public async Task A_clamped_occurrence_is_counted_once_by_direction()
+        {
+            LocalStack.RequireAvailable();
+            var counted = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            using var listener = new System.Diagnostics.Metrics.MeterListener
+            {
+                InstrumentPublished = (instrument, l) =>
+                {
+                    if (instrument.Meter.Name == Telemetry.Name && instrument.Name == "notifications.requests_occurred_at_clamped")
+                    {
+                        l.EnableMeasurementEvents(instrument);
+                    }
+                },
+            };
+            listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == "direction")
+                    {
+                        for (var i = 0; i < value; i++)
+                        {
+                            counted.Enqueue((string)tag.Value!);
+                        }
+                    }
+                }
+            });
+            listener.Start();
+            var now = _clock.GetUtcNow();
+            await NotificationAsync("keeps", now.AddDays(-30));
+            await NotificationAsync("keeps", now.AddHours(1));
+            await NotificationAsync("keeps", now.AddMinutes(-2));
+            await DrainAsync<Notification, PlannerStage>("planner");
+            // At least these two (another class's clamps may run beside this one: the meter is process-wide), one of each direction.
+            Assert.Contains("past", counted);
+            Assert.Contains("future", counted);
+        }
+
         [Fact]
         public async Task Resolving_stops_an_escalation_before_its_step()
         {

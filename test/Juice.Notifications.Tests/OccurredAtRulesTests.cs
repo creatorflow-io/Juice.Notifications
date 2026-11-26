@@ -1,38 +1,33 @@
-using Juice.Notifications.Intake;
+using Juice.Notifications.Workflows;
 
 namespace Juice.Notifications.Tests
 {
-    /// <summary>A request's occurrence time (phase 5, M45-n): at most 5 minutes ahead of the service's clock, at most 7 days old; absent is fine.</summary>
+    /// <summary>
+    /// The first escalation step's time from a request's occurrence (phase 5, M45-n, the architect's decision): any occurrence is accepted and
+    /// kept; the escalation takes it within [now − 7 days, now + 5 minutes], clamping beyond, and the step is never before now.
+    /// </summary>
     public sealed class OccurredAtRulesTests
     {
         private static readonly DateTimeOffset Now = new(2026, 11, 26, 9, 0, 0, TimeSpan.Zero);
 
-        private static List<FieldError> Check(DateTimeOffset? occurredAt)
+        [Fact]
+        public void Thirty_days_old_is_clamped_to_7_days_and_the_step_is_due_at_once()
+            => Assert.Equal((Now, (WorkflowRunner.Clamped?)WorkflowRunner.Clamped.Past), WorkflowRunner.FirstStepAt(Now.AddDays(-30), 5, Now));
+
+        [Fact]
+        public void An_hour_ahead_is_clamped_to_5_minutes_ahead()
+            => Assert.Equal((Now.AddMinutes(5 + 5), (WorkflowRunner.Clamped?)WorkflowRunner.Clamped.Future), WorkflowRunner.FirstStepAt(Now.AddHours(1), 5, Now));
+
+        [Fact]
+        public void Within_the_bounds_nothing_is_clamped()
         {
-            var invalid = new List<FieldError>();
-            RequestRules.Occurred(occurredAt, Now, invalid);
-            return invalid;
+            Assert.Equal((Now.AddMinutes(3), (WorkflowRunner.Clamped?)null), WorkflowRunner.FirstStepAt(Now.AddMinutes(-2), 5, Now));
+            Assert.Equal((Now.AddMinutes(10), (WorkflowRunner.Clamped?)null), WorkflowRunner.FirstStepAt(Now.AddMinutes(5), 5, Now));
+            Assert.Equal((Now, (WorkflowRunner.Clamped?)null), WorkflowRunner.FirstStepAt(Now.AddDays(-7), 5, Now));
         }
 
         [Fact]
-        public void Five_minutes_ahead_is_taken_and_a_second_more_is_refused()
-        {
-            Assert.Empty(Check(Now.AddMinutes(5)));
-            Assert.Equal("/occurredAt", Assert.Single(Check(Now.AddMinutes(5).AddSeconds(1))).Pointer);
-        }
-
-        [Fact]
-        public void Seven_days_old_is_taken_and_a_second_older_is_refused()
-        {
-            Assert.Empty(Check(Now.AddDays(-7)));
-            Assert.Equal("/occurredAt", Assert.Single(Check(Now.AddDays(-7).AddSeconds(-1))).Pointer);
-        }
-
-        [Fact]
-        public void Absent_or_now_is_taken()
-        {
-            Assert.Empty(Check(null));
-            Assert.Empty(Check(Now));
-        }
+        public void Without_an_occurrence_the_wait_runs_from_now()
+            => Assert.Equal((Now.AddMinutes(5), (WorkflowRunner.Clamped?)null), WorkflowRunner.FirstStepAt(null, 5, Now));
     }
 }

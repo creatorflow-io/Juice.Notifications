@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace Juice.Notifications.Workflows
 {
     /// <summary>
-    /// Runs a notification's workflow (design §7.1, phase-3-plan I27–I30) inside the planner's step: from <see cref="Notification.WorkflowStep"/>,
+    /// Runs a notification's workflow (design Â§7.1, phase-3-plan I27âI30) inside the planner's step: from <see cref="Notification.WorkflowStep"/>,
     /// step after step, until one waits (the notification is due again when it may go on) or the workflow ends (<c>Planned</c>). The planner
     /// stage claims notifications in both <c>Planning</c> and <c>Running</c>, so there is one claimed hop per wait, crash-safe like every other.
     /// </summary>
@@ -70,7 +70,7 @@ namespace Juice.Notifications.Workflows
                         }
                         break;
                     case EscalateStep escalate:
-                        await StartEscalationAsync(db, row, request, escalate, now, ct);
+                        await StartEscalationAsync(context, db, row, request, escalate, now, ct);
                         break;
                     case DigestStep digest:
                         await JoinDigestAsync(db, row, request, digest, now, ct);
@@ -84,7 +84,7 @@ namespace Juice.Notifications.Workflows
             context.Done(row, null);
         }
 
-        /// <summary>The correlation's state as conditions read it (<c>open</c> …), now; none for a request without a key.</summary>
+        /// <summary>The correlation's state as conditions read it (<c>open</c> â¦), now; none for a request without a key.</summary>
         private static async Task<string?> CorrelationStateAsync(NotificationsDbContext db, NotificationRequest request, CancellationToken ct)
             => request.CorrelationId is { } id
                 ? Correlations.CorrelationLimits.Name(await db.Correlations.AsNoTracking().Where(c => c.TenantId == request.TenantId && c.Id == id)
@@ -93,7 +93,7 @@ namespace Juice.Notifications.Workflows
 
         /// <summary>
         /// The waiting recipients become due for the delivery planner, past the tenant's mutes and the people's preferences as at planning
-        /// (design §6.4): those can have changed while the workflow waited.
+        /// (design Â§6.4): those can have changed while the workflow waited.
         /// </summary>
         private async Task SendAsync(StageContext context, Notification row, NotificationRequest request, NotificationType type, CancellationToken ct)
         {
@@ -204,8 +204,8 @@ namespace Juice.Notifications.Workflows
         /// with the step, so a step run again finds it there. Without a correlation, or a policy by that key, there is nothing to escalate: said
         /// in the log, and the workflow goes on.
         /// </summary>
-        private async Task StartEscalationAsync(NotificationsDbContext db, Notification row, NotificationRequest request, EscalateStep escalate,
-            DateTimeOffset now, CancellationToken ct)
+        private async Task StartEscalationAsync(StageContext context, NotificationsDbContext db, Notification row, NotificationRequest request,
+            EscalateStep escalate, DateTimeOffset now, CancellationToken ct)
         {
             if (request.CorrelationId is not { } correlation)
             {
@@ -227,29 +227,52 @@ namespace Juice.Notifications.Workflows
                 return;
             }
             var steps = Configuration.EscalationRules.Read(policy.Steps);
+            var (firstAt, clamped) = FirstStepAt(request.OccurredAt, steps[0].AfterMinutes, now);
+            if (clamped is { } side)
+            {
+                logger.LogWarning("Notification {Id} in tenant {Tenant}: its occurredAt {OccurredAt} is {Side} the {Bound} an escalation takes; its first step is timed from {ClampedTo}",
+                    row.Id, row.TenantId, request.OccurredAt, side == Clamped.Past ? "older than" : "further ahead than",
+                    side == Clamped.Past ? "7 days" : "5 minutes", side == Clamped.Past ? now - Intake.RequestRules.MaxOccurredAge : now + Intake.RequestRules.OccurredSkew);
+                var direction = side == Clamped.Past ? "past" : "future";
+                // Once per request: a step whose save is lost runs again, and counts only when it commits.
+                context.AfterCommit.Add(() => Telemetry.RequestsOccurredAtClamped.Add(1, new KeyValuePair<string, object?>("direction", direction)));
+            }
             db.Escalations.Add(new Escalation
             {
                 TenantId = row.TenantId, NotificationId = row.Id, CorrelationId = correlation, PolicyId = policy.Id, NextStep = 0, State = EscalationState.Running,
-                NextAt = FirstStepAt(request, steps[0].AfterMinutes, now), CreatedAt = now, UpdatedAt = now,
+                NextAt = firstAt, CreatedAt = now, UpdatedAt = now,
             });
         }
 
         /// <summary>
         /// When an escalation's first step is due (phase 5, M45-n): its wait from when the request's event happened (<c>occurredAt</c>, when the
-        /// producer said), and never before now, even after a workflow delay; without one (the producer didn't say, or a request from before it
-        /// was kept), its wait from now, as before. A request sent late (held under a silence) gets the step at once if its
+        /// producer said, taken within 7 days back and 5 minutes ahead: further is clamped, logged and counted), and never before now, even after a
+        /// workflow delay; without one (the producer didn't say, or a request from before it was kept), its wait from now, as before. A request sent late (held under a silence) gets the step at once if its
         /// wait has passed, as legacy escalation does; later steps stay relative to the step before.
         /// </summary>
-        internal static DateTimeOffset FirstStepAt(NotificationRequest request, double afterMinutes, DateTimeOffset now)
+        internal static (DateTimeOffset At, Clamped? Clamped) FirstStepAt(DateTimeOffset? occurredAt, double afterMinutes, DateTimeOffset now)
         {
             var wait = TimeSpan.FromMinutes(afterMinutes);
-            if (request.OccurredAt is not { } occurred)
+            if (occurredAt is not { } occurred)
             {
-                return now + wait;
+                return (now + wait, null);
+            }
+            // Taken within [now - 7 days, now + 5 minutes] (the architect's decision): the request is kept as sent, only its timing is bounded.
+            Clamped? clamped = null;
+            if (occurred < now - Intake.RequestRules.MaxOccurredAge)
+            {
+                (occurred, clamped) = (now - Intake.RequestRules.MaxOccurredAge, Clamped.Past);
+            }
+            else if (occurred > now + Intake.RequestRules.OccurredSkew)
+            {
+                (occurred, clamped) = (now + Intake.RequestRules.OccurredSkew, Clamped.Future);
             }
             var due = occurred + wait;
-            return due > now ? due : now;
+            return (due > now ? due : now, clamped);
         }
+
+        /// <summary>Which bound an occurrence time was clamped to.</summary>
+        internal enum Clamped { Past, Future }
 
         /// <summary>Advisory locks of digests: joining one and closing it take the same lock per tenant, type, grouping and key.</summary>
         internal const int DigestLockSpace = 0x1B0E;

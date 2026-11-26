@@ -51,27 +51,10 @@ namespace Juice.Notifications.Intake
         public const int MaxRecipients = 100;
         public const int MaxLabels = 50;
         public const int MaxLinks = 20;
-        /// <summary>How far ahead of the service's clock a request's <c>occurredAt</c> may be (the producer's clock skew).</summary>
+        /// <summary>How far ahead of the service's clock an escalation takes a request's <c>occurredAt</c> (the producer's clock skew); later is clamped.</summary>
         public static readonly TimeSpan OccurredSkew = TimeSpan.FromMinutes(5);
-        /// <summary>How old a request's <c>occurredAt</c> may be.</summary>
+        /// <summary>How old an escalation takes a request's <c>occurredAt</c>; older is clamped.</summary>
         public static readonly TimeSpan MaxOccurredAge = TimeSpan.FromDays(7);
-
-        /// <summary>A request's <c>occurredAt</c>, when it has one: at most <see cref="OccurredSkew"/> ahead of now, and at most <see cref="MaxOccurredAge"/> old.</summary>
-        public static void Occurred(DateTimeOffset? occurredAt, DateTimeOffset now, List<FieldError> invalid)
-        {
-            if (occurredAt is not { } occurred)
-            {
-                return;
-            }
-            if (occurred > now + OccurredSkew)
-            {
-                invalid.Add(new FieldError("/occurredAt", $"It happened in the future: at most {OccurredSkew.TotalMinutes:0} minutes ahead of the service's clock."));
-            }
-            else if (occurred < now - MaxOccurredAge)
-            {
-                invalid.Add(new FieldError("/occurredAt", $"It happened more than {MaxOccurredAge.TotalDays:0} days ago."));
-            }
-        }
 
         /// <summary>Recipient kinds of later work, refused with a clear message rather than as unknown.</summary>
         private static readonly string[] LaterKinds = ["schedule"];
@@ -353,7 +336,8 @@ namespace Juice.Notifications.Intake
     {
         public async ValueTask<Outcome<AcceptedView>> Handle(AcceptNotification request, CancellationToken cancellationToken)
         {
-            var s = request.Submission;
+            // Times as instants (UTC): PostgreSQL's timestamptz takes no other offset, so a producer's +07:00 is the same moment, kept in UTC.
+            var s = request.Submission with { ExpiresAt = request.Submission.ExpiresAt?.ToUniversalTime(), OccurredAt = request.Submission.OccurredAt?.ToUniversalTime() };
             var tenant = request.NotificationTenantId;
             if (!RequestRules.IsKey(s.IdempotencyKey))
             {
@@ -423,7 +407,6 @@ namespace Juice.Notifications.Intake
             {
                 invalid.Add(new FieldError("/expiresAt", "The request expires in the past."));
             }
-            RequestRules.Occurred(s.OccurredAt, now, invalid);
             RequestRules.Labels(s.Labels, invalid);
             RequestRules.Links(s.Links, invalid);
             var actor = RequestRules.Actor(s.Actor, invalid);
