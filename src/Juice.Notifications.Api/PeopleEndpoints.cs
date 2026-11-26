@@ -26,14 +26,7 @@ namespace Juice.Notifications.Api
                 NotificationsDbContext db, CancellationToken ct)
                 => ApiResults.SendAsync(mediator, db, new UnlinkAlias(tenantId, id, source, externalId), _ => Results.NoContent(), Conflict, ct));
 
-            // The tenant's mutes (design §6.4, phase-2-plan M14): one naming a mandatory type exactly holds it too, and says so.
-            tenant.MapGet("/mutes", async (Guid tenantId, bool? all, Guid? before, int? limit, PreferenceReader reader, CancellationToken ct)
-                => Results.Ok((await reader.MutesAsync(tenantId, null, all ?? false, before, limit ?? 50, ct)).Select(ToResponse)));
-            tenant.MapPost("/mutes", (Guid tenantId, AddMuteBody body, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
-                => ApiResults.SendAsync(mediator, db, new AddMute(tenantId, null, body.Match, body.StartsAt, body.EndsAt, body.Reason, NotificationsAudit.Caller(http.User)),
-                    o => Results.Created($"/api/v1/tenants/{tenantId}/mutes/{o.Value!.Id}", ToResponse(o.Value)), PreferenceConflict, ct));
-            tenant.MapDelete("/mutes/{id:guid}", (Guid tenantId, Guid id, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
-                => ApiResults.SendAsync(mediator, db, new CancelMute(tenantId, null, id), _ => Results.NoContent(), PreferenceConflict, ct));
+            // The tenant's mutes moved to the admin package (MuteEndpoints): a host without people has them too.
 
             // Local users, groups and topics: what the local and topic resolvers read (phase-2-plan M11).
             tenant.MapPut("/local-users/{id}", (Guid tenantId, string id, PutLocalUserBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
@@ -78,16 +71,9 @@ namespace Juice.Notifications.Api
         /// A preference, quiet hours or mute change that raced another: the same preference saved twice at once, or the person linked elsewhere
         /// meanwhile.
         /// </summary>
-        internal static Task<IResult?> PreferenceConflict(DbConflict conflict) => Task.FromResult<IResult?>(conflict switch
-        {
-            { Kind: ConflictKind.Unique, Constraint: Constraints.PreferenceKey } => ApiResults.ConcurrentChange(),
-            { Kind: ConflictKind.ForeignKey, Constraint: Constraints.PreferenceSubscriber or Constraints.MuteSubscriber } => ApiResults.ConcurrentChange(),
-            { Kind: ConflictKind.Aborted or ConflictKind.RowGone } => ApiResults.ConcurrentChange(),
-            _ => null,
-        });
+        internal static Task<IResult?> PreferenceConflict(DbConflict conflict) => MuteEndpoints.PreferenceConflict(conflict);
 
-        internal static MuteResponse ToResponse(MuteView m)
-            => new(m.Id, m.Match, m.StartsAt, m.EndsAt, m.Reason, m.CreatedBy, m.CreatedAt, m.CancelledAt, m.AppliesToMandatory);
+        internal static MuteResponse ToResponse(MuteView m) => MuteEndpoints.ToResponse(m);
 
         /// <summary>
         /// A removal that raced: the same membership or subscription removed by another call first is already what was asked (204), not a conflict.

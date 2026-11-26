@@ -19,6 +19,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="Fixtures/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Juice.Notifications.App\Juice.Notifications.App.csproj" />
     <!-- Direct, so mutation testing (test/stryker/integration.json) finds the core assembly these tests exercise. -->
     <ProjectReference Include="..\..\src\Juice.Notifications\Juice.Notifications.csproj" />

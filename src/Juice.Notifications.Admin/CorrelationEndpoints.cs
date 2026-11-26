@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Juice.Notifications.Admin;
 using Juice.Notifications.Api.Contracts;
 using Juice.Notifications.Correlations;
 
@@ -12,9 +13,12 @@ namespace Juice.Notifications.Api
     /// </summary>
     internal static class CorrelationEndpoints
     {
-        public static void MapCorrelationEndpoints(this IEndpointRouteBuilder app)
+        public static void MapCorrelationEndpoints(this IEndpointRouteBuilder tenant)
         {
-            var correlations = app.MapGroup("/api/v1/tenants/{tenantId:guid}/correlations").WithTags("Correlations");
+            // A producer's own correlation (no ?application=, through the service's hook), or the one an admin names: reading it is Read, acting on
+            // it Configure (m44-architecture §11 Q6).
+            var correlations = tenant.MapGroup("/correlations").WithTags("Correlations").WithMetadata(new AdminPageMetadata(AdminPages.Correlations))
+                .WithMetadata(new ProducerAlsoMetadata());
             correlations.MapGet("/{key}", async (Guid tenantId, string key, string? application, HttpContext http, ClaimsPrincipal user, Owners owners,
                 CorrelationLifecycle lifecycle, CancellationToken ct) =>
             {
@@ -44,22 +48,28 @@ namespace Juice.Notifications.Api
         /// <summary>Whose correlation, and who acts: a producer's own (<c>By</c> null: its body names them), or for an admin the one named.</summary>
         internal readonly record struct Owner(Guid ApplicationId, string? By);
 
-        internal sealed class Owners(Producers producers, ITenantAccess access, History.Investigation investigation)
+        internal sealed class Owners(INotificationsAdminAccess access, History.Investigation investigation, IAdminFallbackCaller? producers = null)
         {
             public async Task<(Owner? Owner, IResult? Refusal)> ResolveAsync(Guid tenantId, string? application, ClaimsPrincipal user, CancellationToken ct)
             {
                 if (application is null)
                 {
-                    var (caller, refusal) = await producers.ResolveAsync(user, ct, forWriting: false);
-                    return caller is null ? (null, refusal) : (new Owner(caller.Id, null), null);
+                    // The producer's own: the service's hook says which application the caller is. Embedded, there are no HTTP producers.
+                    if (producers is null)
+                    {
+                        return (null, ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin,
+                            "The tenant's admins name the application (?application=): keys are per application."));
+                    }
+                    var (caller, refusal) = await producers.ResolveAsync(user, ct);
+                    return caller is null ? (null, refusal) : (new Owner(caller.Value, null), null);
                 }
-                if (!await access.CanAdministerAsync(user, tenantId, ct))
+                if (await access.RightsAsync(user, tenantId, ct) == AdminRights.None)
                 {
                     return (null, ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin,
                         "Only the tenant's admins name the application; a producer reads its own correlations."));
                 }
                 return await investigation.LinkedApplicationAsync(tenantId, application, ct) is { } id
-                    ? (new Owner(id, NotificationsAudit.Caller(user) ?? "admin"), null)
+                    ? (new Owner(id, AdminCaller.Name(user) ?? "admin"), null)
                     : (null, ApiResults.NotFound($"There is no application {application} in this tenant."));
             }
         }

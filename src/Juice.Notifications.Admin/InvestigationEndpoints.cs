@@ -1,3 +1,4 @@
+using Juice.Notifications.Admin;
 using Juice.Notifications.Api.Contracts;
 using Juice.Notifications.History;
 using Microsoft.Extensions.Caching.Memory;
@@ -6,7 +7,7 @@ namespace Juice.Notifications.Api
 {
     /// <summary>
     /// What a tenant's admins read to investigate (phase-4c-plan I52): the notifications list, a notification's recipients and why (deferred
-    /// #36), the correlations list and the overview. Tenant admins only (<see cref="ITenantAccess"/>): a producer reads its own notifications
+    /// #36), the correlations list and the overview. Anyone with a right in the tenant: a producer reads its own notifications
     /// and correlations one at a time, by id and key.
     /// </summary>
     internal static class InvestigationEndpoints
@@ -14,13 +15,13 @@ namespace Juice.Notifications.Api
         /// <summary>How long an overview is kept per tenant: its counts are a glance, not a ledger.</summary>
         internal static readonly TimeSpan OverviewFor = TimeSpan.FromSeconds(30);
 
-        public static void MapInvestigationEndpoints(this IEndpointRouteBuilder app)
+        public static void MapInvestigationEndpoints(this IEndpointRouteBuilder tenant)
         {
-            var tenant = app.MapGroup("/api/v1/tenants/{tenantId:guid}").RequireTenantAdmin().WithTags("Investigation");
-            tenant.MapGet("/notifications", NotificationsAsync);
-            tenant.MapGet("/notifications/{id:guid}/recipients", RecipientsAsync);
-            tenant.MapGet("/correlations", CorrelationsAsync);
-            tenant.MapGet("/overview", OverviewAsync);
+            var investigation = tenant.MapGroup("").WithTags("Investigation");
+            investigation.MapGet("/notifications", NotificationsAsync).WithMetadata(new AdminPageMetadata(AdminPages.Notifications));
+            investigation.MapGet("/notifications/{id:guid}/recipients", RecipientsAsync).WithMetadata(new AdminPageMetadata(AdminPages.Notifications));
+            investigation.MapGet("/correlations", CorrelationsAsync).WithMetadata(new AdminPageMetadata(AdminPages.Correlations));
+            investigation.MapGet("/overview", OverviewAsync).WithMetadata(new AdminPageMetadata(AdminPages.Overview));
         }
 
         private static async Task<IResult> NotificationsAsync(Guid tenantId, string? type, string? application, string? correlation, string? state,

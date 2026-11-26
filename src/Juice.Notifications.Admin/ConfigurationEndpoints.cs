@@ -2,35 +2,46 @@ using Juice.MediatR;
 using Juice.Notifications.Api.Contracts;
 using Juice.Notifications.Configuration;
 using Juice.Notifications.Data;
+using Juice.Notifications.Admin;
 using Microsoft.EntityFrameworkCore;
 
 namespace Juice.Notifications.Api
 {
     /// <summary>
-    /// A tenant's delivery setup: integrations and their targets, routes, the outbound allowlist, and the resolvers for people. For platform admins and the tenant's own admins
-    /// (<see cref="ITenantAccess"/>).
+    /// A tenant's delivery setup: integrations and their targets, routes, the outbound allowlist, and the resolvers for people. Read by anyone with a right in the tenant; changed with Configure (<see cref="AdminRights"/>).
     /// </summary>
     internal static class ConfigurationEndpoints
     {
-        public static void MapConfigurationEndpoints(this IEndpointRouteBuilder app)
+        /// <param name="tenant">The admin's tenant group (<c>{prefix}/api/v1/tenants/{tenantId}</c>), which checks the caller's rights.</param>
+        /// <param name="resolvers">Whether the mode has the resolvers page (the service's people).</param>
+        public static void MapConfigurationEndpoints(this IEndpointRouteBuilder tenant, bool resolvers)
         {
-            var tenant = app.MapGroup("/api/v1/tenants/{tenantId:guid}").RequireTenantAdmin().WithTags("Tenant configuration");
+            var configuration = tenant.MapGroup("").WithTags("Tenant configuration");
+            var integrations = configuration.MapGroup("").WithMetadata(new AdminPageMetadata(AdminPages.Integrations));
+            var routes = configuration.MapGroup("").WithMetadata(new AdminPageMetadata(AdminPages.Routes));
+            var types = configuration.MapGroup("").WithMetadata(new AdminPageMetadata(AdminPages.Types));
+            var settings = configuration.MapGroup("").WithMetadata(new AdminPageMetadata(AdminPages.Settings));
+            var storms = configuration.MapGroup("").WithMetadata(new AdminPageMetadata(AdminPages.Storms));
+            var allowlist = configuration.MapGroup("").WithMetadata(new AdminPageMetadata(AdminPages.Allowlist));
+            var policies = configuration.MapGroup("").WithMetadata(new AdminPageMetadata(AdminPages.EscalationPolicies));
+            // Not mapped where the mode has no people (embedded): their routes answer 404.
+            var people = resolvers ? configuration.MapGroup("").WithMetadata(new AdminPageMetadata(AdminPages.Resolvers)) : null;
 
             // What this deployment can send through (phase-4c-plan M38): each channel's provider kinds, whether one signs (must name a secret)
             // and whether it is told where its callbacks go. The inbox is the service's own, so it isn't listed.
-            tenant.MapGet("/providers", (IEnumerable<INotificationProvider> providers) => Results.Ok(providers
+            integrations.MapGet("/providers", (IEnumerable<INotificationProvider> providers) => Results.Ok(providers
                 .Where(p => p.Channel != Channels.Inbox)
                 .DistinctBy(p => (p.Channel, p.Kind))
                 .OrderBy(p => p.Channel, StringComparer.Ordinal).ThenBy(p => p.Kind, StringComparer.Ordinal)
                 .Select(p => new ProviderResponse(p.Channel, p.Kind, p.RequiresSecret, p is ICallbackRegistration))));
-            tenant.MapGet("/integrations", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
+            integrations.MapGet("/integrations", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
                 => Results.Ok((await reader.IntegrationsAsync(tenantId, ct)).Select(ToResponse)));
-            tenant.MapPut("/integrations/{key}", (Guid tenantId, string key, PutIntegrationBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            integrations.MapPut("/integrations/{key}", (Guid tenantId, string key, PutIntegrationBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => SendAsync(mediator, db, new PutIntegration(tenantId, key, body.Channel, body.Kind, body.Settings, body.SecretRef, body.Priority, body.Enabled), ToResponse, ct));
-            tenant.MapDelete("/integrations/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            integrations.MapDelete("/integrations/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteIntegration(tenantId, key), ct));
             // A provider told where its callbacks go (Telegram's setWebhook; phase-4-plan M28): the deployment's public URL for this integration.
-            tenant.MapPost("/integrations/{key}/callbacks", async (Guid tenantId, string key, NotificationsDbContext db, IEnumerable<INotificationProvider> providers,
+            integrations.MapPost("/integrations/{key}/callbacks", async (Guid tenantId, string key, NotificationsDbContext db, IEnumerable<INotificationProvider> providers,
                 IEnumerable<ICallbackHandler> handlers, Microsoft.Extensions.Options.IOptions<Callbacks.CallbackOptions> callbacks, Providers.ISecretResolver secrets,
                 CancellationToken ct) =>
             {
@@ -64,25 +75,25 @@ namespace Juice.Notifications.Api
                     secret), url, ct);
                 return refusal is null ? Results.NoContent() : ApiResults.Problem(StatusCodes.Status502BadGateway, ErrorCodes.ProviderRefused, refusal);
             });
-            tenant.MapPut("/integrations/{key}/targets/{targetKey}", (Guid tenantId, string key, string targetKey, PutTargetBody body, IMediator mediator,
+            integrations.MapPut("/integrations/{key}/targets/{targetKey}", (Guid tenantId, string key, string targetKey, PutTargetBody body, IMediator mediator,
                 NotificationsDbContext db, CancellationToken ct)
                 => SendAsync(mediator, db, new PutTarget(tenantId, key, targetKey, body.Address, body.AddressRef, body.Enabled), ToResponse, ct));
-            tenant.MapDelete("/integrations/{key}/targets/{targetKey}", (Guid tenantId, string key, string targetKey, IMediator mediator, NotificationsDbContext db,
+            integrations.MapDelete("/integrations/{key}/targets/{targetKey}", (Guid tenantId, string key, string targetKey, IMediator mediator, NotificationsDbContext db,
                 CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteTarget(tenantId, key, targetKey), ct));
 
-            tenant.MapGet("/routes", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
+            routes.MapGet("/routes", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
                 => Results.Ok((await reader.RoutesAsync(tenantId, ct)).Select(ToResponse)));
-            tenant.MapPut("/routes/{key}", (Guid tenantId, string key, PutRouteBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            routes.MapPut("/routes/{key}", (Guid tenantId, string key, PutRouteBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => SendAsync(mediator, db, new PutRoute(tenantId, key, body.Match, body.Targets, body.Enabled, body.DigestSeconds), ToResponse, ct));
-            tenant.MapDelete("/routes/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            routes.MapDelete("/routes/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteRoute(tenantId, key), ct));
 
             // The tenant's own templates (phase-4-plan I45): over the application's, for each type's latest version.
-            tenant.MapGet("/types", async (Guid tenantId, Types.TenantTemplateReader reader, CancellationToken ct)
+            types.MapGet("/types", async (Guid tenantId, Types.TenantTemplateReader reader, CancellationToken ct)
                 => Results.Ok((await reader.TypesAsync(tenantId, ct)).Select(t => new TenantTypeResponse(t.Key, t.Name, t.Version, t.Application,
                     t.Channels.Select(c => new TenantTypeChannelResponse(c.Channel, c.Declared, c.Overridden)).ToList()))));
-            tenant.MapGet("/types/{key}", async (Guid tenantId, string key, Types.TenantTemplateReader reader, CancellationToken ct) =>
+            types.MapGet("/types/{key}", async (Guid tenantId, string key, Types.TenantTemplateReader reader, CancellationToken ct) =>
             {
                 var found = await reader.DetailAsync(tenantId, key, ct);
                 if (ApiResults.Failure(found) is { } failure)
@@ -96,60 +107,60 @@ namespace Juice.Notifications.Api
                     d.Channels.Select(c => new TenantTypeChannelDetailResponse(c.Channel, c.Declared, c.Overridden,
                         c.Locales.Select(l => new TenantTypeLocaleResponse(l.Locale, l.Declared, l.Overridden)).ToList())).ToList()));
             });
-            tenant.MapGet("/types/{key}/templates/{channel}", async (Guid tenantId, string key, string channel, string? locale, Types.TenantTemplateReader reader,
+            types.MapGet("/types/{key}/templates/{channel}", async (Guid tenantId, string key, string channel, string? locale, Types.TenantTemplateReader reader,
                 CancellationToken ct) =>
             {
                 var found = await reader.GetAsync(tenantId, key, channel, locale, ct);
                 return ApiResults.Failure(found) ?? Results.Ok(ToResponse(found.Value!));
             });
-            tenant.MapPut("/types/{key}/templates/{channel}", (Guid tenantId, string key, string channel, PutTemplateBody body, IMediator mediator,
+            types.MapPut("/types/{key}/templates/{channel}", (Guid tenantId, string key, string channel, PutTemplateBody body, IMediator mediator,
                 NotificationsDbContext db, CancellationToken ct)
                 => SendAsync(mediator, db, new Types.PutTenantTemplate(tenantId, key, channel, body.Locale, body.Body), ToResponse, ct));
-            tenant.MapDelete("/types/{key}/templates/{channel}", (Guid tenantId, string key, string channel, string? locale, IMediator mediator,
+            types.MapDelete("/types/{key}/templates/{channel}", (Guid tenantId, string key, string channel, string? locale, IMediator mediator,
                 NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new Types.DeleteTenantTemplate(tenantId, key, channel, locale), ct));
-            tenant.MapPost("/templates/preview", async (Guid tenantId, PreviewBody body, Types.TenantTemplateReader reader, CancellationToken ct) =>
+            types.MapPost("/templates/preview", async (Guid tenantId, PreviewBody body, Types.TenantTemplateReader reader, CancellationToken ct) =>
             {
                 var preview = await reader.PreviewAsync(tenantId, body.Type, body.Channel, body.Locale, body.Body, body.Data, ct);
                 return ApiResults.Failure(preview)
                     ?? Results.Ok(new PreviewResponse(preview.Value!.Channel, preview.Value.Content, preview.Value.Error, preview.Value.Data));
-            });
+            }).Needs(AdminRights.Read); // a preview changes nothing
 
             // The tenant's own settings (phase-4-plan §4) and its storms (I43).
-            tenant.MapGet("/settings", async (Guid tenantId, TenantSettingsReader reader, CancellationToken ct)
+            settings.MapGet("/settings", async (Guid tenantId, TenantSettingsReader reader, CancellationToken ct)
                 => Results.Ok(ToResponse(await reader.GetAsync(tenantId, ct))));
-            tenant.MapPut("/settings", (Guid tenantId, TenantSettingsBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            settings.MapPut("/settings", (Guid tenantId, TenantSettingsBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => SendAsync(mediator, db, new PutTenantSettings(tenantId, body.StormThreshold, body.RequestRetentionDays, body.ContentRetentionDays), ToResponse, ct));
-            tenant.MapGet("/storms", async (Guid tenantId, bool? all, TenantSettingsReader reader, CancellationToken ct)
+            storms.MapGet("/storms", async (Guid tenantId, bool? all, TenantSettingsReader reader, CancellationToken ct)
                 => Results.Ok((await reader.StormsAsync(tenantId, all ?? false, ct))
                     .Select(s => new StormResponse(s.Id, s.Route, s.StartedAt, s.EndedAt, s.Peak, s.Digested))));
 
-            tenant.MapGet("/allowlist", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
+            allowlist.MapGet("/allowlist", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
                 => Results.Ok((await reader.AllowlistAsync(tenantId, ct)).Select(ToResponse)));
-            tenant.MapPut("/allowlist", (Guid tenantId, PutAllowlistBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            allowlist.MapPut("/allowlist", (Guid tenantId, PutAllowlistBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => SendAsync(mediator, db, new PutAllowlistEntry(tenantId, body.Destination ?? "", body.Ports), ToResponse, ct));
             // A destination can be a network (10.20.0.0/16), so it travels in the query, not the path.
-            tenant.MapDelete("/allowlist", (Guid tenantId, string destination, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            allowlist.MapDelete("/allowlist", (Guid tenantId, string destination, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteAllowlistEntry(tenantId, destination), ct));
 
             // What a resolver can be here: the configurable implementations (route and address are built in, never a tenant's).
-            tenant.MapGet("/resolver-kinds", (IEnumerable<Planning.IRecipientResolver> resolvers) => Results.Ok(resolvers
+            people?.MapGet("/resolver-kinds", (IEnumerable<Planning.IRecipientResolver> resolvers) => Results.Ok(resolvers
                 .Where(r => r.Configurable).DistinctBy(r => r.Key).OrderBy(r => r.Key, StringComparer.Ordinal)
                 .Select(r => new ResolverKindResponse(r.Key, r.Kinds.Order(StringComparer.Ordinal).ToList()))));
-            tenant.MapGet("/resolvers", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
+            people?.MapGet("/resolvers", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
                 => Results.Ok((await reader.ResolversAsync(tenantId, ct)).Select(ToResponse)));
-            tenant.MapPut("/resolvers/{key}", (Guid tenantId, string key, PutResolverBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            people?.MapPut("/resolvers/{key}", (Guid tenantId, string key, PutResolverBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => SendAsync(mediator, db, new PutResolver(tenantId, key, body.Kind, body.Handles, body.Settings, body.SecretRef, body.Enabled), ToResponse, ct));
-            tenant.MapDelete("/resolvers/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            people?.MapDelete("/resolvers/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteResolver(tenantId, key), ct));
 
             // Escalation policies (phase-3-plan M22).
-            tenant.MapGet("/escalation-policies", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
+            policies.MapGet("/escalation-policies", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
                 => Results.Ok((await reader.EscalationPoliciesAsync(tenantId, ct)).Select(ToResponse)));
-            tenant.MapPut("/escalation-policies/{key}", (Guid tenantId, string key, PutEscalationPolicyBody body, IMediator mediator, NotificationsDbContext db,
+            policies.MapPut("/escalation-policies/{key}", (Guid tenantId, string key, PutEscalationPolicyBody body, IMediator mediator, NotificationsDbContext db,
                 CancellationToken ct)
                 => SendAsync(mediator, db, new PutEscalationPolicy(tenantId, key, body.Steps, body.StopOnAcknowledge), ToResponse, ct));
-            tenant.MapDelete("/escalation-policies/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
+            policies.MapDelete("/escalation-policies/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteEscalationPolicy(tenantId, key), ct));
         }
 
