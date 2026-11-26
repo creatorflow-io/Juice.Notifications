@@ -672,7 +672,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasIndex("StepFailures")
                         .HasDatabaseName("ix_deliveries_failing")
-                        .HasFilter("step_failures > 0");
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
 
                     b.HasIndex("Priority", "NextAt")
                         .IsDescending(true, false)
@@ -968,7 +968,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasIndex("StepFailures")
                         .HasDatabaseName("ix_digests_failing")
-                        .HasFilter("step_failures > 0");
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
 
                     b.HasIndex("TenantId", "TypeKey", "By", "Key")
                         .IsUnique()
@@ -1103,7 +1103,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasIndex("StepFailures")
                         .HasDatabaseName("ix_escalations_failing")
-                        .HasFilter("step_failures > 0");
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
 
                     b.HasIndex("TenantId", "CorrelationId")
                         .HasDatabaseName("ix_escalations_correlation");
@@ -1738,7 +1738,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasIndex("StepFailures")
                         .HasDatabaseName("ix_notifications_failing")
-                        .HasFilter("step_failures > 0");
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
 
                     b.HasIndex("TenantId", "RequestId")
                         .IsUnique()
@@ -1877,7 +1877,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasIndex("StepFailures")
                         .HasDatabaseName("ix_notification_recipients_failing")
-                        .HasFilter("step_failures > 0");
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
 
                     b.HasIndex("TenantId", "DigestId")
                         .HasDatabaseName("ix_notification_recipients_digest")

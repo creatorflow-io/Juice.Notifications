@@ -63,7 +63,8 @@ namespace Juice.Notifications.Stages
         {
             var oldest = await rows.AsNoTracking().Where(r => r.NextAt <= now && (r.LeaseUntil == null || r.LeaseUntil < now))
                 .OrderBy(r => r.NextAt).Select(r => r.NextAt).FirstOrDefaultAsync(ct);
-            var failing = await rows.AsNoTracking().Where(r => r.StepFailures > 0).Take(StageHealth.MaxFailing).CountAsync(ct);
+            // Still to be retried: a row a resolve or an ack stopped (next_at null) keeps its count, but isn't failing.
+            var failing = await rows.AsNoTracking().Where(r => r.StepFailures > 0 && r.NextAt != null).Take(StageHealth.MaxFailing).CountAsync(ct);
             return new StageHealth
             {
                 LastPassEndedAt = passes.LastPassAt(stage),

@@ -37,7 +37,10 @@ namespace Juice.Notifications
         /// <summary>All replicas (database): how long the oldest row has been due and not leased (<c>next_at &lt;= now</c>, lease free); null when none.</summary>
         public TimeSpan? OldestDue { get; init; }
 
-        /// <summary>All replicas (database): rows whose latest step failed (<c>step_failures &gt; 0</c>), counted up to <see cref="MaxFailing"/>.</summary>
+        /// <summary>
+        /// All replicas (database): rows whose latest step failed and that are still to be retried (<c>step_failures &gt; 0</c>, <c>next_at</c>
+        /// set), counted up to <see cref="MaxFailing"/>. A row stopped since (a resolve, an acknowledgement) isn't failing.
+        /// </summary>
         public int Failing { get; init; }
 
         /// <summary>Where <see cref="Failing"/> stops counting.</summary>

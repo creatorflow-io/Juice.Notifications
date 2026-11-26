@@ -15,35 +15,35 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                 schema: "notifications",
                 table: "notifications",
                 column: "step_failures",
-                filter: "step_failures > 0");
+                filter: "step_failures > 0 AND next_at IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "ix_notification_recipients_failing",
                 schema: "notifications",
                 table: "notification_recipients",
                 column: "step_failures",
-                filter: "step_failures > 0");
+                filter: "step_failures > 0 AND next_at IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "ix_escalations_failing",
                 schema: "notifications",
                 table: "escalations",
                 column: "step_failures",
-                filter: "step_failures > 0");
+                filter: "step_failures > 0 AND next_at IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "ix_digests_failing",
                 schema: "notifications",
                 table: "digests",
                 column: "step_failures",
-                filter: "step_failures > 0");
+                filter: "step_failures > 0 AND next_at IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "ix_deliveries_failing",
                 schema: "notifications",
                 table: "deliveries",
                 column: "step_failures",
-                filter: "step_failures > 0");
+                filter: "step_failures > 0 AND next_at IS NOT NULL");
         }
 
         /// <inheritdoc />

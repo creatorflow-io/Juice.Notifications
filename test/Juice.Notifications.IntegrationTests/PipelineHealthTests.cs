@@ -200,6 +200,47 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(TimeSpan.FromMinutes(6), (await ReadAsync()).Stages["dispatcher"].OldestDue);
         }
 
+        /// <summary>
+        /// A row that failed a step and was then stopped by a resolve (next_at null, its failure count kept) isn't failing any more (review of #4,
+        /// round 2): otherwise each one would count until retention removed it, and enough of them would hold the dead-man's alarm on.
+        /// </summary>
+        [Fact]
+        public async Task Rows_that_failed_then_were_stopped_by_a_resolve_arent_failing()
+        {
+            LocalStack.RequireAvailable();
+            var now = _clock.GetUtcNow();
+            Guid correlationId;
+            await using (var db = _database.Context())
+            {
+                var correlation = new Correlation { TenantId = Tenant, ApplicationId = _app.Id, Key = "alert:42", CreatedAt = now, LastRequestAt = now, UpdatedAt = now };
+                var request = Seed.Request(Tenant, _app.Id, _type.Id, "failing");
+                db.Entry(request).Property(r => r.CorrelationId).CurrentValue = correlation.Id;
+                db.Entry(request).Property(r => r.CorrelationKey).CurrentValue = correlation.Key;
+                var notification = Seed.Notification(Tenant, request.Id);
+                (notification.State, notification.NextAt, notification.StepFailures) = (NotificationState.Running, now.AddMinutes(2), 1);
+                var recipient = Seed.Recipient(Tenant, notification.Id);
+                (recipient.Outcome, recipient.NextAt, recipient.StepFailures) = (RecipientOutcome.Planned, now.AddMinutes(2), 2);
+                var delivery = Delivery(now.AddMinutes(2), failures: 3);
+                delivery.Status = DeliveryStatus.Retrying;
+                db.AddRange(correlation, request, notification, recipient, delivery, Seed.Item(Tenant, delivery.Id, recipient.Id, request.Id));
+                await db.SaveChangesAsync(Ct);
+                correlationId = correlation.Id;
+            }
+            var before = await ReadAsync();
+            Assert.Equal((1, 1, 1), (before.Stages["planner"].Failing, before.Stages["delivery-planner"].Failing, before.Stages["dispatcher"].Failing));
+
+            await using (var db = _database.Context())
+            {
+                await db.Correlations.Where(c => c.Id == correlationId).ExecuteUpdateAsync(s => s.SetProperty(c => c.State, CorrelationState.Resolved), Ct);
+                await Correlations.CorrelationLifecycle.StopAsync(db, Tenant, correlationId, now, Ct);
+            }
+
+            var after = await ReadAsync();
+            Assert.All(after.Stages.Values, s => Assert.Equal(0, s.Failing));
+            await using var check = _database.Context();
+            Assert.True(await check.Deliveries.AnyAsync(d => d.StepFailures == 3 && d.NextAt == null, Ct)); // the count is kept; it isn't failing
+        }
+
         [Fact]
         public async Task A_held_escalation_is_neither_due_nor_failing()
         {
@@ -297,7 +338,7 @@ namespace Juice.Notifications.IntegrationTests
             }
             await db.SaveChangesAsync(Ct);
             await db.Database.ExecuteSqlRawAsync("ANALYZE notifications.deliveries", Ct);
-            var sql = db.Deliveries.Where(r => r.StepFailures > 0).Take(StageHealth.MaxFailing).ToQueryString();
+            var sql = db.Deliveries.Where(r => r.StepFailures > 0 && r.NextAt != null).Take(StageHealth.MaxFailing).ToQueryString();
             var connection = (Npgsql.NpgsqlConnection)db.Database.GetDbConnection();
             await connection.OpenAsync(Ct);
             var lines = sql.Split('\n');
