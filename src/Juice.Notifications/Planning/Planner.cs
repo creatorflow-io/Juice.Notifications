@@ -333,16 +333,24 @@ namespace Juice.Notifications.Planning
                     entry.Via.Add(name);
                 }
             }
+            // The names this step recorded as unreached already (the step planned again): each is recorded once per step (the RecipientNamed
+            // key), so a second record would fail the plan on every retry.
+            var recorded = unavailable.Count + truncated.Count + missingRoutes.Count == 0 ? [] : (await db.Recipients.AsNoTracking()
+                .Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.EscalationStep == row.EscalationStep && r.Kind == RecipientKind.Name)
+                .Select(r => r.NamedAs).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
             foreach (var (named, resolverKey) in unavailable)
             {
-                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.ResolverUnavailable, context.Now));
+                if (!recorded.Contains(named))
+                {
+                    db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.ResolverUnavailable, context.Now));
+                }
                 // One record per name: one named twice, through a resolver that failed and another that truncated, reads as unavailable.
                 truncated.Remove(named);
             }
-            if (unavailable.Count > 0)
+            if (unavailable.Keys.Any(n => !recorded.Contains(n)))
             {
-                // The producer hears who wasn't reached (design §5.4, phase-3-plan I37), saved with this plan.
-                var names = unavailable.Keys.Order(StringComparer.Ordinal).ToList();
+                // The producer hears who wasn't reached (design §5.4, phase-3-plan I37), saved with this plan: once per name and step.
+                var names = unavailable.Keys.Where(n => !recorded.Contains(n)).Order(StringComparer.Ordinal).ToList();
                 await events.RaiseAsync(db, row.TenantId, request.ApplicationId, app => new Events.NotificationEvent
                 {
                     Event = Events.ProducerEventNames.RecipientUnresolved, Application = app, NotificationTenantId = row.TenantId,
@@ -352,11 +360,11 @@ namespace Juice.Notifications.Planning
             }
             // A route an escalation step named by its key that is disabled or gone (decision G5): recorded as reaching nobody, as a name that
             // resolved to no one is, so history shows the step tried.
-            foreach (var (named, resolverKey) in missingRoutes)
+            foreach (var (named, resolverKey) in missingRoutes.Where(m => !recorded.Contains(m.Key)))
             {
                 db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Failed, context.Now));
             }
-            foreach (var (named, resolverKey) in truncated)
+            foreach (var (named, resolverKey) in truncated.Where(t => !recorded.Contains(t.Key)))
             {
                 logger.LogWarning("{Name} reached more than {Max} people in tenant {Tenant}; notification {Id} keeps the first of them",
                     named, bounds.MaxRecipients, row.TenantId, row.Id);
