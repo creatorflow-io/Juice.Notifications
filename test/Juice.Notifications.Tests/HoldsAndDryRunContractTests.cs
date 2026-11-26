@@ -64,6 +64,16 @@ namespace Juice.Notifications.Tests
             }
         }
 
+        /// <summary>The runtime signal a host checks before shadow mode: present, a property (not inlined), and true.</summary>
+        [Fact]
+        public void The_pipeline_says_it_supports_dry_run()
+        {
+            Assert.True(NotificationsCapabilities.DryRun);
+            var property = Type.GetType("Juice.Notifications.NotificationsCapabilities, Juice.Notifications.Abstractions")?.GetProperty("DryRun");
+            Assert.NotNull(property);
+            Assert.Equal(true, property.GetValue(null));
+        }
+
         [Fact]
         public void Without_dry_run_the_pipeline_registers_as_before()
         {
