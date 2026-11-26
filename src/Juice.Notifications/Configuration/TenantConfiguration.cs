@@ -124,6 +124,17 @@ namespace Juice.Notifications.Configuration
         internal static bool IsSecretRef(string? value, Providers.DeliveryOptions options, bool provisioned)
             => provisioned ? IsProvisionedSecretRef(value) : IsSecretRef(value, options);
 
+        /// <summary>
+        /// A secret named by whoever writes the row (M46-3): the deployment's configuration any, a producer's compatibility alias only within the
+        /// alias limits (<see cref="Providers.SecretReferences.IsAllowedFromAlias"/>), and the API, or anyone else, only within the API's.
+        /// </summary>
+        internal static bool IsSecretRef(string? value, Providers.DeliveryOptions options, string? owner) => owner switch
+        {
+            ManagedBy.Configuration => IsProvisionedSecretRef(value),
+            ManagedBy.WebhooksAlias => value is null || value.Length <= 500 && !value.Contains('\0') && Providers.SecretReferences.IsAllowedFromAlias(value, options),
+            _ => IsSecretRef(value, options),
+        };
+
         // Secrets the API may not name (the deployment's own, on rows its configuration made or handed back, or saved under wider limits) are used
         // only for what the deployment configures: through the API an API-managed row is saved or enabled only when every secret it would use is
         // one the API may name, the integration's signing secret included for a target. A Put that only disables such a row (everything else
@@ -131,7 +142,17 @@ namespace Juice.Notifications.Configuration
 
         /// <summary>The field to refuse when a Put through the API would use a secret the API may not name; null when every one is in reach.</summary>
         internal static FieldError? SecretOutOfReach(Providers.DeliveryOptions options, string pointer, string? reference, string what, string remedy)
-            => IsSecretRef(reference, options) ? null : new FieldError(pointer, $"{what} is one only the deployment may name: {remedy}");
+            => SecretOutOfReach(options, ManagedBy.Api, pointer, reference, what, remedy);
+
+        /// <summary>The same for a row <paramref name="owner"/> writes: within its limits (<see cref="IsSecretRef(string?, Providers.DeliveryOptions, string?)"/>).</summary>
+        internal static FieldError? SecretOutOfReach(Providers.DeliveryOptions options, string? owner, string pointer, string? reference, string what, string remedy)
+            => IsSecretRef(reference, options, owner) ? null : new FieldError(pointer, $"{what} is one only the deployment may name: {remedy}");
+
+        internal static string SecretRefRule(string what, Providers.DeliveryOptions options, string? owner)
+            => owner == ManagedBy.WebhooksAlias
+                ? $"{what} is named, never sent: " + (options.AliasSecretEnvPrefix is { Length: > 0 } p ? $"env:{p}NAME" : "no environment variable")
+                    + (options.AliasSecretDirectory is { Length: > 0 } ? ", or file: in the alias's secret folder" : "") + " (the alias's limits, Delivery:AliasSecret*)."
+                : SecretRefRule(what, options, owner == ManagedBy.Configuration);
 
         internal static string SecretRefRule(string what, Providers.DeliveryOptions options, bool provisioned)
             => provisioned ? $"{what} is named: env:NAME, file:/path, vault:path#field or keyvault:name."
@@ -405,18 +426,19 @@ namespace Juice.Notifications.Configuration
             // Everything as stored but enabled: false. Always allowed through the API, so sends can be stopped whatever the row holds.
             var disablesOnly = !r.Provisioned && existing is not null && !enabled && channel == existing.Channel && kind == existing.Kind && sameSettings
                 && secretRef == existing.SecretRef && priority == existing.Priority;
-            if (!ConfigurationRules.IsSecretRef(sentSecret, delivery.Value, r.Provisioned))
+            if (!ConfigurationRules.IsSecretRef(sentSecret, delivery.Value, Caller(r.ManagedBy)))
             {
-                errors.Add(new FieldError("/secretRef", ConfigurationRules.SecretRefRule("A secret", delivery.Value, r.Provisioned)));
+                errors.Add(new FieldError("/secretRef", ConfigurationRules.SecretRefRule("A secret", delivery.Value, Caller(r.ManagedBy))));
             }
             else if (provider is { RequiresSecret: true } && secretRef is null)
             {
                 // Webhooks are always signed (D14): an integration without its signing secret is refused, not sent unsigned.
                 errors.Add(new FieldError("/secretRef", $"A {kind} integration signs what it sends: name its secret. "
-                    + ConfigurationRules.SecretRefRule("It", delivery.Value, r.Provisioned)));
+                    + ConfigurationRules.SecretRefRule("It", delivery.Value, Caller(r.ManagedBy))));
             }
             else if (!r.Provisioned && !disablesOnly
-                && ConfigurationRules.SecretOutOfReach(delivery.Value, "/secretRef", secretRef, "The stored secret", ConfigurationRules.SecretRefRule("name one: it", delivery.Value, false)) is { } outOfReach)
+                && ConfigurationRules.SecretOutOfReach(delivery.Value, Caller(r.ManagedBy), "/secretRef", secretRef, "The stored secret",
+                    ConfigurationRules.SecretRefRule("name one: it", delivery.Value, Caller(r.ManagedBy))) is { } outOfReach)
             {
                 errors.Add(outOfReach);
             }
@@ -532,9 +554,9 @@ namespace Juice.Notifications.Configuration
             }
             // Through the API, a secret address sent back as it is stored is no new one (a client that PUTs back what it read).
             var sentAddressRef = !r.Provisioned && existing is not null && r.AddressRef == existing.AddressRef ? null : r.AddressRef;
-            if (!ConfigurationRules.IsSecretRef(sentAddressRef, delivery.Value, r.Provisioned))
+            if (!ConfigurationRules.IsSecretRef(sentAddressRef, delivery.Value, Caller(r.ManagedBy)))
             {
-                return Invalid<TargetView>(new FieldError("/addressRef", ConfigurationRules.SecretRefRule("A secret address", delivery.Value, r.Provisioned)));
+                return Invalid<TargetView>(new FieldError("/addressRef", ConfigurationRules.SecretRefRule("A secret address", delivery.Value, Caller(r.ManagedBy))));
             }
             // From the API, a Put that names neither keeps the stored address; from configuration the file states both.
             var replaceAddress = r.Provisioned || address is not null || r.AddressRef is not null;
@@ -550,17 +572,21 @@ namespace Juice.Notifications.Configuration
             if (!r.Provisioned && !disablesOnly)
             {
                 // The target's own secret address, and the integration's signing secret, which would go to whatever address an admin sets here.
-                if (ConfigurationRules.SecretOutOfReach(delivery.Value, "/addressRef", newAddressRef, "The stored secret address",
-                        ConfigurationRules.SecretRefRule("name one: it", delivery.Value, false)) is { } addressOutOfReach)
+                if (ConfigurationRules.SecretOutOfReach(delivery.Value, Caller(r.ManagedBy), "/addressRef", newAddressRef, "The stored secret address",
+                        ConfigurationRules.SecretRefRule("name one: it", delivery.Value, Caller(r.ManagedBy))) is { } addressOutOfReach)
                 {
                     return Invalid<TargetView>(addressOutOfReach);
                 }
                 // Only a secret the provider sends with what goes to the target's address (a webhook's signing key). An SMTP password goes to the
                 // deployment's mail server, never to a target.
-                if (Signs(integration.Channel, integration.Kind) &&ConfigurationRules.SecretOutOfReach(delivery.Value, "/integration", integration.SecretRef, $"The signing secret of integration {integration.Key}",
-                        integration.ManagedBy == ManagedBy.Configuration
-                            ? $"its targets are set in the deployment's configuration, under {integration.Key}"
-                            : $"give {integration.Key} a secret of yours first (its secretRef), then its targets") is { } integrationOutOfReach)
+                if (Signs(integration.Channel, integration.Kind) && ConfigurationRules.SecretOutOfReach(delivery.Value, Caller(r.ManagedBy), "/integration", integration.SecretRef, $"The signing secret of integration {integration.Key}",
+                        integration.ManagedBy switch
+                        {
+                            ManagedBy.Configuration => $"its targets are set in the deployment's configuration, under {integration.Key}",
+                            // An alias row isn't the API's to give a secret: its targets come from the producer's own API (M46-3 review).
+                            ManagedBy.WebhooksAlias => $"its targets are set through the producer's own API, which manages {integration.Key}",
+                            _ => $"give {integration.Key} a secret of yours first (its secretRef), then its targets",
+                        }) is { } integrationOutOfReach)
                 {
                     return Invalid<TargetView>(integrationOutOfReach);
                 }

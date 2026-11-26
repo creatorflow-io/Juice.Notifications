@@ -109,6 +109,13 @@ namespace Juice.Notifications.Hosting
             }
             services.AddDeliveryPlanning(configuration.GetSection("Stages:DeliveryPlanner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages);
             services.Configure<Providers.DeliveryOptions>(configuration.GetSection(Providers.DeliveryOptions.Section));
+            // The API's and the alias's secret limits never overlap (M46-3): checked as the host resolves them, after any PostConfigure of its own.
+            Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.TryAddEnumerable(services,
+                ServiceDescriptor.Singleton<Microsoft.Extensions.Options.IValidateOptions<Providers.DeliveryOptions>, SecretScopeValidation>());
+            services.AddOptions<Providers.DeliveryOptions>().ValidateOnStart();
+            // And as the dispatcher and the handlers read it: a host may register IOptions<DeliveryOptions> itself, past the options factory and
+            // its validation (QA on #11, as QA D1 found for dry run). Checked as the host starts, before any hosted service starts.
+            services.AddHostedService<SecretScopeGuard>();
             // Dry run (I67) is loud: a host in it says so at start.
             services.AddHostedService<DryRunNotice>();
             // A dispatcher lease covers connect + request timeouts with room to spare (design §11).
@@ -224,5 +231,36 @@ namespace Juice.Notifications.Hosting
                 await db.Database.MigrateAsync(cancellationToken);
             }
         }
+    }
+
+    /// <summary>
+    /// The overlap check on the options the pipeline reads (<see cref="Providers.SecretReferences.ScopeOverlap"/>), however they were registered:
+    /// fails the host's start, before any hosted service starts.
+    /// </summary>
+    internal sealed class SecretScopeGuard(Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions> options) : IHostedLifecycleService
+    {
+        public Task StartingAsync(CancellationToken cancellationToken)
+            => Providers.SecretReferences.ScopeOverlap(options.Value) is { } overlap
+                ? throw new Microsoft.Extensions.Options.OptionsValidationException(Microsoft.Extensions.Options.Options.DefaultName, typeof(Providers.DeliveryOptions), [overlap])
+                : Task.CompletedTask;
+
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    /// <summary>Fails the host's start when the API's and the alias's secret limits overlap (<see cref="Providers.SecretReferences.ScopeOverlap"/>).</summary>
+    internal sealed class SecretScopeValidation : Microsoft.Extensions.Options.IValidateOptions<Providers.DeliveryOptions>
+    {
+        public Microsoft.Extensions.Options.ValidateOptionsResult Validate(string? name, Providers.DeliveryOptions options)
+            => Providers.SecretReferences.ScopeOverlap(options) is { } overlap
+                ? Microsoft.Extensions.Options.ValidateOptionsResult.Fail(overlap)
+                : Microsoft.Extensions.Options.ValidateOptionsResult.Success;
     }
 }
