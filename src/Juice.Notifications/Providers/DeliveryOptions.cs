@@ -30,6 +30,15 @@ namespace Juice.Notifications.Providers
         public string? ApiKeyVaultPrefix { get; set; }
 
         /// <summary>
+        /// A secret reference a producer's compatibility alias writes (rows <see cref="ManagedBy.WebhooksAlias"/>: phase-5 M46-3) may name only
+        /// environment variables with this prefix. The host sets it to its legacy API's own limits (Observability's <c>Webhooks:*</c>); unset
+        /// refuses them, and the API's limits never apply to alias rows, nor these to the API's.
+        /// </summary>
+        public string? AliasSecretEnvPrefix { get; set; }
+        /// <summary>A secret reference an alias writes may name only files directly in this folder; unset refuses files.</summary>
+        public string? AliasSecretDirectory { get; set; }
+
+        /// <summary>
         /// The SMTP servers email integrations may use, by name. Servers are part of the deployment: an integration names one, so the API can't
         /// point a connection at an arbitrary host.
         /// </summary>
@@ -107,10 +116,31 @@ namespace Juice.Notifications.Providers
             {
                 return false;
             }
-            var path = reference[5..];
-            return Path.IsPathRooted(path) && !path.Contains("..", StringComparison.Ordinal)
-                && string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)), Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal);
+            return InFolder(reference[5..], directory);
         }
+
+        /// <summary>
+        /// A reference a producer's compatibility alias writes (M46-3): an environment variable with <see cref="DeliveryOptions.AliasSecretEnvPrefix"/>,
+        /// or a file directly in <see cref="DeliveryOptions.AliasSecretDirectory"/>, as its legacy API allowed. Nothing when they are unset, and
+        /// never a vault: legacy had none.
+        /// </summary>
+        public static bool IsAllowedFromAlias(string reference, DeliveryOptions options)
+        {
+            if (!IsLocal(reference))
+            {
+                return false;
+            }
+            if (reference.StartsWith("env:", StringComparison.Ordinal))
+            {
+                return options.AliasSecretEnvPrefix is { Length: > 0 } prefix && reference[4..].StartsWith(prefix, StringComparison.Ordinal)
+                    && reference.Length > 4 + prefix.Length;
+            }
+            return options.AliasSecretDirectory is { Length: > 0 } directory && InFolder(reference[5..], directory);
+        }
+
+        private static bool InFolder(string path, string directory)
+            => Path.IsPathRooted(path) && !path.Contains("..", StringComparison.Ordinal)
+                && string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)), Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal);
 
         /// <summary>The value of an <c>env:</c> or <c>file:</c> secret; throws when it isn't set. A vault's goes through <see cref="ISecretResolver"/>.</summary>
         public static string Resolve(string reference)
