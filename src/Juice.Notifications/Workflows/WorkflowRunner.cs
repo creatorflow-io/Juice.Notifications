@@ -106,6 +106,27 @@ namespace Juice.Notifications.Workflows
             {
                 return;
             }
+            // A route's own digest (phase-5 M46-1, decision G2): its recipients wait in the open digest of the route and type for its window, as
+            // a legacy webhook endpoint grouped what came within its window. A recipient already in a digest (the type's own) isn't among these.
+            // They aren't counted towards a storm (route_minutes), nor in a storm's Digested while one is open on the route: the route's own window
+            // already groups them, and only the routes that send at once can storm.
+            if (waiting.Any(r => r.RouteKey is not null))
+            {
+                var keys = waiting.Where(r => r.RouteKey is not null).Select(r => r.RouteKey!).Distinct().ToList();
+                var windows = await db.Routes.AsNoTracking().Where(x => x.TenantId == row.TenantId && keys.Contains(x.Key) && x.DigestSeconds > 0)
+                    .Select(x => new { x.Key, x.DigestSeconds }).ToListAsync(ct);
+                foreach (var window in windows.GroupBy(w => w.DigestSeconds))
+                {
+                    var routeKeys = window.Select(w => w.Key).ToHashSet(StringComparer.Ordinal);
+                    var digested = waiting.Where(r => r.RouteKey is { } key && routeKeys.Contains(key)).Select(r => r.Id).ToHashSet();
+                    await JoinDigestAsync(db, row, request, new DigestStep(TimeSpan.FromSeconds(window.Key), DigestKeys.Route), context.Now, ct, digested);
+                    waiting = waiting.Where(r => !digested.Contains(r.Id)).ToList();
+                }
+                if (waiting.Count == 0)
+                {
+                    return;
+                }
+            }
             // Storm protection (phase-4-plan I43): a route past its threshold takes its recipients as a one-minute digest instead.
             if (storms is not null && waiting.Any(r => r.RouteKey is not null))
             {

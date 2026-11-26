@@ -19,7 +19,8 @@ namespace Juice.Notifications.Configuration
 
     public sealed record TargetView(string Key, string? Address, string? AddressRef, bool Enabled, string ManagedBy, DateTimeOffset UpdatedAt);
 
-    public sealed record RouteView(string Key, JsonElement Match, IReadOnlyList<string> Targets, bool Enabled, string ManagedBy, DateTimeOffset UpdatedAt);
+    public sealed record RouteView(string Key, JsonElement Match, IReadOnlyList<string> Targets, bool Enabled, string ManagedBy, DateTimeOffset UpdatedAt,
+        int DigestSeconds = 0);
 
     public sealed record AllowlistView(string Destination, IReadOnlyList<int> Ports, string ManagedBy, DateTimeOffset UpdatedAt);
 
@@ -74,7 +75,11 @@ namespace Juice.Notifications.Configuration
         public string? ManagedBy { get; init; }
     }
 
-    public sealed record PutRoute(Guid NotificationTenantId, string Key, JsonElement? Match, IReadOnlyList<string>? Targets, bool? Enabled)
+    /// <summary>
+    /// Creates or replaces a route. <see cref="DigestSeconds"/> (0–3600; phase-5 M46-1) sends what reaches the route through it as one digest per
+    /// window and type; 0 sends each at once.
+    /// </summary>
+    public sealed record PutRoute(Guid NotificationTenantId, string Key, JsonElement? Match, IReadOnlyList<string>? Targets, bool? Enabled, int? DigestSeconds = null)
         : MessageBase, ITenantCommand, IRequest<Outcome<RouteView>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
@@ -205,9 +210,15 @@ namespace Juice.Notifications.Configuration
 
         internal static string TargetHash(IntegrationTarget t) => TargetHash(t.Address, t.AddressRef, t.Enabled);
 
-        internal static string RouteHash(string match, IEnumerable<string> targets, bool enabled) => Hash(Canonical(match), string.Join(",", targets), enabled.ToString());
+        // The digest only when there is one, so a route stored before it had a digest hashes as it did.
+        internal static string RouteHash(string match, IEnumerable<string> targets, bool enabled, int digestSeconds = 0) => digestSeconds == 0
+            ? Hash(Canonical(match), string.Join(",", targets), enabled.ToString())
+            : Hash(Canonical(match), string.Join(",", targets), enabled.ToString(), "digest:" + digestSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-        internal static string RouteHash(Route r) => RouteHash(r.Match, r.Targets, r.Enabled);
+        internal static string RouteHash(Route r) => RouteHash(r.Match, r.Targets, r.Enabled, r.DigestSeconds);
+
+        /// <summary>The longest digest window a route takes (phase-5 M46-1): an hour, as legacy webhook group windows.</summary>
+        public const int MaxRouteDigestSeconds = 3600;
 
         /// <summary>A target's address, normalized for its channel, or null when it isn't one (or doesn't fit the column once normalized).</summary>
         public static string? Address(string channel, string address) => channel switch
@@ -656,6 +667,10 @@ namespace Juice.Notifications.Configuration
             {
                 errors.Add(new FieldError("/targets", "A route has 1–50 targets."));
             }
+            if (r.DigestSeconds is < 0 or > ConfigurationRules.MaxRouteDigestSeconds)
+            {
+                errors.Add(new FieldError("/digestSeconds", $"A route's digest window is 0–{ConfigurationRules.MaxRouteDigestSeconds} seconds; 0 sends each at once."));
+            }
             if (errors.Count > 0)
             {
                 return Invalid<RouteView>([.. errors]);
@@ -663,7 +678,8 @@ namespace Juice.Notifications.Configuration
             var now = clock.UtcNow();
             var managedBy = Caller(r.ManagedBy);
             var (newMatch, newTargets, enabled) = (match ?? existing!.Match, targets ?? existing!.Targets, r.Enabled ?? existing?.Enabled ?? true);
-            var hash = ConfigurationRules.RouteHash(newMatch, newTargets, enabled);
+            var digestSeconds = r.DigestSeconds ?? existing?.DigestSeconds ?? 0;
+            var hash = ConfigurationRules.RouteHash(newMatch, newTargets, enabled, digestSeconds);
             List<RouteTarget> rows = [];
             HashSet<Guid> named = [];
             var changed = existing is null || (existing.DefinitionHash, existing.ManagedBy) != (hash, managedBy);
@@ -671,7 +687,7 @@ namespace Juice.Notifications.Configuration
             {
                 existing = new Route
                 {
-                    TenantId = r.NotificationTenantId, Key = r.Key, Match = newMatch, Targets = newTargets, Enabled = enabled, ManagedBy = managedBy,
+                    TenantId = r.NotificationTenantId, Key = r.Key, Match = newMatch, Targets = newTargets, Enabled = enabled, DigestSeconds = digestSeconds, ManagedBy = managedBy,
                     DefinitionHash = hash, UpdatedAt = now,
                 };
                 db.Routes.Add(existing);
@@ -688,6 +704,7 @@ namespace Juice.Notifications.Configuration
                 {
                     existing.Match = newMatch;
                     existing.Targets = newTargets;
+                    existing.DigestSeconds = digestSeconds;
                     existing.Enabled = enabled;
                     existing.ManagedBy = managedBy;
                     existing.UpdatedAt = now;
@@ -809,7 +826,7 @@ namespace Juice.Notifications.Configuration
 
         internal static TargetView Target(IntegrationTarget t) => new(t.Key, t.Address, t.AddressRef, t.Enabled, t.ManagedBy, t.UpdatedAt);
 
-        internal static RouteView Route(Route r) => new(r.Key, JsonElement.Parse(r.Match), r.Targets, r.Enabled, r.ManagedBy, r.UpdatedAt);
+        internal static RouteView Route(Route r) => new(r.Key, JsonElement.Parse(r.Match), r.Targets, r.Enabled, r.ManagedBy, r.UpdatedAt, r.DigestSeconds);
 
         internal static AllowlistView Allowlist(AllowlistEntry a) => new(a.Destination, a.Ports, a.ManagedBy, a.UpdatedAt);
     }

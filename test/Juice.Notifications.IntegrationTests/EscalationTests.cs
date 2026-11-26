@@ -89,9 +89,12 @@ namespace Juice.Notifications.IntegrationTests
             await _database.DisposeAsync();
         }
 
-        private async Task DrainAsync<T, TStage>(string stage) where T : Claimable, ITenantOwned where TStage : class, IStage<T>
+        private Task DrainAsync<T, TStage>(string stage) where T : Claimable, ITenantOwned where TStage : class, IStage<T>
+            => DrainAsync<T, TStage>(_services!, stage);
+
+        private async Task DrainAsync<T, TStage>(IServiceProvider services, string stage) where T : Claimable, ITenantOwned where TStage : class, IStage<T>
         {
-            var runner = _services!.GetRequiredService<StageRunner<T, TStage>>();
+            var runner = services.GetRequiredService<StageRunner<T, TStage>>();
             PassResult pass;
             do
             {
@@ -458,6 +461,74 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Single(named, r => r.NamedAs == "route:gone" && r.Outcome == RecipientOutcome.Failed);
             Assert.Equal(named.Count, named.Select(r => r.NamedAs).Distinct().Count());
             Assert.Contains(named, r => r.NamedAs.StartsWith("subscriber:"));
+        }
+
+        /// <summary>
+        /// QA (M46-0 re-confirm, reviewer-2's gap): the other two unreached records, resolver unavailable and truncated, are each kept once per
+        /// step through a replanned step, and the producer hears <c>recipient.unresolved</c> once per step: twice over two steps, not three times.
+        /// </summary>
+        [Fact]
+        public async Task A_replanned_step_records_unavailable_and_truncated_names_once_and_raises_unresolved_once_per_step()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                db.Resolvers.Add(new RecipientResolverConfig
+                {
+                    TenantId = Tenant, Key = "remote", Kind = "flaky", Handles = ["group", "user"], Settings = "{}", DefinitionHash = "h", UpdatedAt = Seed.Now,
+                });
+                const string step = """{"afterMinutes":5,"recipients":[{"id":"down","kind":"group","resolver":"remote"},{"id":"lead","kind":"group","resolver":"staff"}]}""";
+                db.EscalationPolicies.Add(new EscalationPolicy
+                {
+                    TenantId = Tenant, Key = "unreached", Steps = $"[{step},{step}]", DefinitionHash = "h", UpdatedAt = Seed.Now,
+                });
+                // Events to producers need the application's broker user (design §19 decision 12).
+                await db.Applications.Where(a => a.Id == _seed.App).ExecuteUpdateAsync(s => s.SetProperty(a => a.BrokerUser, "esc-broker"), Ct);
+                await db.SaveChangesAsync(Ct);
+            }
+            // A container of its own: the directory down with no wait, one person per name, events on.
+            var flaky = new FlakyResolver { Down = true };
+            var services = new ServiceCollection().AddLogging(l => l.AddProvider(new ErrorLogProvider()));
+            services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
+            services.AddSingleton<TimeProvider>(_clock);
+            services.AddPostgresClaimStore();
+            services.AddPlanning(Options, runWorkers: false);
+            services.AddDeliveryPlanning(Options, runWorkers: false);
+            services.Configure<ResolverOptions>(o => (o.MaxRecipients, o.WaitLimit) = (1, TimeSpan.Zero));
+            services.Configure<Events.EventsOptions>(o => o.Enabled = true);
+            services.AddSingleton<IRecipientResolver>(_staff);
+            services.AddSingleton<IRecipientResolver>(flaky);
+            await using var provider = services.BuildServiceProvider();
+
+            var (id, _) = await NotificationAsync("unreached");
+            await DrainAsync<Notification, PlannerStage>(provider, "planner");
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>(provider, "escalation");
+            await DrainAsync<Notification, PlannerStage>(provider, "planner");
+
+            // Step 1 planned again (a replanned step).
+            await using (var db = _database.Context())
+            {
+                await db.Notifications.Where(n => n.Id == id).ExecuteUpdateAsync(s => s
+                    .SetProperty(n => n.State, NotificationState.Planning).SetProperty(n => n.NextAt, _clock.GetUtcNow()), Ct);
+            }
+            await DrainAsync<Notification, PlannerStage>(provider, "planner");
+
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>(provider, "escalation");
+            await DrainAsync<Notification, PlannerStage>(provider, "planner");
+
+            await using var check = _database.Context();
+            var names = await check.Recipients.AsNoTracking().Where(r => r.NotificationId == id && r.EscalationStep > 0 && r.Kind == RecipientKind.Name)
+                .OrderBy(r => r.EscalationStep).ThenBy(r => r.NamedAs).Select(r => new { r.EscalationStep, r.NamedAs, r.Outcome }).ToListAsync(Ct);
+            Assert.Equal(
+                [(1, "group:down", RecipientOutcome.ResolverUnavailable), (1, "group:lead", RecipientOutcome.Truncated),
+                 (2, "group:down", RecipientOutcome.ResolverUnavailable), (2, "group:lead", RecipientOutcome.Truncated)],
+                names.Select(n => (n.EscalationStep, n.NamedAs, n.Outcome)));
+            var unresolved = (await check.ProducerEvents.AsNoTracking().Select(e => e.Payload).ToListAsync(Ct))
+                .Select(Events.ProducerEvents.Read).Where(e => e.Event == Events.ProducerEventNames.RecipientUnresolved && e.NotificationId == id).ToList();
+            Assert.Equal(2, unresolved.Count);
+            Assert.All(unresolved, e => Assert.Equal(["group:down"], e.Names!));
         }
     }
 }

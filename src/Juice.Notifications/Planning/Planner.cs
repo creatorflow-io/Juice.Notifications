@@ -370,9 +370,10 @@ namespace Juice.Notifications.Planning
                     named, bounds.MaxRecipients, row.TenantId, row.Id);
                 db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Truncated, context.Now));
             }
-            if (unavailable.Count > 0 || truncated.Count > 0)
+            // Counted as recorded: a step planned again counts none of the names it recorded before.
+            var (unresolvedCount, truncatedCount) = (unavailable.Keys.Count(n => !recorded.Contains(n)), truncated.Keys.Count(n => !recorded.Contains(n)));
+            if (unresolvedCount > 0 || truncatedCount > 0)
             {
-                var (unresolvedCount, truncatedCount) = (unavailable.Count, truncated.Count);
                 context.AfterCommit.Add(() =>
                 {
                     if (unresolvedCount > 0)
@@ -439,16 +440,25 @@ namespace Juice.Notifications.Planning
             // Storm protection (phase-4-plan I43): a route storming now takes its recipients as a digest, which the workflow's send step does
             // (and counts them there). Otherwise this notification counts on its routes here, and may start a storm for the ones after it.
             var stormy = false;
-            if (!escalating && storms is not null && due.Any(r => r.RouteKey is not null))
+            var routes = due.Where(r => r.RouteKey is not null).GroupBy(r => r.RouteKey!).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+            if (!escalating && storms is not null && routes.Count > 0)
             {
-                var routes = due.Where(r => r.RouteKey is not null).GroupBy(r => r.RouteKey!).ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
                 stormy = await storms.AnyOpenAsync(db, row.TenantId, routes.Keys, ct);
-                if (!stormy && workflows.For(type).IsSendOnly)
-                {
-                    await storms.CountAsync(db, row.TenantId, routes, context.Now, context.AfterCommit, ct);
-                }
             }
-            if (!escalating && (!workflows.For(type).IsSendOnly || stormy))
+            // A route with its own digest (phase-5 M46-1) takes its recipients the same way: the workflow's send step puts them in its digest.
+            // Decided before the storm count: a notification that goes through the send step is counted there (its routes without a digest),
+            // so counting it here too would count it twice.
+            var routeDigest = false;
+            if (!escalating && !stormy && workflows.For(type).IsSendOnly && routes.Count > 0)
+            {
+                var keys = routes.Keys.ToList();
+                routeDigest = await db.Routes.AsNoTracking().AnyAsync(x => x.TenantId == row.TenantId && keys.Contains(x.Key) && x.DigestSeconds > 0, ct);
+            }
+            if (!escalating && storms is not null && routes.Count > 0 && !stormy && !routeDigest && workflows.For(type).IsSendOnly)
+            {
+                await storms.CountAsync(db, row.TenantId, routes, context.Now, context.AfterCommit, ct);
+            }
+            if (!escalating && (!workflows.For(type).IsSendOnly || stormy || routeDigest))
             {
                 // A workflow: the people wait (Pending, not due) until its send step, which applies mutes and preferences as they are then. The
                 // notification runs its workflow on the next claim, at once.
