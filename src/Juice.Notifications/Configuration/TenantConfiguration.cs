@@ -42,7 +42,7 @@ namespace Juice.Notifications.Configuration
 
     /// <summary>Creates or replaces an integration. Its channel is fixed once created.</summary>
     public sealed record PutIntegration(Guid NotificationTenantId, string Key, string? Channel, string? Kind, JsonElement? Settings, string? SecretRef,
-        int? Priority, bool? Enabled) : MessageBase, IRequest<Outcome<IntegrationView>>, IOwnedSetupWrite
+        int? Priority, bool? Enabled) : MessageBase, ITenantCommand, IRequest<Outcome<IntegrationView>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
 
@@ -56,38 +56,38 @@ namespace Juice.Notifications.Configuration
         public Guid? Id { get; init; }
     }
 
-    public sealed record DeleteIntegration(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
+    public sealed record DeleteIntegration(Guid NotificationTenantId, string Key) : MessageBase, ITenantCommand, IRequest<Outcome<bool>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
     }
 
     public sealed record PutTarget(Guid NotificationTenantId, string IntegrationKey, string Key, string? Address, string? AddressRef, bool? Enabled)
-        : MessageBase, IRequest<Outcome<TargetView>>, IOwnedSetupWrite
+        : MessageBase, ITenantCommand, IRequest<Outcome<TargetView>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
 
         internal bool Provisioned => ManagedBy == Notifications.ManagedBy.Configuration;
     }
 
-    public sealed record DeleteTarget(Guid NotificationTenantId, string IntegrationKey, string Key) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
+    public sealed record DeleteTarget(Guid NotificationTenantId, string IntegrationKey, string Key) : MessageBase, ITenantCommand, IRequest<Outcome<bool>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
     }
 
     public sealed record PutRoute(Guid NotificationTenantId, string Key, JsonElement? Match, IReadOnlyList<string>? Targets, bool? Enabled)
-        : MessageBase, IRequest<Outcome<RouteView>>, IOwnedSetupWrite
+        : MessageBase, ITenantCommand, IRequest<Outcome<RouteView>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
 
         internal bool Provisioned => ManagedBy == Notifications.ManagedBy.Configuration;
     }
 
-    public sealed record DeleteRoute(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
+    public sealed record DeleteRoute(Guid NotificationTenantId, string Key) : MessageBase, ITenantCommand, IRequest<Outcome<bool>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
     }
 
-    public sealed record PutAllowlistEntry(Guid NotificationTenantId, string Destination, IReadOnlyList<int>? Ports) : MessageBase, IRequest<Outcome<AllowlistView>>,
+    public sealed record PutAllowlistEntry(Guid NotificationTenantId, string Destination, IReadOnlyList<int>? Ports) : MessageBase, ITenantCommand, IRequest<Outcome<AllowlistView>>,
         IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
@@ -95,7 +95,7 @@ namespace Juice.Notifications.Configuration
         internal bool Provisioned => ManagedBy == Notifications.ManagedBy.Configuration;
     }
 
-    public sealed record DeleteAllowlistEntry(Guid NotificationTenantId, string Destination) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
+    public sealed record DeleteAllowlistEntry(Guid NotificationTenantId, string Destination) : MessageBase, ITenantCommand, IRequest<Outcome<bool>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
     }
@@ -334,6 +334,11 @@ namespace Juice.Notifications.Configuration
             if (existing?.ManagedBy == ManagedBy.Service)
             {
                 return ServiceManaged<IntegrationView>();
+            }
+            if (r.Id == Guid.Empty)
+            {
+                return Outcome<IntegrationView>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",
+                    [new FieldError("/id", "An integration's id is a real id, not the empty one; leave it out for a new one.")]);
             }
             // An id is the caller's for a new integration only (M46-2): an existing one keeps its own, and one another integration has is taken.
             if (r.Id is { } id && (existing is not null ? existing.Id != id : await db.Integrations.AnyAsync(i => i.TenantId == r.NotificationTenantId && i.Id == id, ct)))

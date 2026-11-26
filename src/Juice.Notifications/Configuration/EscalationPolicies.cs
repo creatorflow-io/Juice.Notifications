@@ -16,13 +16,13 @@ namespace Juice.Notifications.Configuration
     public sealed record EscalationStepSpec(int AfterMinutes, IReadOnlyList<RecipientSpec> Recipients);
 
     public sealed record PutEscalationPolicy(Guid NotificationTenantId, string Key, JsonElement? Steps, bool? StopOnAcknowledge)
-        : MessageBase, IRequest<Outcome<EscalationPolicyView>>, IOwnedSetupWrite
+        : MessageBase, ITenantCommand, IRequest<Outcome<EscalationPolicyView>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
     }
 
     /// <summary>Deletes a policy; an escalation running it stops at its next step.</summary>
-    public sealed record DeleteEscalationPolicy(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
+    public sealed record DeleteEscalationPolicy(Guid NotificationTenantId, string Key) : MessageBase, ITenantCommand, IRequest<Outcome<bool>>, IOwnedSetupWrite
     {
         public string? ManagedBy { get; init; }
     }

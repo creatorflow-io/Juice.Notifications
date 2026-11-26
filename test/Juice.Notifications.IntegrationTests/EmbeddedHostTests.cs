@@ -516,6 +516,77 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
+        /// Two host transactions create the same integration at once (the same key, or the same caller's id): the second waits on the first's
+        /// row, and when the first commits its save loses. It is undone to its savepoint and answered as a conflict, and the second host's
+        /// transaction goes on: its next command is saved and it commits (QA M46-2, round 1).
+        /// </summary>
+        [Theory]
+        [InlineData(false, ErrorCodes.ConcurrentChange)]
+        [InlineData(true, ErrorCodes.IdInUse)]
+        public async Task A_create_racing_another_host_transaction_is_a_conflict_and_the_host_transaction_goes_on(bool sameId, string code)
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var suffix = Guid.NewGuid().ToString("N")[..6];
+            var id = Guid.CreateVersion7();
+            var (first, second) = sameId ? ($"race-a-{suffix}", $"race-b-{suffix}") : ($"race-{suffix}", $"race-{suffix}");
+            Task<(Outcome<IntegrationView> Raced, Outcome<AllowlistView> Next)>? racing = null;
+            await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work =>
+            {
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(Hooks(first, sameId ? id : null), Ct)).Kind);
+                // The other host transaction, while this one is open: its insert waits on this one's row.
+                racing = host.InHostScopeAsync((_, other) => other.RunAsync(async w =>
+                    (await w.SendAsync(Hooks(second, sameId ? id : null), Ct), await w.SendAsync(new PutAllowlistEntry(Tenant, $"race-{suffix}.example.com", [8443]), Ct)), Ct));
+                await LockWaitAsync();
+                return true;
+            }, Ct));
+            var (raced, next) = await racing!;
+            Assert.Equal((OutcomeKind.Conflict, code), (raced.Kind, raced.Code));
+            Assert.Equal(OutcomeKind.Ok, next.Kind);
+
+            await using var db = _database.Context();
+            Assert.Equal(sameId ? [first] : [first], await db.Integrations.Where(i => i.Key == first || i.Key == second).Select(i => i.Key).Distinct().ToListAsync(Ct));
+            Assert.True(await db.Allowlist.AnyAsync(a => a.Destination == $"race-{suffix}.example.com", Ct), "the second host transaction committed its next command");
+        }
+
+        [Fact]
+        public async Task A_command_for_another_tenant_or_an_empty_id_is_refused()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var (other, empty) = await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work =>
+                (await work.SendAsync(new PutAllowlistEntry(Guid.CreateVersion7(), "elsewhere.example.com", null), Ct),
+                 await work.SendAsync(Hooks("hooks-empty", Guid.Empty), Ct)), Ct));
+            Assert.Equal((OutcomeKind.Forbidden, ErrorCodes.TenantForbidden), (other.Kind, other.Code));
+            Assert.Equal((OutcomeKind.Invalid, ErrorCodes.InvalidRequest, "/id"), (empty.Kind, empty.Code, Assert.Single(empty.Errors!).Pointer));
+            await using var db = _database.Context();
+            Assert.False(await db.Allowlist.AnyAsync(a => a.Destination == "elsewhere.example.com", Ct));
+        }
+
+        /// <summary>Two commands in one host scope: each change is heard by the host's audit sink once, and the outbox holds what it should, once.</summary>
+        [Fact]
+        public async Task Two_commands_in_one_host_scope_are_audited_once_each_and_add_nothing_twice_to_the_outbox()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await using var db = _database.Context();
+            var outboxBefore = await db.Database.SqlQuery<int>($"SELECT count(*)::int AS \"Value\" FROM notifications.outbox_events").SingleAsync(Ct);
+            var before = host.Audit.Changes.Count;
+            await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work =>
+            {
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(Hooks("hooks-once"), Ct)).Kind);
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(new PutAllowlistEntry(Tenant, "once.example.com", [8443]), Ct)).Kind);
+                return true;
+            }, Ct));
+            var heard = host.Audit.Changes.Skip(before).ToList();
+            Assert.Single(heard, c => c.Table == "integrations");
+            Assert.Single(heard, c => c.Table == "destination_allowlist");
+            Assert.Equal(2, heard.Count);
+            // Setup changes raise no outbox message (they are audited through the host's sink, in its transaction).
+            Assert.Equal(outboxBefore, await db.Database.SqlQuery<int>($"SELECT count(*)::int AS \"Value\" FROM notifications.outbox_events").SingleAsync(Ct));
+        }
+
+        /// <summary>
         /// An in-process caller's integration id (M46-2): a create takes it; another integration's is refused, and so is a different one for an
         /// existing integration, whose id never changes.
         /// </summary>

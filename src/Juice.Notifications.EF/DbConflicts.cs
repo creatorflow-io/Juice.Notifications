@@ -15,6 +15,8 @@ namespace Juice.Notifications.Data
         public const string RequestIdempotencyKey = "ix_requests_tenant_id_application_id_idempotency_key";
         public const string RecipientNamed = "ix_notification_recipients_named";
         public const string AttemptNumber = "ix_delivery_attempts_number";
+        /// <summary>An integration's id within its tenant (its key): taken when an in-process caller names an id another integration has (M46-2).</summary>
+        public const string IntegrationId = "pk_integrations";
         public const string TargetIntegration = "fk_integration_targets_integrations_tenant_id_integration_id";
         public const string DeliveryIntegration = "fk_deliveries_integrations_tenant_id_integration_id";
         public const string AttemptIntegration = "fk_delivery_attempts_integrations_tenant_id_integration_id";

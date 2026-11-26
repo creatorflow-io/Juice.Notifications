@@ -34,21 +34,53 @@ namespace Juice.Notifications.Embedded
         /// <summary>The pipeline's context in the host's transaction, for reads; the commands write.</summary>
         public NotificationsDbContext Db => db;
 
+        private int _saves;
+
         /// <summary>
         /// Sends a command and, when it succeeds, saves what it changed (in the host's transaction), so the commands after it see it. A refused
         /// command saves nothing and its unsaved changes are dropped; the host decides whether that rolls its transaction back.
+        /// <para>
+        /// Each save is in a savepoint of the host's transaction: one that loses a race in the database (another transaction created the same
+        /// key or id at the same moment, a row changed under it) is undone to the savepoint and answered as a conflict, <c>id_in_use</c> or
+        /// <c>concurrent_change</c>, and the host's transaction stays usable. A command for another tenant than the host's is refused
+        /// (<c>tenant_forbidden</c>).
+        /// </para>
         /// </summary>
         public async Task<Outcome<TResult>> SendAsync<TResult>(IRequest<Outcome<TResult>> command, CancellationToken cancellationToken = default)
         {
+            if (command is Configuration.ITenantCommand { NotificationTenantId: var tenant } && tenant != tenantId)
+            {
+                return Outcome<TResult>.Forbidden(ErrorCodes.TenantForbidden, $"The host's notifications are its tenant's ({tenantId}) only, not {tenant}'s.");
+            }
             var outcome = await services.GetRequiredService<IMediator>().Send(command, cancellationToken);
-            if (outcome.Kind is OutcomeKind.Ok or OutcomeKind.Created)
+            if (outcome.Kind is not (OutcomeKind.Ok or OutcomeKind.Created))
+            {
+                db.ChangeTracker.Clear();
+                return outcome;
+            }
+            var transaction = db.Database.CurrentTransaction
+                ?? throw new InvalidOperationException("The host scope's context is enlisted in the host's transaction.");
+            var savepoint = $"notifications_host_work_{++_saves}";
+            await transaction.CreateSavepointAsync(savepoint, cancellationToken);
+            try
             {
                 await db.SaveChangesAsync(cancellationToken);
             }
-            else
+            catch (Exception ex)
             {
+                // Undone to before this command: the host's transaction isn't left aborted (25P02) by a failed statement.
+                await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None);
                 db.ChangeTracker.Clear();
+                if (DbConflicts.Classify(ex) is { } conflict && conflict.Kind is ConflictKind.Unique or ConflictKind.RowGone or ConflictKind.Aborted)
+                {
+                    return conflict is { Kind: ConflictKind.Unique, Constraint: Constraints.IntegrationId }
+                        ? Outcome<TResult>.Conflict(ErrorCodes.IdInUse, "Another transaction created an integration with this id at the same moment.")
+                        : Outcome<TResult>.Conflict(ErrorCodes.ConcurrentChange,
+                            "Another transaction changed the same setup at the same moment; asking again answers on what it is now.");
+                }
+                throw;
             }
+            await transaction.ReleaseSavepointAsync(savepoint, cancellationToken);
             return outcome;
         }
     }

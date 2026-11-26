@@ -16,7 +16,7 @@ namespace Juice.Notifications.Configuration
 
     /// <summary>Creates or replaces a tenant's resolver. Its kind (the implementation) is fixed once created.</summary>
     public sealed record PutResolver(Guid NotificationTenantId, string Key, string? Kind, IReadOnlyList<string>? Handles, JsonElement? Settings,
-        string? SecretRef, bool? Enabled) : MessageBase, IRequest<Outcome<ResolverView>>
+        string? SecretRef, bool? Enabled) : MessageBase, ITenantCommand, IRequest<Outcome<ResolverView>>
     {
         internal bool Provisioned { get; init; }
     }
@@ -25,7 +25,7 @@ namespace Juice.Notifications.Configuration
     /// Deletes a tenant's resolver. Requests accepted naming it and not yet planned skip those recipients, with a warning; disabling it has the
     /// same effect and keeps the row.
     /// </summary>
-    public sealed record DeleteResolver(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>;
+    public sealed record DeleteResolver(Guid NotificationTenantId, string Key) : MessageBase, ITenantCommand, IRequest<Outcome<bool>>;
 
     public static partial class ConfigurationRules
     {
