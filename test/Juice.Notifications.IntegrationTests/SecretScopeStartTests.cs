@@ -1,6 +1,7 @@
 using Juice.Notifications.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
@@ -59,6 +60,34 @@ namespace Juice.Notifications.IntegrationTests
                 services => services.PostConfigure<Providers.DeliveryOptions>(o => o.AliasSecretEnvPrefix = "JUICE_WEBHOOK_"));
 
             await Assert.ThrowsAsync<OptionsValidationException>(() => host.StartAsync(TestContext.Current.CancellationToken));
+        }
+
+        /// <summary>
+        /// QA (M46-3): a host that registers its <c>IOptions&lt;DeliveryOptions&gt;</c> instance itself (past the options factory, as QA D1 found a host
+        /// may) with overlapping limits must not start either: the dispatcher and the handlers read that instance.
+        /// </summary>
+        [Fact]
+        public async Task Overlapping_limits_in_a_directly_registered_options_instance_fail_the_start()
+        {
+            using var host = Build(new(), services => services.Replace(ServiceDescriptor.Singleton<IOptions<Providers.DeliveryOptions>>(
+                Options.Create(new Providers.DeliveryOptions { ApiSecretEnvPrefix = "JUICE_", AliasSecretEnvPrefix = "JUICE_WEBHOOK_" }))));
+
+            var failed = await Assert.ThrowsAnyAsync<Exception>(() => host.StartAsync(TestContext.Current.CancellationToken));
+            Assert.Contains("one writer could name the other", failed.ToString(), StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// QA (M46-3): environment variable names are case-insensitive on Windows, so prefixes that differ only in case name the same variables
+        /// there: the API's <c>NOTIFICATIONS_SECRET_</c> reaches an alias's <c>notifications_secret_alias_*</c>. They overlap.
+        /// </summary>
+        [Fact]
+        public async Task Prefixes_that_differ_only_in_case_overlap()
+        {
+            using var host = Build(new() { ["Delivery:AliasSecretEnvPrefix"] = "notifications_secret_alias_" });
+
+            // Refused by the overlap check (not by the unreachable database, which a start that passes it meets next).
+            var failed = await Assert.ThrowsAnyAsync<Exception>(() => host.StartAsync(TestContext.Current.CancellationToken));
+            Assert.Contains("one writer could name the other", failed.ToString(), StringComparison.Ordinal);
         }
 
         [Fact]
