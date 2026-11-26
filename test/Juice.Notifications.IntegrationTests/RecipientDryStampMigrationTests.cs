@@ -2,6 +2,11 @@ using Juice.Notifications.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.DependencyInjection;
+using Juice.Notifications.Data.PostgreSQL;
+using Juice.Notifications.Delivering;
+using Juice.Notifications.Planning;
+using Juice.Notifications.Stages;
 
 namespace Juice.Notifications.IntegrationTests
 {
@@ -50,6 +55,57 @@ namespace Juice.Notifications.IntegrationTests
                 var flags = await db.Recipients.AsNoTracking().Where(r => r.TenantId == Tenant).ToDictionaryAsync(r => r.Id, r => r.DryRun, Ct);
                 Assert.Equal((true, false, false), (flags[ids["dry-own"]], flags[ids["dry-step"]], flags[ids["real-own"]]));
             }
+        }
+
+        /// <summary>
+        /// QA (M44-2c): an escalation step's recipient already there and not yet planned (deferred by quiet hours, a throttle, a busy
+        /// notification) when the migration runs. Before it, M44-2b planned it in the mode at planning; the backfill makes it real, so a host
+        /// still in shadow when it is deployed would page for real beside legacy, which pages in shadow. Planned by a host in dry run, it must be
+        /// dry, whatever the backfill does for the steps (unknown at migration: a null left to the planner's mode, or a backfill from the host's
+        /// own mode at start, both meet this).
+        /// </summary>
+        [Fact]
+        public async Task An_escalation_step_recipient_waiting_at_the_migration_is_planned_dry_by_a_host_in_dry_run()
+        {
+            LocalStack.RequireAvailable();
+            Guid recipientId;
+            await using (var db = await _database.MigratedAsync())
+            {
+                var app = Seed.Application("dry-stamp-pending");
+                var type = Seed.Type(app.Id, "dry-stamp-pending.thing");
+                var integration = Seed.Integration(Tenant);
+                var request = Seed.Request(Tenant, app.Id, type.Id, "pending-step");
+                db.Entry(request).Property(r => r.DryRun).CurrentValue = true;
+                var notification = Seed.Notification(Tenant, request.Id);
+                (notification.State, notification.NextAt) = (NotificationState.Planned, null);
+                var recipient = Seed.Recipient(Tenant, notification.Id);
+                (recipient.EscalationStep, recipient.Outcome, recipient.NextAt) = (1, RecipientOutcome.Planned, Seed.Now);
+                db.AddRange(app, type, integration, new ApplicationTenant { ApplicationId = app.Id, TenantId = Tenant, LinkedAt = Seed.Now }, request, notification, recipient);
+                db.Templates.Add(new Template { TypeId = type.Id, Channel = Channels.Webhook, Locale = "en", Version = 1, Engine = "scriban", Body = """{"x":1}""", CreatedAt = Seed.Now });
+                await db.SaveChangesAsync(Ct);
+                recipientId = recipient.Id;
+                await db.GetService<IMigrator>().MigrateAsync(Previous, cancellationToken: Ct);
+            }
+            await using (var db = _database.Context())
+            {
+                await db.Database.MigrateAsync(Ct);
+            }
+
+            var stage = new StageOptions { Batch = 10, Lease = TimeSpan.FromSeconds(30) };
+            var services = new ServiceCollection().AddLogging();
+            services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
+            services.AddSingleton(TimeProvider.System);
+            services.AddPostgresClaimStore();
+            services.Configure<Providers.DeliveryOptions>(o => o.DryRun = true);
+            services.AddPlanning(stage, runWorkers: false);
+            services.AddDeliveryPlanning(stage, runWorkers: false);
+            await using var provider = services.BuildServiceProvider();
+            var runner = provider.GetRequiredService<StageRunner<NotificationRecipient, DeliveryPlannerStage>>();
+            Assert.Equal(1, (await runner.RunOnceAsync("delivery-planner", stage, Ct)).Completed);
+
+            await using var check = _database.Context();
+            var delivery = await check.Deliveries.AsNoTracking().SingleAsync(d => check.DeliveryItems.Any(i => i.DeliveryId == d.Id && i.RecipientId == recipientId), Ct);
+            Assert.True(delivery.DryRun, "a step recipient waiting at the migration was planned for real by a host in dry run");
         }
     }
 }
