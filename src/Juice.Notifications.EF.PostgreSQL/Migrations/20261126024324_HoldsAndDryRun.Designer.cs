@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Juice.Notifications.EF.PostgreSQL.Migrations
 {
     [DbContext(typeof(NotificationsDbContext))]
-    [Migration("20261126021814_HoldsAndDryRun")]
+    [Migration("20261126024324_HoldsAndDryRun")]
     partial class HoldsAndDryRun
     {
         /// <inheritdoc />
@@ -178,8 +178,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.PrimitiveCollection<int[]>("Ports")
@@ -1307,8 +1307,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.Property<int>("Priority")
@@ -1384,8 +1384,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
@@ -2357,8 +2357,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.Property<string>("Match")

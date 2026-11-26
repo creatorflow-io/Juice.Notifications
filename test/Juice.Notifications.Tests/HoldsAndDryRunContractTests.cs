@@ -4,6 +4,7 @@ using Juice.Notifications.Hosting;
 using Juice.Notifications.Providers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace Juice.Notifications.Tests
@@ -40,12 +41,14 @@ namespace Juice.Notifications.Tests
         }
 
         [Fact]
-        public void Dry_run_set_in_code_fails_when_the_options_are_read_until_it_is_built()
+        public async Task Dry_run_set_in_code_fails_the_host_at_start_until_it_is_built()
         {
-            var services = new ServiceCollection().AddNotificationsPipeline(new ConfigurationBuilder().Build(), (_, _) => { });
-            services.Configure<DeliveryOptions>(o => o.DryRun = true);
-            using var provider = services.BuildServiceProvider();
-            var refused = Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<DeliveryOptions>>().Value);
+            var builder = Host.CreateApplicationBuilder();
+            builder.Services.AddNotificationsPipeline(new ConfigurationBuilder().Build(), (_, _) => { });
+            builder.Services.Configure<DeliveryOptions>(o => o.DryRun = true);
+            using var host = builder.Build();
+            // Before any hosted service (the migrator, the stages) starts: the options are checked as the host starts, not when first read.
+            var refused = await Assert.ThrowsAsync<OptionsValidationException>(() => host.StartAsync(TestContext.Current.CancellationToken));
             Assert.Contains("M44-2", refused.Message);
         }
 
