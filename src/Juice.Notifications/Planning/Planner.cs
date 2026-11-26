@@ -239,6 +239,11 @@ namespace Juice.Notifications.Planning
             }
             // An escalation step (phase-3-plan I34): its policy's names, not the request's, sent at once whatever the workflow.
             var escalating = row.EscalationStep > 0 && row.EscalationSpecs is not null;
+            // Dry as they are created (M44-2c, §6.4): the request's own recipients as it was accepted; an escalation step's as the pipeline runs
+            // now, when the step is planned (legacy's escalation stops at the switch, so a step planned after it pages). The delivery planner
+            // and digest membership read only this, however late they take the recipient (quiet hours, a throttle, a busy notification). Every
+            // recipient this plan creates has it, the names that reached no one too.
+            var dry = escalating ? Delivering.DeliveryPlannerStage.DryRun(context) : request.DryRun;
             var specs = JsonSerializer.Deserialize<List<RecipientSpec>>(escalating ? row.EscalationSpecs! : request.Recipients, IntakeQueries.Json) ?? [];
             var configs = specs.Any(s => s.Resolver is not null)
                 ? await db.Resolvers.AsNoTracking().Where(c => c.TenantId == row.TenantId && c.Enabled).ToListAsync(ct)
@@ -342,7 +347,7 @@ namespace Juice.Notifications.Planning
             {
                 if (!recorded.Contains(named))
                 {
-                    db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.ResolverUnavailable, context.Now));
+                    db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.ResolverUnavailable, context.Now, dry));
                 }
                 // One record per name: one named twice, through a resolver that failed and another that truncated, reads as unavailable.
                 truncated.Remove(named);
@@ -362,13 +367,13 @@ namespace Juice.Notifications.Planning
             // resolved to no one is, so history shows the step tried.
             foreach (var (named, resolverKey) in missingRoutes.Where(m => !recorded.Contains(m.Key)))
             {
-                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Failed, context.Now));
+                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Failed, context.Now, dry));
             }
             foreach (var (named, resolverKey) in truncated.Where(t => !recorded.Contains(t.Key)))
             {
                 logger.LogWarning("{Name} reached more than {Max} people in tenant {Tenant}; notification {Id} keeps the first of them",
                     named, bounds.MaxRecipients, row.TenantId, row.Id);
-                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Truncated, context.Now));
+                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Truncated, context.Now, dry));
             }
             // Counted as recorded: a step planned again counts none of the names it recorded before.
             var (unresolvedCount, truncatedCount) = (unavailable.Keys.Count(n => !recorded.Contains(n)), truncated.Keys.Count(n => !recorded.Contains(n)));
@@ -416,6 +421,7 @@ namespace Juice.Notifications.Planning
             foreach (var recipient in due)
             {
                 recipient.EscalationStep = row.EscalationStep;
+                recipient.DryRun = dry;
             }
             if (escalating)
             {
@@ -530,9 +536,10 @@ namespace Juice.Notifications.Planning
         /// A record of a name that reached no one, or not everyone it named: it names what the request named, has no subscriber, and is never
         /// due, so the delivery planner never takes it.
         /// </summary>
-        private static NotificationRecipient Unreached(Notification row, string named, string resolver, RecipientOutcome outcome, DateTimeOffset now) => new()
+        private static NotificationRecipient Unreached(Notification row, string named, string resolver, RecipientOutcome outcome, DateTimeOffset now,
+            bool dry) => new()
         {
-            EscalationStep = row.EscalationStep,
+            EscalationStep = row.EscalationStep, DryRun = dry,
             TenantId = row.TenantId, NotificationId = row.Id, Kind = RecipientKind.Name, Resolver = resolver, NamedAs = named, Via = [named],
             Outcome = outcome, NextAt = null, CreatedAt = now,
         };

@@ -90,14 +90,6 @@ namespace Juice.Notifications.Delivering
         internal static bool DryRun(StageContext context)
             => context.Services.GetService<Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions>>()?.Value.DryRun ?? false;
 
-        /// <summary>
-        /// Whether a recipient's deliveries are dry (phase-5 M44-2b): the request's own recipients as the request was accepted
-        /// (<see cref="NotificationRequest.DryRun"/>), whatever the mode is now; an escalation step's as the mode is now, when the step is
-        /// planned, since legacy's escalation stops at the switch and a step of an alert open across it must page. A delivery keeps what it is
-        /// planned with (retries and replays too).
-        /// </summary>
-        internal static bool DryRun(NotificationRequest request, int escalationStep, bool dryNow) => escalationStep > 0 ? dryNow : request.DryRun;
-
         /// <summary>A recipient's outcome once delivery planning is through with it (Planned: it has deliveries).</summary>
         private static void Counted(StageContext context, NotificationRecipient row)
             => context.AfterCommit.Add(() => Telemetry.Recipients.Add(1, new KeyValuePair<string, object?>("outcome", row.Outcome.ToString())));
@@ -173,7 +165,9 @@ namespace Juice.Notifications.Delivering
                     Id = id, TenantId = row.TenantId, Channel = destination.Channel, IntegrationId = destination.Integration.Id, DestinationKey = destination.Key,
                     DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0, Locale = template?.Locale ?? Types.TypeRules.DefaultLocale,
                     RendererVersion = TemplateRenderer.Version, Content = content, Priority = request.Priority, Mandatory = type.Mandatory, CreatedAt = context.Now,
-                    DryRun = DryRun(request, row.EscalationStep, DryRun(context)),
+                    // The recipient's own flag, fixed when it was created (M44-2c); the delivery keeps it (retries and replays too).
+                    // An escalation step's recipient from before M44-2c has none (null): the mode now, as M44-2b planned it.
+                    DryRun = row.DryRun ?? DryRun(context),
                     Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed, FailureCheckDue = problem is not null,
                     FailureCategory = problem is null ? null : category,
                     LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? context.Now : null, CompletedAt = problem is null ? null : context.Now,

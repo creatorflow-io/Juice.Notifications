@@ -28,7 +28,7 @@ namespace Juice.Notifications.Intake
     public sealed record NotificationSubmission(
         string? Type, int? TypeVersion, string? IdempotencyKey, string? CorrelationKey, IReadOnlyList<RecipientSpec>? Recipients, ActorSpec? Actor,
         string? Priority, IReadOnlyDictionary<string, string>? Labels, JsonElement? Data, IReadOnlyDictionary<string, string>? Links,
-        DateTimeOffset? ExpiresAt, DateTimeOffset? OccurredAt = null);
+        DateTimeOffset? ExpiresAt, DateTimeOffset? OccurredAt = null, bool DryRun = false);
 
     /// <summary>
     /// Accepts a notification for a tenant from an application: the request and its notification (<c>Planning</c>, due now) are stored in one
@@ -41,8 +41,11 @@ namespace Juice.Notifications.Intake
     public sealed record AcceptNotification(Guid NotificationTenantId, Guid ApplicationId, string ApplicationKey, NotificationSubmission Submission,
         string? TraceParent, bool ApplicationEnabled = true) : MessageBase, IRequest<Outcome<AcceptedView>>;
 
-    /// <summary>An accepted request; <see cref="Duplicate"/> when the idempotency key was seen before and this is the original.</summary>
-    public sealed record AcceptedView(Guid Id, string Type, int TypeVersion, DateTimeOffset AcceptedAt, bool Duplicate);
+    /// <summary>
+    /// An accepted request; <see cref="Duplicate"/> when the idempotency key was seen before and this is the original; <see cref="DryRun"/> when
+    /// it was accepted dry.
+    /// </summary>
+    public sealed record AcceptedView(Guid Id, string Type, int TypeVersion, DateTimeOffset AcceptedAt, bool Duplicate, bool DryRun = false);
 
     /// <summary>What a notification request may contain (design §5.2, phase-1-plan M2).</summary>
     public static partial class RequestRules
@@ -471,15 +474,15 @@ namespace Juice.Notifications.Intake
                 Recipients = JsonSerializer.Serialize(recipients, IntakeQueries.Json), Actor = actor,
                 Links = s.Links is null ? [] : new Dictionary<string, string>(s.Links), ExpiresAt = s.ExpiresAt, AcceptedAt = now, OccurredAt = s.OccurredAt,
                 TraceParent = request.TraceParent is { Length: <= 55 } trace ? trace : null,
-                // The mode it is accepted in (M44-2b): its own recipients' deliveries keep it, however late they are planned.
-                DryRun = delivery.Value.DryRun,
+                // The mode it is accepted in (M44-2b), or dry when it asks (M44-2c; never real while the host is dry): its own recipients keep it.
+                DryRun = delivery.Value.DryRun || s.DryRun,
             };
             db.Requests.Add(stored);
             db.Notifications.Add(new Notification
             {
                 TenantId = tenant, RequestId = stored.Id, State = NotificationState.Planning, NextAt = now, CreatedAt = now, UpdatedAt = now,
             });
-            return Outcome<AcceptedView>.Created(new AcceptedView(stored.Id, type.Key, type.Version, now, Duplicate: false));
+            return Outcome<AcceptedView>.Created(new AcceptedView(stored.Id, type.Key, type.Version, now, Duplicate: false, stored.DryRun));
         }
     }
 
@@ -491,7 +494,7 @@ namespace Juice.Notifications.Intake
         public static async Task<AcceptedView?> FindAsync(NotificationsDbContext db, Guid tenantId, Guid applicationId, string idempotencyKey, CancellationToken ct)
             => await db.Requests.AsNoTracking()
                 .Where(r => r.TenantId == tenantId && r.ApplicationId == applicationId && r.IdempotencyKey == idempotencyKey)
-                .Select(r => new AcceptedView(r.Id, r.TypeKey, r.TypeVersion, r.AcceptedAt, true))
+                .Select(r => new AcceptedView(r.Id, r.TypeKey, r.TypeVersion, r.AcceptedAt, true, r.DryRun))
                 .SingleOrDefaultAsync(ct);
     }
 

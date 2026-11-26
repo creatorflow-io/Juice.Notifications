@@ -50,6 +50,13 @@ namespace Juice.Notifications.Messaging
         public DateTimeOffset? ExpiresAt { get; init; }
         /// <summary>When what it tells of happened: an escalation's first step is due its wait after it (absent: from when the escalation starts).</summary>
         public DateTimeOffset? OccurredAt { get; init; }
+        /// <summary>
+        /// Ask for it to be dry (phase 5, M44-2c), as over HTTP and the client: recorded as would-send for its own recipients, never sent. Dry
+        /// when the service runs dry whatever this says; absent or false, as the service runs. Anything but true, false or null (<c>"yes"</c>,
+        /// <c>1</c>) is refused at <c>/dryRun</c>, as over HTTP.
+        /// </summary>
+        [JsonConverter(typeof(StrictBooleanConverter))]
+        public bool? DryRun { get; init; }
     }
 
     /// <summary>
@@ -150,7 +157,7 @@ namespace Juice.Notifications.Messaging
         /// <summary>The fields a path can name, as the HTTP API spells them; Newtonsoft binds them in any case (<c>LABELS</c>).</summary>
         private static readonly Dictionary<string, string> FieldNames = new[]
         {
-            "type", "typeVersion", "idempotencyKey", "correlationKey", "recipients", "actor", "priority", "labels", "data", "links", "expiresAt", "occurredAt",
+            "type", "typeVersion", "idempotencyKey", "correlationKey", "recipients", "actor", "priority", "labels", "data", "links", "expiresAt", "occurredAt", "dryRun",
             "kind", "channel", "address", "id", "key", "resolver",
         }.ToDictionary(n => n, StringComparer.OrdinalIgnoreCase);
 
@@ -243,6 +250,44 @@ namespace Juice.Notifications.Messaging
         }
 
         public override void WriteJson(JsonWriter writer, string? value, Newtonsoft.Json.JsonSerializer serializer) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A boolean or null, as System.Text.Json reads one: Newtonsoft would take <c>"true"</c> or <c>1</c>. Anything else is recorded for intake to
+    /// refuse (<see cref="NotificationRequestedConverter"/>), or fails the read outside one.
+    /// </summary>
+    public sealed class StrictBooleanConverter : JsonConverter<bool?>
+    {
+        public override bool CanWrite => false;
+
+        public override bool? ReadJson(JsonReader reader, Type objectType, bool? existingValue, bool hasExistingValue, Newtonsoft.Json.JsonSerializer serializer)
+        {
+            if (reader.TokenType == JsonToken.Null)
+            {
+                return null;
+            }
+            if (reader.TokenType == JsonToken.Boolean)
+            {
+                return (bool)reader.Value!;
+            }
+            var path = reader.Path;
+            var kind = reader.TokenType switch
+            {
+                JsonToken.Integer or JsonToken.Float => "a number",
+                JsonToken.String or JsonToken.Date => "text",
+                JsonToken.StartObject => "an object",
+                JsonToken.StartArray => "an array",
+                var token => token.ToString(),
+            };
+            reader.Skip();
+            if (!NotificationRequestedConverter.Collect(path, $"This is true or false; it is {kind}."))
+            {
+                throw new JsonSerializationException($"{path} is true or false; got {kind}.");
+            }
+            return null;
+        }
+
+        public override void WriteJson(JsonWriter writer, bool? value, Newtonsoft.Json.JsonSerializer serializer) => throw new NotSupportedException();
     }
 
     /// <summary>

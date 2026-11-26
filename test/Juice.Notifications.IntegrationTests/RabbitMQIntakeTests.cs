@@ -245,6 +245,29 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains(intake.Receiver!.Requests, r => r.Body.Contains("2026-11-13T08:00:00Z") && r.Body.Contains(request.Id.ToString()));
         }
 
+        /// <summary>
+        /// QA (M44-2c): a broker request asking <c>dryRun: true</c> on a real service goes all the way as dry: its delivery ends would-send with no
+        /// attempt, and the receiver the same route reaches hears nothing of it (a real request published beside it is delivered there).
+        /// </summary>
+        [Fact]
+        public async Task A_dry_request_over_the_broker_ends_would_send_and_reaches_no_receiver()
+        {
+            LocalStack.RequireAvailable();
+            var (dry, real) = ("dry-" + Short(), "real-" + Short());
+            await PublishAsync(intake.Producer, intake.Producer, Message(dry).Replace("\"Labels\":", "\"dryRun\": true,\n  \"Labels\":"));
+            await PublishAsync(intake.Producer, intake.Producer, Message(real));
+            var dryRequest = await AcceptedAsync(dry);
+            var realRequest = await AcceptedAsync(real);
+            Assert.True(dryRequest.DryRun);
+
+            using var producer = intake.App.Client(await LocalStack.ProducerTokenAsync());
+            var dryDetail = await DeliveredAsync(producer, dryRequest.Id);
+            Assert.Equal((DeliveryStatus.WouldSend, 0), (Assert.Single(dryDetail.Deliveries).Status, dryDetail.Deliveries[0].Attempts));
+            await DeliveredAsync(producer, realRequest.Id);
+            Assert.Contains(intake.Receiver!.Requests, r => r.Body.Contains(realRequest.Id.ToString()));
+            Assert.DoesNotContain(intake.Receiver!.Requests, r => r.Body.Contains(dryRequest.Id.ToString()));
+        }
+
         [Fact]
         public async Task Readiness_includes_the_broker_and_is_healthy_when_connected()
         {
@@ -343,6 +366,31 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(now.AddHours(1).ToUnixTimeMilliseconds(), future.OccurredAt!.Value.ToUnixTimeMilliseconds()); // as sent: the escalate step clamps
             var past = await AcceptedAsync(old);
             Assert.Equal(now.AddDays(-30).ToUnixTimeMilliseconds(), past.OccurredAt!.Value.ToUnixTimeMilliseconds());
+        }
+
+        /// <summary>
+        /// <c>dryRun</c> over the broker (M44-2c), as over HTTP and the client: <c>true</c> gives a request accepted dry, absent or <c>false</c> a
+        /// real one (the service isn't dry here); anything else is refused at <c>/dryRun</c> and nothing is stored.
+        /// </summary>
+        [Fact]
+        public async Task A_dry_run_asked_over_the_broker_is_a_dry_request()
+        {
+            LocalStack.RequireAvailable();
+            var (dry, real, absent, bad) = ("d-" + Short(), "d-" + Short(), "d-" + Short(), "d-" + Short());
+            static string With(string message, string value) => message.Replace("\"Labels\":", $"\"dryRun\": {value},\n  \"Labels\":");
+            await PublishAsync(intake.Producer, intake.Producer, With(Message(dry), "true"));
+            await PublishAsync(intake.Producer, intake.Producer, With(Message(real), "false"));
+            await PublishAsync(intake.Producer, intake.Producer, Message(absent));
+            await PublishAsync(intake.Producer, intake.Producer, With(Message(bad), "\"yes\""));
+
+            Assert.Equal((true, false, false), ((await AcceptedAsync(dry)).DryRun, (await AcceptedAsync(real)).DryRun, (await AcceptedAsync(absent)).DryRun));
+            // Past a wrongly failed refusal's retry (1 s) and one more message, as the refusals above.
+            await Task.Delay(TimeSpan.FromSeconds(2.5), Ct);
+            var after = "d-" + Short();
+            await PublishAsync(intake.Producer, intake.Producer, Message(after));
+            await AcceptedAsync(after);
+            Assert.False(await StoredAsync(bad), $"{bad} was refused");
+            Assert.Equal(1, intake.Failures.Handled[bad]);
         }
 
         [Fact]

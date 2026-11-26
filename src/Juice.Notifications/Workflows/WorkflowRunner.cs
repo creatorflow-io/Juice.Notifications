@@ -119,8 +119,7 @@ namespace Juice.Notifications.Workflows
                 {
                     var routeKeys = window.Select(w => w.Key).ToHashSet(StringComparer.Ordinal);
                     var digested = waiting.Where(r => r.RouteKey is { } key && routeKeys.Contains(key)).Select(r => r.Id).ToHashSet();
-                    await JoinDigestAsync(db, row, request, new DigestStep(TimeSpan.FromSeconds(window.Key), DigestKeys.Route), context.Now,
-                        Delivering.DeliveryPlannerStage.DryRun(context), ct, digested);
+                    await JoinDigestAsync(db, row, request, new DigestStep(TimeSpan.FromSeconds(window.Key), DigestKeys.Route), context.Now, Delivering.DeliveryPlannerStage.DryRun(context), ct, digested);
                     waiting = waiting.Where(r => !digested.Contains(r.Id)).ToList();
                 }
                 if (waiting.Count == 0)
@@ -306,15 +305,16 @@ namespace Juice.Notifications.Workflows
         /// Puts the notification's waiting recipients in the open digest for their key (I31), creating it (closing a window from now) if there is
         /// none: per key, in its own short transaction under the digest's lock, committed at once, so a closing digest either has them or another
         /// opens for them. A recipient already in one (this step run again) stays where it is. Each joins the open digest whose dry run matches its
-        /// own (M44-2b, <see cref="Delivering.DeliveryPlannerStage.DryRun(NotificationRequest, int, bool)"/>, with <paramref name="dryNow"/> the
-        /// mode now): a digest opened dry before the switch closes dry, and real members after it open a real one.
+        /// own (M44-2b; the recipient's flag, set when it was created, M44-2c; <paramref name="dryNow"/>, the mode now, for an escalation step's
+        /// recipient from before M44-2c, which has none): a digest opened dry before the switch closes dry, and real members after it open a real
+        /// one.
         /// </summary>
         private static async Task JoinDigestAsync(NotificationsDbContext db, Notification row, NotificationRequest request, DigestStep digest, DateTimeOffset now,
             bool dryNow, CancellationToken ct, IReadOnlySet<Guid>? only = null)
         {
             var waiting = (await db.Recipients.AsNoTracking()
                 .Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Outcome == RecipientOutcome.Pending && r.DigestId == null)
-                .Select(r => new { r.Id, r.RouteKey, r.SubscriberId, r.NamedAs, r.EscalationStep }).ToListAsync(ct))
+                .Select(r => new { r.Id, r.RouteKey, r.SubscriberId, r.NamedAs, r.DryRun }).ToListAsync(ct))
                 .Where(r => only is null || only.Contains(r.Id)).ToList();
             var open = DigestState.Open.ToString();
             foreach (var group in waiting.GroupBy(r => (Key: Fit(digest.By switch
@@ -323,7 +323,7 @@ namespace Juice.Notifications.Workflows
                 DigestKeys.Subscriber => r.SubscriberId?.ToString() ?? r.NamedAs,
                 DigestKeys.Correlation => request.CorrelationKey ?? "",
                 _ => "",
-            }), Dry: Delivering.DeliveryPlannerStage.DryRun(request, r.EscalationStep, dryNow))))
+            }), Dry: r.DryRun ?? dryNow)))
             {
                 var (key, dry) = group.Key;
                 var ids = group.Select(r => r.Id).ToList();

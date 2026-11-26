@@ -81,6 +81,34 @@ namespace Juice.Notifications.Tests
             Assert.Null(Read("{}").OccurredAt);
         }
 
+        /// <summary>
+        /// <c>dryRun</c> (M44-2c), as over HTTP: true, false or absent; anything else is kept for intake to refuse at <c>/dryRun</c>, not read as
+        /// Newtonsoft would (<c>"true"</c>, <c>1</c>).
+        /// </summary>
+        [Theory]
+        [InlineData("true", true)]
+        [InlineData("false", false)]
+        [InlineData("null", null)]
+        public void A_dry_run_request_is_read_as_a_boolean(string written, bool? expected)
+        {
+            var message = ReadMessage($$"""{ "Type": "a.b", "dryRun": {{written}} }""")!;
+            Assert.Equal(expected, message.DryRun);
+            Assert.Empty(NotificationRequestedConverter.TextErrors(message));
+            Assert.Null(Read("{}").DryRun);
+        }
+
+        [Theory]
+        [InlineData("\"true\"", "text")]
+        [InlineData("1", "a number")]
+        [InlineData("{}", "an object")]
+        public void A_dry_run_that_isnt_a_boolean_is_kept_for_intake_to_refuse(string written, string kind)
+        {
+            var message = ReadMessage($$"""{ "Type": "a.b", "DRYRUN": {{written}}, "Priority": "high" }""")!;
+            var error = Assert.Single(NotificationRequestedConverter.TextErrors(message));
+            Assert.Equal(("/dryRun", $"This is true or false; it is {kind}."), (error.Pointer, error.Message));
+            Assert.Equal((null, "high"), (message.DryRun, message.Priority));
+        }
+
         [Fact]
         public void A_producer_using_the_record_writes_the_data_as_it_holds_it()
         {

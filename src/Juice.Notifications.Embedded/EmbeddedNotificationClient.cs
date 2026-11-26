@@ -28,7 +28,7 @@ namespace Juice.Notifications.Embedded
                 var submission = new NotificationSubmission(notification.Type, notification.TypeVersion, notification.IdempotencyKey, notification.CorrelationKey,
                     notification.Recipients?.Select(r => new RecipientSpec(r.Kind, r.Channel, r.Address, r.Id, r.Key, r.Resolver)).ToList(),
                     notification.Actor is { } actor ? new ActorSpec(actor.Kind, actor.Id) : null, notification.Priority, notification.Labels,
-                    notification.Data, notification.Links, notification.ExpiresAt, notification.OccurredAt);
+                    notification.Data, notification.Links, notification.ExpiresAt, notification.OccurredAt, notification.DryRun);
                 var outcome = await services.GetRequiredService<IMediator>().Send(new AcceptNotification(options.TenantId, application.Id, application.Key,
                     submission, Activity.Current?.Id, application.Enabled), cancellationToken);
                 var accepted = Value(outcome);
@@ -38,7 +38,7 @@ namespace Juice.Notifications.Embedded
                     var nudges = services.GetRequiredService<Stages.StageNudges>();
                     transaction!.OnCommitted(() => nudges.Wake(Planning.PlannerStage.StageName));
                 }
-                return new NotificationAccepted(accepted.Id, accepted.Type, accepted.TypeVersion, accepted.AcceptedAt, accepted.Duplicate);
+                return new NotificationAccepted(accepted.Id, accepted.Type, accepted.TypeVersion, accepted.AcceptedAt, accepted.Duplicate) { DryRun = accepted.DryRun };
             }, cancellationToken));
         }
 

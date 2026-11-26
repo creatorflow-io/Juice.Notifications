@@ -1804,6 +1804,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("digest_id");
 
+                    b.Property<bool?>("DryRun")
+                        .HasColumnType("boolean")
+                        .HasColumnName("dry_run");
+
                     b.Property<int>("EscalationStep")
                         .HasColumnType("integer")
                         .HasColumnName("escalation_step");

@@ -75,6 +75,14 @@ namespace Juice.Notifications
         /// of the service's clock and 7 days old as the escalation takes it: further is clamped (any value is accepted and kept as sent).
         /// </summary>
         public DateTimeOffset? OccurredAt { get; init; }
+
+        /// <summary>
+        /// Ask for it to be dry (phase 5, M44-2c): recorded as would-send for its own recipients, never sent. Dry when the host runs dry
+        /// (<c>Delivery:DryRun</c>) whatever this says: a request can ask to be dry, never to be real while the host is dry. Its escalation's
+        /// steps take the host's mode when each is planned. For a call kept while the pipeline was in <c>shadow</c> and replayed after the
+        /// switch: legacy sent it already.
+        /// </summary>
+        public bool DryRun { get; init; }
     }
 
     /// <summary>A recipient (<see cref="RecipientKinds"/>): <c>route</c>, or an <c>address</c> on a channel.</summary>
@@ -85,7 +93,14 @@ namespace Juice.Notifications
     public sealed record NotificationActorSpec(string Kind, string Id);
 
     /// <summary>An accepted request; <see cref="Duplicate"/> when its idempotency key was seen before and this is the original.</summary>
-    public sealed record NotificationAccepted(Guid Id, string Type, int TypeVersion, DateTimeOffset AcceptedAt, bool Duplicate);
+    public sealed record NotificationAccepted(Guid Id, string Type, int TypeVersion, DateTimeOffset AcceptedAt, bool Duplicate)
+    {
+        /// <summary>
+        /// Accepted dry (phase 5, M44-2b/c): its own recipients were recorded, not sent. A duplicate of it is never sent either, so a producer
+        /// that sends it again after the switch to the new pipeline learns the original was dry.
+        /// </summary>
+        public bool DryRun { get; init; }
+    }
 
     /// <summary>A field the request got wrong, by JSON pointer (<c>/data/amount</c>).</summary>
     public sealed record NotificationFieldError(string Pointer, string Message);

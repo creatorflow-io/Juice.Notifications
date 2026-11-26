@@ -3,6 +3,7 @@ using Juice.Notifications.Data;
 using Juice.Notifications.Data.PostgreSQL;
 using Juice.Notifications.Delivering;
 using Juice.Notifications.History;
+using Juice.Notifications.Planning;
 using Juice.Notifications.Providers;
 using Juice.Notifications.Stages;
 using Microsoft.EntityFrameworkCore;
@@ -77,6 +78,7 @@ namespace Juice.Notifications.IntegrationTests
                 services.AddSingleton<TimeProvider>(_clock);
                 services.AddPostgresClaimStore();
                 services.Configure<DeliveryOptions>(o => o.DryRun = dryRun);
+                services.AddPlanning(Options, runWorkers: false);
                 services.AddDeliveryPlanning(Options, runWorkers: false);
                 _planners[dryRun] = provider = services.BuildServiceProvider();
             }
@@ -143,26 +145,37 @@ namespace Juice.Notifications.IntegrationTests
             return new Scene(tenant, app.Id, type, request, notification, integration);
         }
 
+        private const string OpsMail = """[{"kind":"address","channel":"email","address":"ops@example.com"}]""";
+
         /// <summary>
-        /// Plans an address recipient (of <paramref name="escalationStep"/>, 0 for the request's own) through the delivery planner, with
-        /// <c>Delivery:DryRun</c> as <paramref name="dryNow"/>; the delivery it made.
+        /// The planner makes the notification's address recipient (the request's own, or of <paramref name="escalationStep"/> as its policy names
+        /// it) with <c>Delivery:DryRun</c> as <paramref name="dryNow"/>; then the delivery planner plans it with <paramref name="deliveryDryNow"/>
+        /// (by default the same: a switch between the two is the case M44-2c is about). The recipient's dry run, and the delivery it made.
         /// </summary>
-        private async Task<Delivery> PlannedAsync(Scene scene, bool dryNow = true, int escalationStep = 0)
+        private async Task<(bool RecipientDry, Delivery Delivery)> PlannedAsync(Scene scene, bool dryNow = true, int escalationStep = 0, bool? deliveryDryNow = null)
         {
             await using (var db = _database.Context())
             {
-                db.Recipients.Add(new NotificationRecipient
-                {
-                    TenantId = scene.Tenant, NotificationId = scene.Notification.Id, Kind = RecipientKind.External, Channel = Channels.Email,
-                    Address = "ops@example.com", Resolver = "address", NamedAs = "address:email:ops@example.com", Outcome = RecipientOutcome.Planned,
-                    NextAt = _clock.GetUtcNow(), CreatedAt = Seed.Now, EscalationStep = escalationStep,
-                });
-                await db.SaveChangesAsync(Ct);
+                await db.Requests.Where(r => r.TenantId == scene.Tenant && r.Id == scene.Request.Id).ExecuteUpdateAsync(s => s.SetProperty(r => r.Recipients, OpsMail), Ct);
+                var now = _clock.GetUtcNow();
+                await db.Notifications.Where(n => n.TenantId == scene.Tenant && n.Id == scene.Notification.Id).ExecuteUpdateAsync(s => s
+                    .SetProperty(n => n.State, NotificationState.Planning).SetProperty(n => n.NextAt, now).SetProperty(n => n.EscalationStep, escalationStep)
+                    .SetProperty(n => n.EscalationSpecs, escalationStep > 0 ? OpsMail : null), Ct);
             }
-            var pass = await Planner(dryNow).GetRequiredService<StageRunner<NotificationRecipient, DeliveryPlannerStage>>().RunOnceAsync("delivery-planner", Options, Ct);
+            Assert.Equal(1, (await Planner(dryNow).GetRequiredService<StageRunner<Notification, Planning.PlannerStage>>().RunOnceAsync("planner", Options, Ct)).Completed);
+            bool recipientDry;
+            await using (var db = _database.Context())
+            {
+                // Every recipient the planner creates is stamped (null is only a step recipient from before M44-2c).
+                var stamped = (await db.Recipients.AsNoTracking().SingleAsync(r => r.TenantId == scene.Tenant && r.NotificationId == scene.Notification.Id, Ct)).DryRun;
+                Assert.NotNull(stamped);
+                recipientDry = stamped.Value;
+            }
+            var pass = await Planner(deliveryDryNow ?? dryNow).GetRequiredService<StageRunner<NotificationRecipient, DeliveryPlannerStage>>()
+                .RunOnceAsync("delivery-planner", Options, Ct);
             Assert.Equal(1, pass.Completed);
             await using var read = _database.Context();
-            return await read.Deliveries.AsNoTracking().SingleAsync(d => d.TenantId == scene.Tenant, Ct);
+            return (recipientDry, await read.Deliveries.AsNoTracking().SingleAsync(d => d.TenantId == scene.Tenant, Ct));
         }
 
         /// <summary>A delivery made by hand, as the planner would leave it, dry or not.</summary>
@@ -197,7 +210,7 @@ namespace Juice.Notifications.IntegrationTests
         {
             LocalStack.RequireAvailable();
             var scene = await SceneAsync();
-            var planned = await PlannedAsync(scene);
+            var (_, planned) = await PlannedAsync(scene);
             Assert.True(planned.DryRun);
             Assert.Equal(DeliveryStatus.Pending, planned.Status);
             var sends = _email.Sends;
@@ -241,7 +254,8 @@ namespace Juice.Notifications.IntegrationTests
             LocalStack.RequireAvailable();
             var scene = await SceneAsync(acceptedDry: true);
             _clock.Advance(TimeSpan.FromHours(1));
-            var planned = await PlannedAsync(scene, dryNow: false);
+            var (recipientDry, planned) = await PlannedAsync(scene, dryNow: false);
+            Assert.True(recipientDry);
             Assert.True(planned.DryRun);
             var sends = _email.Sends;
             Assert.Equal(1, (await DispatchAsync(dryRunOption: false)).Completed);
@@ -250,22 +264,26 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
-        /// An escalation step's recipients take the mode when the step is planned (M44-2b): legacy's escalation stops at the switch, so a step of a
-        /// request accepted dry, planned after it, pages for real; one planned while the option is on is dry, even for a request accepted for real.
+        /// An escalation step's recipients take the mode when the planner creates them (M44-2c): legacy's escalation stops at the switch, so a step
+        /// of a request accepted dry, created after it, pages for real; one created while the option is on is dry, even for a request accepted for
+        /// real, and stays dry when its delivery is planned after the switch (deferred by quiet hours, a throttle, a busy notification).
         /// </summary>
         [Theory]
-        [InlineData(true, false, false)]
-        [InlineData(false, true, true)]
-        [InlineData(true, true, true)]
-        public async Task An_escalation_step_is_dry_as_the_mode_is_when_it_is_planned(bool acceptedDry, bool dryNow, bool expectedDry)
+        [InlineData(true, false, false, false)]
+        [InlineData(false, true, true, true)]
+        [InlineData(true, true, true, true)]
+        [InlineData(true, true, false, true)]
+        [InlineData(false, false, true, false)]
+        public async Task An_escalation_step_is_dry_as_the_mode_is_when_the_planner_creates_it(bool acceptedDry, bool dryAtCreation, bool dryAtDelivery,
+            bool expectedDry)
         {
             LocalStack.RequireAvailable();
             var scene = await SceneAsync(acceptedDry: acceptedDry);
-            var planned = await PlannedAsync(scene, dryNow, escalationStep: 1);
-            Assert.Equal(expectedDry, planned.DryRun);
+            var (recipientDry, planned) = await PlannedAsync(scene, dryAtCreation, escalationStep: 1, deliveryDryNow: dryAtDelivery);
+            Assert.Equal((expectedDry, expectedDry), (recipientDry, planned.DryRun));
             _email.Then(SendResult.Delivered());
             var sends = _email.Sends;
-            Assert.Equal(1, (await DispatchAsync(dryRunOption: dryNow)).Completed);
+            Assert.Equal(1, (await DispatchAsync(dryRunOption: dryAtDelivery)).Completed);
             var (row, attempts) = await ReadAsync(planned);
             Assert.Equal(expectedDry ? (DeliveryStatus.WouldSend, 0, sends) : (DeliveryStatus.Delivered, 1, sends + 1), (row.Status, attempts, _email.Sends));
         }
@@ -276,7 +294,36 @@ namespace Juice.Notifications.IntegrationTests
         {
             LocalStack.RequireAvailable();
             var scene = await SceneAsync(acceptedDry: false);
-            Assert.False((await PlannedAsync(scene, dryNow: true)).DryRun);
+            var (recipientDry, planned) = await PlannedAsync(scene, dryNow: true);
+            Assert.False(recipientDry);
+            Assert.False(planned.DryRun);
+        }
+
+        /// <summary>
+        /// Every recipient a plan creates is stamped (M44-2c, #16 review), the names that reached no one too: an escalation step naming a route
+        /// that's gone records it as reaching nobody, with the step's flag beside the address it did reach.
+        /// </summary>
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task A_name_that_reached_no_one_is_stamped_as_the_plans_other_recipients(bool dryNow)
+        {
+            LocalStack.RequireAvailable();
+            var scene = await SceneAsync(acceptedDry: !dryNow);
+            await using (var db = _database.Context())
+            {
+                var now = _clock.GetUtcNow();
+                await db.Notifications.Where(n => n.TenantId == scene.Tenant && n.Id == scene.Notification.Id).ExecuteUpdateAsync(s => s
+                    .SetProperty(n => n.State, NotificationState.Planning).SetProperty(n => n.NextAt, now).SetProperty(n => n.EscalationStep, 1)
+                    .SetProperty(n => n.EscalationSpecs, """[{"kind":"address","channel":"email","address":"ops@example.com"},{"kind":"route","key":"gone"}]"""), Ct);
+            }
+            Assert.Equal(1, (await Planner(dryNow).GetRequiredService<StageRunner<Notification, PlannerStage>>().RunOnceAsync("planner", Options, Ct)).Completed);
+            await using var read = _database.Context();
+            var recipients = await read.Recipients.AsNoTracking().Where(r => r.TenantId == scene.Tenant && r.NotificationId == scene.Notification.Id)
+                .Select(r => new { r.Kind, r.Outcome, r.DryRun }).ToListAsync(Ct);
+            Assert.Contains(recipients, r => r.Kind == RecipientKind.Name && r.Outcome == RecipientOutcome.Failed);
+            Assert.Equal(2, recipients.Count);
+            Assert.All(recipients, r => Assert.Equal((bool?)dryNow, r.DryRun));
         }
 
         [Fact]
