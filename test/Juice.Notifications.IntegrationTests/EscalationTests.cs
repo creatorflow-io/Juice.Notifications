@@ -222,6 +222,7 @@ namespace Juice.Notifications.IntegrationTests
             await DrainAsync<Escalation, EscalationStage>("escalation");
             await DrainAsync<Notification, PlannerStage>("planner");
             Assert.Equal(EscalationState.Exhausted, (await EscalationAsync(id)).State);
+// The routes that reached nobody are recorded with the step that named them, as a name that resolved to no one is.            await using (var db = _database.Context())            {                var unreached = await db.Recipients.AsNoTracking().Where(r => r.NotificationId == id && r.Kind == RecipientKind.Name)                    .OrderBy(r => r.EscalationStep).ThenBy(r => r.NamedAs).Select(r => new { r.NamedAs, r.EscalationStep, r.Outcome }).ToListAsync(Ct);                Assert.Equal([("route:gone", 1, RecipientOutcome.Failed), ("route:off", 1, RecipientOutcome.Failed), ("route:gone", 2, RecipientOutcome.Failed)],                    unreached.Select(r => (r.NamedAs, r.EscalationStep, r.Outcome)));            }
         }
     }
 }

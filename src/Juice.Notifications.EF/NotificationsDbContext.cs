@@ -229,7 +229,9 @@ namespace Juice.Notifications.Data
                 e.ToTable("destination_allowlist");
                 e.HasKey(x => new { x.TenantId, x.Destination });
                 e.Property(x => x.Destination).HasMaxLength(253);
-                e.Property(x => x.ManagedBy).HasMaxLength(20);
+                // The owner is the fence (phase-5 decision G1): the table has no version, so a write or delete decided on the owner it read fails,
+                // as concurrent_change, when another owner took the entry since (UPDATE … WHERE managed_by = the one read). No schema change.
+                e.Property(x => x.ManagedBy).HasMaxLength(20).IsConcurrencyToken();
             });
 
             model.Entity<RecipientResolverConfig>(e =>

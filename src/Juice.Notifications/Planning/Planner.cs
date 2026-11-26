@@ -250,6 +250,8 @@ namespace Juice.Notifications.Planning
             // Names that couldn't be resolved now, and names that reached more people than the bound, each with its resolver.
             var unavailable = new Dictionary<string, string>(StringComparer.Ordinal);
             var truncated = new Dictionary<string, string>(StringComparer.Ordinal);
+            // Routes an escalation step named by key that reached nobody (disabled or gone).
+            var missingRoutes = new Dictionary<string, string>(StringComparer.Ordinal);
             // A person reached through several names is one recipient: the names, and the first resolver that reached them, by person.
             var people = new Dictionary<(string Source, string ExternalId), (ResolvedPerson Person, SortedSet<string> Via, string Resolver)>();
             foreach (var spec in specs)
@@ -284,6 +286,10 @@ namespace Juice.Notifications.Planning
                 foreach (var destination in result.Destinations)
                 {
                     planned.TryAdd(destination.NamedAs, (destination, resolverKey));
+                }
+                if (spec is { Kind: RecipientKinds.Route, Key: not null } && result.Destinations.Count == 0)
+                {
+                    missingRoutes.TryAdd(name, resolverKey);
                 }
                 // People who can't be subscribers are dropped before the bound, so they don't take the places of people who can.
                 var returnedPeople = new List<ResolvedPerson>(result.People.Count);
@@ -337,6 +343,12 @@ namespace Juice.Notifications.Planning
                     CorrelationKey = request.CorrelationKey, NotificationId = row.Id, RequestId = request.Id, Type = request.TypeKey, Names = names,
                     Resolver = string.Join(",", unavailable.Values.Distinct().Order(StringComparer.Ordinal)), OccurredAt = context.Now,
                 }, ct);
+            }
+            // A route an escalation step named by its key that is disabled or gone (decision G5): recorded as reaching nobody, as a name that
+            // resolved to no one is, so history shows the step tried.
+            foreach (var (named, resolverKey) in missingRoutes)
+            {
+                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Failed, context.Now));
             }
             foreach (var (named, resolverKey) in truncated)
             {

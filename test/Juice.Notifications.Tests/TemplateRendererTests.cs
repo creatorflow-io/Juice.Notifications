@@ -417,6 +417,11 @@ namespace Juice.Notifications.Tests
         [InlineData("{{ escalation.step }} {{ data.host }}", false)]
         [InlineData("plain text", false)]
         [InlineData("{{ if }", true)]
+        // this is the global scope as an object: it can reach delivery under any spelling.
+        [InlineData("{{ this.delivery.id }}", true)]
+        [InlineData("{{ this[\"delivery\"].id }}", true)]
+        [InlineData("{{ d = this; d.delivery.id }}", true)]
+        [InlineData("{{ for kv in this }}{{ kv }}{{ end }}", true)]
         public void A_template_reads_the_delivery_only_when_it_names_it(string body, bool uses)
             => Assert.Equal(uses, TemplateRenderer.UsesDelivery(body));
     }

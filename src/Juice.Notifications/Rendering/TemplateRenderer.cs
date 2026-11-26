@@ -228,18 +228,23 @@ namespace Juice.Notifications.Rendering
             return FirstWithheld(template.Page, own);
         }
 
-        /// <summary>Whether each template body names <c>delivery</c>, as parsed once; emptied when it outgrows <see cref="MaxCachedUses"/>.</summary>
+        /// <summary>
+        /// Whether each template body names <c>delivery</c>, as parsed once, keyed by the body's SHA-256 so the cache holds hashes rather than
+        /// bodies of up to 64 KB; emptied when it outgrows <see cref="MaxCachedUses"/>.
+        /// </summary>
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> DeliveryUses = new(StringComparer.Ordinal);
         private const int MaxCachedUses = 10_000;
 
         /// <summary>
         /// Whether a template reads <c>delivery</c> (phase-5 M46-0): its output then differs per delivery and is rendered for each one; otherwise
         /// one render serves every destination of its channel. Read from the syntax tree, never by rendering, and remembered per body. A template
-        /// that doesn't parse, or nests too deeply, counts as reading it: rendering it fails on its own terms either way.
+        /// that doesn't parse, nests too deeply, or reaches the globals through <c>this</c> (<c>this.delivery</c>, <c>this["delivery"]</c>,
+        /// <c>for kv in this</c>) counts as reading it: the first renders fail on their own terms, and <c>this</c> can reach any global.
         /// </summary>
         public static bool UsesDelivery(string body)
         {
-            if (DeliveryUses.TryGetValue(body, out var uses))
+            var key = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(body)));
+            if (DeliveryUses.TryGetValue(key, out var uses))
             {
                 return uses;
             }
@@ -249,11 +254,14 @@ namespace Juice.Notifications.Rendering
             {
                 DeliveryUses.Clear();
             }
-            DeliveryUses[body] = uses;
+            DeliveryUses[key] = uses;
             return uses;
         }
 
-        /// <summary>Whether the tree reaches for the global <paramref name="name"/> anywhere (walked without recursion).</summary>
+        /// <summary>
+        /// Whether the tree reaches for the global <paramref name="name"/> anywhere, by name or through <c>this</c> (the global scope as an
+        /// object), walked without recursion.
+        /// </summary>
         private static bool NamesGlobal(Scriban.Syntax.ScriptNode? root, string name)
         {
             if (root is null)
@@ -264,7 +272,7 @@ namespace Juice.Notifications.Rendering
             pending.Push(root);
             while (pending.TryPop(out var node))
             {
-                if (node is Scriban.Syntax.ScriptVariableGlobal { Name: { } global } && global == name)
+                if (node is Scriban.Syntax.ScriptThisExpression || node is Scriban.Syntax.ScriptVariableGlobal { Name: { } global } && global == name)
                 {
                     return true;
                 }
