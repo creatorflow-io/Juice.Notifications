@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -72,11 +73,16 @@ namespace Juice.Notifications.IntegrationTests
             public ValueTask<AdminTenants> TenantsAsync(ClaimsPrincipal user, CancellationToken ct = default) => ValueTask.FromResult(new AdminTenants(true, []));
         }
 
-        private static IServiceCollection Embedded(IServiceCollection services, string connectionString)
+        private static IServiceCollection Embedded(IServiceCollection services, string connectionString, bool runStages = false)
             => services.AddJuiceNotificationsEmbedded(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Database:Migrate"] = "true",
-                ["Stages:Run"] = "false",
+                ["Stages:Run"] = runStages ? "true" : "false",
+                ["Stages:Planner:Poll"] = "00:00:00.2",
+                ["Stages:DeliveryPlanner:Poll"] = "00:00:00.2",
+                ["Stages:Dispatcher:Poll"] = "00:00:00.2",
+                // The receiver is plain http on this machine's private address, allowlisted through the admin.
+                ["Delivery:AllowHttpToAllowlisted"] = "true",
             }).Build(), o =>
             {
                 EmbeddedHost.Configure(connectionString)(o);
@@ -88,8 +94,11 @@ namespace Juice.Notifications.IntegrationTests
                     JsonSerializer.SerializeToElement(new { webhook = "passthrough" })));
             });
 
-        /// <summary>A minimal host: its own authentication and PascalCase JSON, the embedded pipeline, the admin mapped under the prefix.</summary>
-        private async Task<WebApplication> HostAsync(bool everywhere = false)
+        /// <summary>
+        /// A minimal host: its own authentication and PascalCase JSON, the embedded pipeline, the admin mapped under the prefix; and, for a request
+        /// with <c>X-Host-Transaction: rollback</c>, a transaction of the host's own open around it and rolled back after (a unit-of-work host).
+        /// </summary>
+        private async Task<WebApplication> HostAsync(bool everywhere = false, bool runStages = false)
         {
             var builder = WebApplication.CreateBuilder();
             builder.WebHost.UseTestServer();
@@ -99,7 +108,12 @@ namespace Juice.Notifications.IntegrationTests
             builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.PropertyNamingPolicy = null);
             builder.Services.AddSingleton<RecordingSink>();
             builder.Services.AddSingleton<INotificationsAuditSink>(sp => sp.GetRequiredService<RecordingSink>());
-            Embedded(builder.Services, _database.ConnectionString);
+            // The host's own context and transaction, as EmbeddedHostTests' host has them: the client writes in it.
+            builder.Services.AddDbContext<HostDbContext>(o => o.UseNpgsql(_database.ConnectionString));
+            builder.Services.AddSingleton<EmbeddedHost.Committed>();
+            builder.Services.AddScoped<HostTransaction>();
+            builder.Services.AddScoped<INotificationTransaction>(sp => sp.GetRequiredService<HostTransaction>());
+            Embedded(builder.Services, _database.ConnectionString, runStages);
             builder.Services.AddJuiceNotificationsAdmin();
             if (everywhere)
             {
@@ -110,11 +124,32 @@ namespace Juice.Notifications.IntegrationTests
                 builder.Services.AddScoped<INotificationsAdminAccess, RoleAccess>();
             }
             var app = builder.Build();
+            app.Use(async (http, next) =>
+            {
+                if (http.Request.Headers["X-Host-Transaction"] != "rollback")
+                {
+                    await next(http);
+                    return;
+                }
+                var host = http.RequestServices.GetRequiredService<HostDbContext>();
+                await using var transaction = await host.Database.BeginTransactionAsync(http.RequestAborted);
+                host.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "rolled back with the request" });
+                await host.SaveChangesAsync(http.RequestAborted);
+                await next(http);
+                await transaction.RollbackAsync(CancellationToken.None);
+            });
             app.UseAuthentication();
             app.UseAuthorization();
             app.MapJuiceNotificationsAdmin(Prefix);
             await app.StartAsync(Ct);
             return app;
+        }
+
+        /// <summary>The host's schema and table, beside the pipeline's (as EmbeddedHostTests creates them).</summary>
+        private async Task HostSchemaAsync()
+        {
+            await using var db = new HostDbContext(new DbContextOptionsBuilder<HostDbContext>().UseNpgsql(_database.ConnectionString).Options);
+            await db.Database.ExecuteSqlRawAsync("CREATE SCHEMA IF NOT EXISTS host; CREATE TABLE IF NOT EXISTS host.things (id uuid PRIMARY KEY, name text NOT NULL);", Ct);
         }
 
         private static HttpClient Client(WebApplication app, string? role, string? user = null)
@@ -225,6 +260,64 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.Contains(sink.Changes, c => c.Table == table && c.TenantId == Tenant.ToString());
             }
             Assert.Contains(sink.Changes, c => c.Table == "routes" && c.User == "ada");
+        }
+
+        /// <summary>
+        /// An admin change commits on its own transaction (m44-architecture §6.4): with the host's own transaction open around the request and
+        /// rolled back after, the change stays, and the host's row doesn't.
+        /// </summary>
+        [Fact]
+        public async Task An_admin_change_commits_on_its_own_while_the_hosts_transaction_rolls_back()
+        {
+            LocalStack.RequireAvailable();
+            await HostSchemaAsync();
+            await using var app = await HostAsync();
+            using var admin = Client(app, "Admin");
+            admin.DefaultRequestHeaders.Add("X-Host-Transaction", "rollback");
+            await OkAsync(admin.PutAsJsonAsync($"{Api}/allowlist", new PutAllowlistBody("own-transaction.example.com", [8443]), Ct));
+
+            await using var db = _database.Context();
+            Assert.True(await db.Allowlist.AnyAsync(a => a.TenantId == Tenant && a.Destination == "own-transaction.example.com", Ct));
+            await using var host = new HostDbContext(new DbContextOptionsBuilder<HostDbContext>().UseNpgsql(_database.ConnectionString).Options);
+            Assert.Empty(await host.Things.ToListAsync(Ct));
+        }
+
+        /// <summary>
+        /// The embedded setup is the admin's (m44-architecture §9): an integration, target, route and allowlist entry put through the admin, and a
+        /// request sent through the client in the host's transaction is delivered by that route.
+        /// </summary>
+        [Fact]
+        public async Task A_request_sent_through_the_client_is_delivered_by_the_route_the_admin_configured()
+        {
+            LocalStack.RequireAvailable();
+            TestHooks.SetSecret();
+            await HostSchemaAsync();
+            await using var receiver = await DeliveryTests.Receiver.StartAsync();
+            await using var app = await HostAsync(runStages: true);
+            using var admin = Client(app, "Admin");
+            await OkAsync(admin.PutAsJsonAsync($"{Api}/integrations/hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
+            await OkAsync(admin.PutAsJsonAsync($"{Api}/integrations/hooks/targets/receiver", new PutTargetBody(receiver.Url, null, null), Ct));
+            await OkAsync(admin.PutAsJsonAsync($"{Api}/routes/all", new PutRouteBody(JsonSerializer.SerializeToElement(new { type = "adminhost.*" }), ["receiver"], true), Ct));
+            await OkAsync(admin.PutAsJsonAsync($"{Api}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [receiver.Port]), Ct));
+
+            await using (var scope = app.Services.CreateAsyncScope())
+            {
+                var host = scope.ServiceProvider.GetRequiredService<HostDbContext>();
+                await using var transaction = await host.Database.BeginTransactionAsync(Ct);
+                await scope.ServiceProvider.GetRequiredService<INotificationClient>().SendAsync(
+                    new NotificationToSend("adminhost.thing", "admin-route-1") { Data = JsonSerializer.SerializeToElement(new { n = 7 }) }, Ct);
+                await transaction.CommitAsync(Ct);
+                foreach (var action in scope.ServiceProvider.GetRequiredService<HostTransaction>().OnCommit)
+                {
+                    action();
+                }
+            }
+            for (var i = 0; i < 300 && receiver.Requests.IsEmpty; i++)
+            {
+                await Task.Delay(100, Ct);
+            }
+            var received = Assert.Single(receiver.Requests);
+            Assert.Contains("\"n\":7", received.Body);
         }
 
         [Fact]
