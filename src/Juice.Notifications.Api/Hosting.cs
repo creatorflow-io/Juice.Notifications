@@ -218,6 +218,7 @@ namespace Juice.Notifications.Api
             app.MapApplicationEndpoints();
             app.MapProducerEndpoints();
             app.MapCorrelationEndpoints();
+            app.MapCorrelationHoldEndpoints();
             app.MapConfigurationEndpoints();
             app.MapPeopleEndpoints();
             app.MapMeEndpoints();

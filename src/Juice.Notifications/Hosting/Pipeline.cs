@@ -34,6 +34,8 @@ namespace Juice.Notifications.Hosting
 
     public static class NotificationsPipelineRegistration
     {
+        private const string DryRunUnsupported = "Dry run arrives with M44-2.";
+
         /// <summary>
         /// The pipeline both hosting modes run (design §4.1, phase-5-plan I57): its database (<paramref name="database"/> configures
         /// <see cref="NotificationsDbContext"/>), the mediator with the transaction behavior and the outbox's local route, intake and the reads
@@ -87,6 +89,13 @@ namespace Juice.Notifications.Hosting
             }
             services.AddDeliveryPlanning(configuration.GetSection("Stages:DeliveryPlanner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages);
             services.Configure<Providers.DeliveryOptions>(configuration.GetSection(Providers.DeliveryOptions.Section));
+            // Dry run arrives with M44-2: until then a host asking for it (in its settings, or set in code) fails at start rather than sending
+            // for real beside another pipeline.
+            if (configuration.GetValue<bool>($"{Providers.DeliveryOptions.Section}:{nameof(Providers.DeliveryOptions.DryRun)}") && !Providers.DeliveryOptions.DryRunSupported)
+            {
+                throw new InvalidOperationException(DryRunUnsupported);
+            }
+            services.AddOptions<Providers.DeliveryOptions>().Validate(o => !o.DryRun || Providers.DeliveryOptions.DryRunSupported, DryRunUnsupported).ValidateOnStart();
             // A dispatcher lease covers connect + request timeouts with room to spare (design §11).
             var dispatcher = new Stages.StageOptions { Lease = TimeSpan.FromSeconds(60) };
             configuration.GetSection("Stages:Dispatcher").Bind(dispatcher); // settings override the defaults one by one

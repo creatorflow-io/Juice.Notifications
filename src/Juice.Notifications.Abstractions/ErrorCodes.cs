@@ -54,6 +54,11 @@ namespace Juice.Notifications
         public const string InvalidConfiguration = "invalid_configuration";
         /// <summary>The row comes from the deployment's configuration (ManagedBy = config); change it there.</summary>
         public const string ManagedByConfiguration = "managed_by_configuration";
+        /// <summary>
+        /// The row belongs to a producer's compatibility alias (ManagedBy = webhooks-alias, phase 5 M46) until cutover; change it through the
+        /// producer's own API.
+        /// </summary>
+        public const string ManagedByAlias = "managed_by_alias";
         /// <summary>Deliveries went through the integration; disable it instead of deleting it.</summary>
         public const string IntegrationInUse = "integration_in_use";
         /// <summary>The target key is taken by another integration of the tenant.</summary>
@@ -62,6 +67,8 @@ namespace Juice.Notifications
         public const string TargetInUse = "target_in_use";
         /// <summary>The caller doesn't administer the tenant in the path (or it doesn't exist: the answer is the same).</summary>
         public const string NotTenantAdmin = "not_tenant_admin";
+        /// <summary>The caller may read this tenant's notifications but not do this (an admin right it lacks: operate or configure).</summary>
+        public const string NotAllowed = "not_allowed";
         /// <summary>A delivery that isn't failed, was never rendered, or whose request has expired can't be retried.</summary>
         public const string NotRetryable = "not_retryable";
         /// <summary>The identity is already an alias of another subscriber: unlink it there first.</summary>

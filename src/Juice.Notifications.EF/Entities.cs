@@ -573,6 +573,15 @@ namespace Juice.Notifications.Data
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset LastRequestAt { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
+        /// <summary>
+        /// When the producer's current hold started (phase-5-plan p5-d3): a due escalation step waits for the release. Orthogonal to
+        /// <see cref="State"/>, and set if and only if <see cref="HoldReason"/> is (one hold, not a stack).
+        /// </summary>
+        public DateTimeOffset? HeldAt { get; set; }
+        /// <summary>Why it is held, as the producer said (<c>silence:7</c>).</summary>
+        public string? HoldReason { get; set; }
+        /// <summary>Who held it, as the producer names them.</summary>
+        public string? HeldBy { get; set; }
         /// <summary>PostgreSQL's <c>xmin</c>: a concurrency token, so a request and a resolve at once can't both pass.</summary>
         public uint Version { get; set; }
     }
@@ -662,6 +671,11 @@ namespace Juice.Notifications.Data
         public EscalationState State { get; set; }
         /// <summary>Why it stopped: <c>acknowledged</c>, <c>resolved</c>, <c>cancelled</c>, <c>policy-deleted</c>.</summary>
         public string? StopReason { get; set; }
+        /// <summary>
+        /// When its due step was parked by its correlation's hold (p5-d3): a Running escalation with this set isn't due (<c>NextAt</c> null) and
+        /// keeps its <see cref="NextStep"/>; the release makes it due now and clears this.
+        /// </summary>
+        public DateTimeOffset? HeldAt { get; set; }
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset UpdatedAt { get; set; }
     }
@@ -813,6 +827,11 @@ namespace Juice.Notifications.Data
         public int Failovers { get; set; }
         /// <summary>The attempts made before the latest failover: the new integration's budget and backoff count from here.</summary>
         public int AttemptsAtFailover { get; set; }
+        /// <summary>
+        /// Planned in dry run (phase-5-plan I67): the dispatcher takes it through every check and records <see cref="DeliveryStatus.WouldSend"/>
+        /// instead of sending. Fixed at planning, never changed after.
+        /// </summary>
+        public bool DryRun { get; init; }
     }
 
     /// <summary>Links a delivery to a recipient it carries: one normally, several for a digest (design D19).</summary>

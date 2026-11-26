@@ -12,7 +12,8 @@ namespace Juice.Notifications.Correlations
 
     public sealed record CorrelationView(string Key, CorrelationState State, string? AcknowledgedBy, DateTimeOffset? AcknowledgedAt, DateTimeOffset? ResolvedAt,
         string? ResolvedBy, string? Outcome, DateTimeOffset? ReopenedAt, DateTimeOffset CreatedAt, DateTimeOffset LastRequestAt,
-        IReadOnlyList<CorrelationNotificationView> Notifications, IReadOnlyDictionary<string, int> Recipients, IReadOnlyDictionary<string, int> Deliveries);
+        IReadOnlyList<CorrelationNotificationView> Notifications, IReadOnlyDictionary<string, int> Recipients, IReadOnlyDictionary<string, int> Deliveries,
+        DateTimeOffset? HeldAt, string? HoldReason, string? HeldBy);
 
     public static class CorrelationLimits
     {
@@ -275,7 +276,8 @@ namespace Juice.Notifications.Correlations
             return new CorrelationView(c.Key, c.State, c.AcknowledgedBy, c.AcknowledgedAt, c.ResolvedAt, c.ResolvedBy, c.Outcome, c.ReopenedAt, c.CreatedAt,
                 c.LastRequestAt, notifications,
                 recipients.ToDictionary(r => System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(r.Key.ToString()), r => r.Count),
-                deliveries.ToDictionary(d => System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(d.Key.ToString()), d => d.Count));
+                deliveries.ToDictionary(d => System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(d.Key.ToString()), d => d.Count),
+                c.HeldAt, c.HoldReason, c.HeldBy);
         }
 
         /// <summary>The producer's correlation, as it stands.</summary>

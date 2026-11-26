@@ -75,6 +75,29 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
 
+        /// <summary>The hold columns (phase-5 M44): one hold per correlation, its start and its reason set together; dry run off by default.</summary>
+        [Fact]
+        public async Task A_hold_has_both_its_start_and_its_reason_and_a_delivery_is_not_dry_unless_planned_so()
+        {
+            LocalStack.RequireAvailable();
+            var ct = TestContext.Current.CancellationToken;
+            await using var db = fixture.Database.Context();
+            var correlation = new Correlation
+            {
+                TenantId = TwoTenantDatabase.TenantA, ApplicationId = fixture.A.Application, Key = "schema-hold-" + Guid.NewGuid().ToString("N"),
+                CreatedAt = Seed.Now, LastRequestAt = Seed.Now, UpdatedAt = Seed.Now, HeldAt = Seed.Now,
+            };
+            db.Add(correlation);
+            var error = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync(ct));
+            var refused = Assert.IsType<PostgresException>(error.InnerException);
+            Assert.Equal((PostgresErrorCodes.CheckViolation, "ck_correlations_hold"), (refused.SqlState, refused.ConstraintName));
+
+            correlation.HoldReason = "silence:7";
+            await db.SaveChangesAsync(ct);
+            var dry = await db.Database.SqlQuery<bool>($"SELECT dry_run AS \"Value\" FROM notifications.deliveries WHERE id = {fixture.A.Delivery}").SingleAsync(ct);
+            Assert.False(dry);
+        }
+
         [Fact]
         public async Task A_plain_text_actor_is_stored()
         {

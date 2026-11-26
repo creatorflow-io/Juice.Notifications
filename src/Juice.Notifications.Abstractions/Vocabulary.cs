@@ -151,6 +151,11 @@ namespace Juice.Notifications
         Failed,
         Expired,
         Cancelled,
+        /// <summary>
+        /// The dispatcher ran in dry run (phase-5-plan I67): every check passed and the rendered body is stored; nothing was sent. Terminal, not
+        /// retryable, and not a failure.
+        /// </summary>
+        WouldSend,
     }
 
     /// <summary>One attempt's outcome (design §10.2).</summary>
@@ -211,6 +216,11 @@ namespace Juice.Notifications
         public const string Configuration = "config";
         public const string Api = "api";
         public const string Service = "service";
+        /// <summary>
+        /// Written by a producer's compatibility alias for its legacy API (phase-5 M46: Observability's webhook endpoints), which owns the row
+        /// until cutover; the admin API leaves it alone (<see cref="ErrorCodes.ManagedByAlias"/>).
+        /// </summary>
+        public const string WebhooksAlias = "webhooks-alias";
     }
 
     /// <summary>How a template is rendered: Scriban (design D22), or the producer's data sent as is (webhook only).</summary>

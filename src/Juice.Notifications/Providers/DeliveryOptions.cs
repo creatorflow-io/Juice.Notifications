@@ -34,6 +34,17 @@ namespace Juice.Notifications.Providers
         /// point a connection at an arbitrary host.
         /// </summary>
         public Dictionary<string, SmtpServer> SmtpServers { get; set; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Dry run (phase-5-plan I67, Notifications:Pipeline=shadow): deliveries planned while this is true are marked DryRun; the dispatcher takes
+        /// them through every check to the provider call, then records WouldSend with the rendered body and sends nothing. Read at planning, not
+        /// at dispatch: a backlog planned dry stays dry after the switch, so nothing another pipeline already sent goes out twice.
+        /// <para>Until dry run is built (M44-2), a host that sets it fails at start rather than sending for real.</para>
+        /// </summary>
+        public bool DryRun { get; set; }
+
+        /// <summary>Whether this build honours <see cref="DryRun"/>; false until M44-2, so a host asking for it fails at start.</summary>
+        internal const bool DryRunSupported = false;
     }
 
     public enum SmtpSecurity { None, StartTls, SslOnConnect }

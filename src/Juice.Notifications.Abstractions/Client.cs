@@ -25,7 +25,31 @@ namespace Juice.Notifications
 
         /// <summary>Cancels the correlation: what is still due for it is cancelled. Again is no change.</summary>
         Task<CorrelationState> CancelAsync(string correlationKey, string? by = null, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Holds the correlation's escalation (phase-5-plan p5-d3): a step that falls due waits until <see cref="ReleaseAsync"/>, then runs if
+        /// the correlation is still open. Again with the same reason is no change; another reason replaces it. The hold stands until released,
+        /// whatever the correlation's state (resolve, cancel and reopen leave it). Not found: <c>not_found</c>.
+        /// <para>
+        /// Embedded, the hold's writes lock the correlation's escalation rows until the host's transaction ends, and the escalation stage skips
+        /// them meanwhile: keep that transaction short.
+        /// </para>
+        /// </summary>
+        Task<CorrelationHold> HoldAsync(string correlationKey, string reason, string? by = null, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Releases the hold: steps that fell due under it run now, if the correlation is still open. Not held: no change. Not found:
+        /// <c>not_found</c>. Embedded, as <see cref="HoldAsync"/>: keep the host's transaction short; the stage is woken once it commits.
+        /// </summary>
+        Task<CorrelationHold> ReleaseAsync(string correlationKey, string? by = null, CancellationToken cancellationToken = default);
     }
+
+    /// <summary>
+    /// A correlation's hold after a call: its state, whether it is held (since when, why, by whom), whether the call changed anything, and how
+    /// many parked escalations a release made due (0 for a hold).
+    /// </summary>
+    public sealed record CorrelationHold(CorrelationState State, bool Held, DateTimeOffset? HeldAt, string? Reason, string? HeldBy, bool Changed,
+        int Resumed);
 
     /// <summary>
     /// A notification request (design §5.2), as the HTTP API's body: the type (its latest version unless <see cref="TypeVersion"/>), the

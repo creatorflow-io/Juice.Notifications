@@ -52,6 +52,13 @@ namespace Juice.Notifications.Embedded
             => CorrelationAsync((lifecycle, application) => lifecycle.CancelAsync(options.TenantId, application, correlationKey, by, cancellationToken),
                 cancellationToken);
 
+        // Holds (p5-d3) arrive with M44-1.
+        public Task<CorrelationHold> HoldAsync(string correlationKey, string reason, string? by = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Correlation holds arrive with M44-1.");
+
+        public Task<CorrelationHold> ReleaseAsync(string correlationKey, string? by = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Correlation holds arrive with M44-1.");
+
         private Task<CorrelationState> CorrelationAsync(Func<CorrelationLifecycle, Guid, Task<Outcome<CorrelationView>>> change, CancellationToken cancellationToken)
             => InHostTransactionAsync(async (services, _, application) =>
                 Value(await change(services.GetRequiredService<CorrelationLifecycle>(), application.Id)).State, cancellationToken);

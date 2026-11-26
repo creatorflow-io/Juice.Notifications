@@ -19,8 +19,9 @@ namespace Juice.Notifications.Api
             IReadOnlyList<Guid> ids = administered.Every
                 ? await db.ApplicationTenants.AsNoTracking().Select(t => t.TenantId).Distinct().OrderBy(id => id).ToListAsync(ct)
                 : administered.Ids.Distinct().Order().ToList();
+            // The service has every page, and a tenant admin every right in the tenants it administers (ITenantAccess has no finer grain).
             return Results.Ok(new AccessResponse(user.IsInRole(Roles.PlatformAdmin), administered.Every,
-                ids.Select(id => new AccessTenantResponse(id, null)).ToList()));
+                ids.Select(id => new AccessTenantResponse(id, null, AccessRights.All)).ToList(), AccessModes.Service, AdminPages.Service));
         }
     }
 }

@@ -518,13 +518,15 @@ namespace Juice.Notifications.Data
 
             model.Entity<Correlation>(e =>
             {
-                e.ToTable("correlations");
+                e.ToTable("correlations", t => t.HasCheckConstraint("ck_correlations_hold", "(held_at IS NULL) = (hold_reason IS NULL)"));
                 TenantKey(e);
                 e.Property(x => x.Key).HasMaxLength(200);
                 e.Property(x => x.State).HasConversion<string>().HasMaxLength(20);
                 e.Property(x => x.AcknowledgedBy).HasMaxLength(200);
                 e.Property(x => x.ResolvedBy).HasMaxLength(200);
                 e.Property(x => x.Outcome).HasMaxLength(500);
+                e.Property(x => x.HoldReason).HasMaxLength(200);
+                e.Property(x => x.HeldBy).HasMaxLength(200);
                 e.Property(x => x.Version).IsRowVersion();
                 e.HasIndex(x => new { x.TenantId, x.ApplicationId, x.Key }).IsUnique().HasDatabaseName(Constraints.CorrelationKey);
                 e.HasOne<ApplicationTenant>().WithMany().HasForeignKey(x => new { x.ApplicationId, x.TenantId }).OnDelete(DeleteBehavior.Restrict);

@@ -26,9 +26,11 @@ namespace Juice.Notifications.Api.Contracts
     /// <summary>A page of recipients, oldest first; <c>next</c> is the <c>after</c> cursor for the next page, null on the last.</summary>
     public sealed record RecipientPageResponse(IReadOnlyList<RecipientResponse> Items, Guid? Next);
 
-    /// <summary>A correlation in the tenant's list (phase-4c-plan I52): newest first, with the application it belongs to (keys are per application).</summary>
+    /// <summary>A correlation in the tenant's list (phase-4c-plan I52): newest first, with the application it belongs to (keys are per application);
+    /// <c>HeldAt</c> when its producer holds its escalation (p5-d3).</summary>
     public sealed record CorrelationListItemResponse(Guid Id, string Application, string Key, CorrelationState State, string? AcknowledgedBy,
-        DateTimeOffset? AcknowledgedAt, DateTimeOffset? ResolvedAt, string? Outcome, DateTimeOffset CreatedAt, DateTimeOffset LastRequestAt);
+        DateTimeOffset? AcknowledgedAt, DateTimeOffset? ResolvedAt, string? Outcome, DateTimeOffset CreatedAt, DateTimeOffset LastRequestAt,
+        DateTimeOffset? HeldAt);
 
     public sealed record CorrelationPageResponse(IReadOnlyList<CorrelationListItemResponse> Items, Guid? Next);
 

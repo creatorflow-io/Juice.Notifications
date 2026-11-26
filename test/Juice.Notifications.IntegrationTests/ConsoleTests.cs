@@ -115,6 +115,12 @@ namespace Juice.Notifications.IntegrationTests
             Assert.False(access.PlatformAdmin);
             Assert.False(access.AllTenants);
             Assert.Equal([TestTenant], access.Tenants.Select(t => t.Id));
+            // Phase 5 (M44): the service has every page, and a tenant admin every right in its tenant.
+            Assert.Equal(AccessModes.Service, access.Mode);
+            Assert.Equal(AdminPages.Service, access.Pages);
+            Assert.Equal(18, access.Pages.Distinct().Count());
+            Assert.All(AdminPages.Embedded, page => Assert.Contains(page, access.Pages));
+            Assert.Equal(["read", "operate", "configure"], access.Tenants.Single().Rights);
         }
 
         [Fact]
