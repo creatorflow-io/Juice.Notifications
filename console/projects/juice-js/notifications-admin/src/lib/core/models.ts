@@ -2,8 +2,9 @@
  * What the Notifications API answers, as the Console reads it (Juice.Notifications.Api.Contracts). Enums arrive camelCase.
  */
 
-export type DeliveryStatus = 'pending' | 'sending' | 'retrying' | 'accepted' | 'delivered' | 'bounced' | 'failed' | 'expired' | 'cancelled';
-export const DELIVERY_STATUSES: DeliveryStatus[] = ['pending', 'sending', 'retrying', 'accepted', 'delivered', 'bounced', 'failed', 'expired', 'cancelled'];
+/** `wouldSend`: recorded in dry run (phase-5-plan I67): every check passed, nothing was sent. */
+export type DeliveryStatus = 'pending' | 'sending' | 'retrying' | 'accepted' | 'delivered' | 'bounced' | 'failed' | 'expired' | 'cancelled' | 'wouldSend';
+export const DELIVERY_STATUSES: DeliveryStatus[] = ['pending', 'sending', 'retrying', 'accepted', 'delivered', 'bounced', 'failed', 'expired', 'cancelled', 'wouldSend'];
 export type FailureCategory = 'provider' | 'destination' | 'content' | 'policy' | 'rateLimited';
 export type AttemptOutcome = 'delivered' | 'accepted' | 'retryableFailure' | 'permanentFailure' | 'unknown';
 export type NotificationState = 'planning' | 'planned' | 'expired' | 'failed' | 'running' | 'conditionNotMet' | 'cancelled';
@@ -64,6 +65,8 @@ export interface Recipient {
 export interface CorrelationListItem {
   id: string; application: string; key: string; state: CorrelationState; acknowledgedBy: string | null; acknowledgedAt: string | null;
   resolvedAt: string | null; outcome: string | null; createdAt: string; lastRequestAt: string;
+  /** When its producer holds its escalation (p5-d3); null when it isn't held. Absent from an older API. */
+  heldAt?: string | null;
 }
 
 export interface Correlation {
@@ -71,6 +74,8 @@ export interface Correlation {
   resolvedBy: string | null; outcome: string | null; reopenedAt: string | null; createdAt: string; lastRequestAt: string;
   notifications: { id: string; requestId: string; type: string; state: NotificationState; createdAt: string }[];
   recipients: Record<string, number>; deliveries: Record<string, number>;
+  /** The producer's hold on its escalation (p5-d3): since when, why, by whom; null when it isn't held. Absent from an older API. */
+  heldAt?: string | null; holdReason?: string | null; heldBy?: string | null;
 }
 
 export interface Storm { id: string; route: string; startedAt: string; endedAt: string | null; peak: number; digested: number; }

@@ -2,16 +2,21 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
 import { Observable, catchError, finalize, map, of, shareReplay, switchMap, take, tap } from 'rxjs';
 import { NOTIFICATIONS_ADMIN_OPTIONS, NOTIFICATIONS_ADMIN_SIGNED_IN } from './options';
+import { AdminRight, NOTIFICATIONS_ADMIN_PAGES, NotificationsMode } from './pages';
 
 /**
  * `GET /api/v1/access`: what the signed-in user may administer (phase-4c-plan I50). The tenants come from the API's `ITenantAccess`, never
  * from the token: `allTenants` (every tenant; `tenants` lists the ones the service knows, to pick from) or exactly `tenants`.
  * `platformAdmin` is the role the applications API requires. `unavailable` (the Console's own): the read failed, so nothing is known.
+ * `mode` and `pages` (phase 5, M44): how the notifications are hosted and the pages it has; an older API without them is read as the
+ * service with every page.
  */
 export interface Access {
   platformAdmin: boolean;
   allTenants: boolean;
   tenants: AccessTenant[];
+  mode: NotificationsMode;
+  pages: readonly string[];
   unavailable?: boolean;
 }
 
@@ -19,10 +24,12 @@ export interface AccessTenant {
   id: string;
   /** The tenant's name when the deployment knows it; null otherwise (the id is shown). */
   name: string | null;
+  /** What the user may do in it; an older API without rights is read as every right (its tenant admins had them all). */
+  rights: readonly AdminRight[];
 }
 
 /** Nothing to administer: the pages' value until the access is read. */
-export const EMPTY_ACCESS: Access = { platformAdmin: false, allTenants: false, tenants: [] };
+export const EMPTY_ACCESS: Access = { platformAdmin: false, allTenants: false, tenants: [], mode: 'service', pages: NOTIFICATIONS_ADMIN_PAGES.service };
 
 const CURRENT_KEY = 'notifications-admin.tenant';
 /** How long an answer is kept: one that grants (a tenant granted or linked meanwhile shows within this), one that grants nothing. */
@@ -73,7 +80,7 @@ export class AccessService {
 
   private read(user: string): Observable<Access> {
     const access: Observable<Access> = this.http.get<Partial<Access>>(`${this.options.apiBase}/api/v1/access`).pipe(
-      map(a => ({ platformAdmin: !!a?.platformAdmin, allTenants: !!a?.allTenants, tenants: Array.isArray(a?.tenants) ? a.tenants : [] }) satisfies Access),
+      map(a => readAccess(a)),
       // Kept only while this is the current read: one dropped (try again) or overtaken (another user) never replaces a newer answer.
       tap(answer => {
         if (this.reading?.access === access) {
@@ -111,6 +118,24 @@ export class AccessService {
   pick(access: Access): string | null {
     return this.resolve(access, this.current()) ?? access.tenants[0]?.id ?? null;
   }
+}
+
+/**
+ * The API's answer as the Console reads it: an older one (before phase 5) has no mode, pages or rights, and is the service with every page,
+ * its tenant admins with every right.
+ */
+export function readAccess(a: Partial<Access> | null | undefined): Access {
+  const mode: NotificationsMode = a?.mode === 'embedded' ? 'embedded' : 'service';
+  const pages = Array.isArray(a?.pages) ? a.pages.filter((p): p is string => typeof p === 'string') : NOTIFICATIONS_ADMIN_PAGES[mode];
+  const tenants = (Array.isArray(a?.tenants) ? a.tenants : []).map(t => ({
+    id: t.id, name: t.name ?? null, rights: Array.isArray(t.rights) ? t.rights : ['read', 'operate', 'configure'] as const,
+  }) satisfies AccessTenant);
+  return { platformAdmin: !!a?.platformAdmin, allTenants: !!a?.allTenants, tenants, mode, pages };
+}
+
+/** Whether the deployment has the admin page `page` (an id of {@link NOTIFICATIONS_ADMIN_PAGES}). */
+export function hasPage(access: Access, page: string): boolean {
+  return access.pages.includes(page);
 }
 
 /** Whether an answer grants anything to administer. */

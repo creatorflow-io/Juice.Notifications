@@ -43,7 +43,7 @@ import { Badge, TenantLinkPipe, problemText, words } from '../shared/ui';
           <tr data-testid="correlation-row" [attr.data-key]="c.key">
             <td><a [routerLink]="['correlations', c.application, c.key] | naTenant: tenantId()">{{ c.key }}</a></td>
             <td>{{ c.application }}</td>
-            <td><na-badge [state]="c.state" /></td>
+            <td><na-badge [state]="c.state" />@if (c.heldAt) { <na-badge state="held" data-testid="correlation-held-badge" /> }</td>
             <td>@if (c.acknowledgedAt) { {{ c.acknowledgedBy }} <span class="na-muted na-small">{{ c.acknowledgedAt | date: 'MMM d, HH:mm' }}</span> } @else { — }</td>
             <td>@if (c.resolvedAt) { {{ c.outcome ?? '' }} <span class="na-muted na-small">{{ c.resolvedAt | date: 'MMM d, HH:mm' }}</span> } @else { — }</td>
             <td class="na-nowrap">{{ c.lastRequestAt | date: 'MMM d, HH:mm:ss' }}</td>

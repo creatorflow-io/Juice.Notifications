@@ -54,7 +54,7 @@ export class TenantShellPage {
   // The listed tenants, and this one when it was opened by its link without being listed (a platform admin's, every tenant theirs).
   protected readonly tenants = computed(() => {
     const listed = this.loaded().tenants;
-    return listed.some(t => sameId(t.id, this.tenantId())) ? listed : [{ id: this.tenantId(), name: null }, ...listed];
+    return listed.some(t => sameId(t.id, this.tenantId())) ? listed : [{ id: this.tenantId(), name: null, rights: ['read', 'operate', 'configure'] as const }, ...listed];
   });
   protected readonly current = computed(() => this.tenants().find(t => sameId(t.id, this.tenantId())) ?? null);
 

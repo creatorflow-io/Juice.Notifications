@@ -1,10 +1,10 @@
 import { Routes } from '@angular/router';
 import { Menus } from '@juice-js/core';
-import { goGuard, homeGuard, platformGuard, tenantGuard } from './core/guards';
+import { goGuard, homeGuard, pageGuard, platformGuard, tenantGuard } from './core/guards';
 import { under } from './core/options';
 
-function page(path: string, title: string, load: Routes[number]['loadComponent']): Routes[number] {
-  return { path, title: `${title} · Juice Notifications`, loadComponent: load };
+function page(path: string, title: string, load: Routes[number]['loadComponent'], id?: string): Routes[number] {
+  return { path, title: `${title} · Juice Notifications`, loadComponent: load, ...(id ? { data: { page: id } } : {}) };
 }
 
 /**
@@ -14,7 +14,7 @@ function page(path: string, title: string, load: Routes[number]['loadComponent']
  */
 export const NOTIFICATIONS_ADMIN_ROUTES: Routes = [
   { path: '', pathMatch: 'full', canActivate: [homeGuard], children: [] },
-  page('no-access', 'No access', () => import('./pages/no-access.page').then(m => m.NoAccessPage)),
+  page('no-access', 'No access', () => import('./pages/no-access.page').then(m => m.NoAccessPage), 'no-access'),
   { path: 'go', children: [{ path: '**', canActivate: [goGuard], children: [] }] },
   // The platform's, outside any tenant: platform admins only (reached from the tenant bar, or the home when no tenant is linked yet).
   { ...page('applications', 'Applications', () => import('./pages/applications.page').then(m => m.ApplicationsPage)), canActivate: [platformGuard] },
@@ -22,32 +22,34 @@ export const NOTIFICATIONS_ADMIN_ROUTES: Routes = [
   {
     path: 'tenants/:tenantId',
     canActivate: [tenantGuard],
+    // Each page names its id (NOTIFICATIONS_ADMIN_PAGES): one the deployment doesn't have (an embedded host's people) is no-access.
+    canActivateChild: [pageGuard],
     loadComponent: () => import('./pages/tenant-shell.page').then(m => m.TenantShellPage),
     children: [
-      page('', 'Overview', () => import('./pages/overview.page').then(m => m.OverviewPage)),
-      page('deliveries', 'Deliveries', () => import('./pages/deliveries.page').then(m => m.DeliveriesPage)),
-      page('deliveries/:id', 'Delivery', () => import('./pages/delivery.page').then(m => m.DeliveryPage)),
-      page('notifications', 'Notifications', () => import('./pages/notifications.page').then(m => m.NotificationsPage)),
-      page('notifications/:id', 'Notification', () => import('./pages/notification.page').then(m => m.NotificationPage)),
-      page('correlations', 'Correlations', () => import('./pages/correlations.page').then(m => m.CorrelationsPage)),
+      page('', 'Overview', () => import('./pages/overview.page').then(m => m.OverviewPage), 'overview'),
+      page('deliveries', 'Deliveries', () => import('./pages/deliveries.page').then(m => m.DeliveriesPage), 'deliveries'),
+      page('deliveries/:id', 'Delivery', () => import('./pages/delivery.page').then(m => m.DeliveryPage), 'deliveries'),
+      page('notifications', 'Notifications', () => import('./pages/notifications.page').then(m => m.NotificationsPage), 'notifications'),
+      page('notifications/:id', 'Notification', () => import('./pages/notification.page').then(m => m.NotificationPage), 'notifications'),
+      page('correlations', 'Correlations', () => import('./pages/correlations.page').then(m => m.CorrelationsPage), 'correlations'),
       // Keys are per application: the application, then the key (a slash in it encoded in its segment).
-      page('correlations/:application/:key', 'Correlation', () => import('./pages/correlation.page').then(m => m.CorrelationPage)),
-      page('storms', 'Storms', () => import('./pages/storms.page').then(m => m.StormsPage)),
-      page('integrations', 'Integrations', () => import('./pages/integrations.page').then(m => m.IntegrationsPage)),
-      page('integrations/:key', 'Integration', () => import('./pages/integration.page').then(m => m.IntegrationPage)),
-      page('routes', 'Routes', () => import('./pages/routes.page').then(m => m.RoutesPage)),
-      page('mutes', 'Mutes', () => import('./pages/mutes.page').then(m => m.MutesPage)),
-      page('escalation-policies', 'Escalation policies', () => import('./pages/escalation-policies.page').then(m => m.EscalationPoliciesPage)),
-      page('allowlist', 'Destination allowlist', () => import('./pages/allowlist.page').then(m => m.AllowlistPage)),
-      page('types', 'Types', () => import('./pages/types.page').then(m => m.TypesPage)),
-      page('types/:key', 'Type', () => import('./pages/type.page').then(m => m.TypePage)),
-      page('display-groups', 'Display groups', () => import('./pages/display-groups.page').then(m => m.DisplayGroupsPage)),
-      page('subscribers', 'Subscribers', () => import('./pages/subscribers.page').then(m => m.SubscribersPage)),
-      page('subscribers/:id', 'Subscriber', () => import('./pages/subscriber.page').then(m => m.SubscriberPage)),
-      page('groups', 'Groups', () => import('./pages/groups.page').then(m => m.GroupsPage)),
-      page('topics', 'Topics', () => import('./pages/topics.page').then(m => m.TopicsPage)),
-      page('resolvers', 'Resolvers', () => import('./pages/resolvers.page').then(m => m.ResolversPage)),
-      page('settings', 'Settings', () => import('./pages/settings.page').then(m => m.SettingsPage)),
+      page('correlations/:application/:key', 'Correlation', () => import('./pages/correlation.page').then(m => m.CorrelationPage), 'correlations'),
+      page('storms', 'Storms', () => import('./pages/storms.page').then(m => m.StormsPage), 'storms'),
+      page('integrations', 'Integrations', () => import('./pages/integrations.page').then(m => m.IntegrationsPage), 'integrations'),
+      page('integrations/:key', 'Integration', () => import('./pages/integration.page').then(m => m.IntegrationPage), 'integrations'),
+      page('routes', 'Routes', () => import('./pages/routes.page').then(m => m.RoutesPage), 'routes'),
+      page('mutes', 'Mutes', () => import('./pages/mutes.page').then(m => m.MutesPage), 'mutes'),
+      page('escalation-policies', 'Escalation policies', () => import('./pages/escalation-policies.page').then(m => m.EscalationPoliciesPage), 'escalation-policies'),
+      page('allowlist', 'Destination allowlist', () => import('./pages/allowlist.page').then(m => m.AllowlistPage), 'allowlist'),
+      page('types', 'Types', () => import('./pages/types.page').then(m => m.TypesPage), 'types'),
+      page('types/:key', 'Type', () => import('./pages/type.page').then(m => m.TypePage), 'types'),
+      page('display-groups', 'Display groups', () => import('./pages/display-groups.page').then(m => m.DisplayGroupsPage), 'display-groups'),
+      page('subscribers', 'Subscribers', () => import('./pages/subscribers.page').then(m => m.SubscribersPage), 'subscribers'),
+      page('subscribers/:id', 'Subscriber', () => import('./pages/subscriber.page').then(m => m.SubscriberPage), 'subscribers'),
+      page('groups', 'Groups', () => import('./pages/groups.page').then(m => m.GroupsPage), 'groups'),
+      page('topics', 'Topics', () => import('./pages/topics.page').then(m => m.TopicsPage), 'topics'),
+      page('resolvers', 'Resolvers', () => import('./pages/resolvers.page').then(m => m.ResolversPage), 'resolvers'),
+      page('settings', 'Settings', () => import('./pages/settings.page').then(m => m.SettingsPage), 'settings'),
     ],
   },
 ];
@@ -56,8 +58,12 @@ export const NOTIFICATIONS_ADMIN_ROUTES: Routes = [
  * The side menu (juice-layout), linking under `basePath`. Tenant pages link through `go/…`, so one menu serves every tenant. Investigation
  * first; configuration grouped after (phase-4c-plan §4). The platform's applications are not in it: the menu is the same for everyone and can't
  * follow the access read, so platform admins reach them from the tenant bar.
+ *
+ * `pages` (phase 5, M44): the page ids the deployment has (`NOTIFICATIONS_ADMIN_PAGES.embedded` for a host that embeds the pipeline); an
+ * item outside them is dropped, and a group left empty with it. Without `pages`, every item stays. The menu is static (juice-layout doesn't
+ * evaluate it again), so a link to a page the deployment lacks is still refused at runtime, by the page guard.
  */
-export function notificationsAdminMenus(basePath = '/', order = 1): Menus {
+export function notificationsAdminMenus(basePath = '/', order = 1, pages?: readonly string[]): Menus {
   const menus: Menus = [
     { id: 'overview', label: 'Overview', icon: 'dashboard', routerLink: under(basePath, ''), shortcut: 'g o' },
     { id: 'deliveries', label: 'Deliveries', icon: 'outbox', routerLink: goLink(basePath, 'deliveries'), shortcut: 'g d' },
@@ -83,7 +89,17 @@ export function notificationsAdminMenus(basePath = '/', order = 1): Menus {
     ]),
     { id: 'settings', label: 'Settings', icon: 'settings', routerLink: goLink(basePath, 'settings') },
   ];
-  return menus.map((menu, index) => ({ ...menu, order: order + index }));
+  return keep(menus, pages).map((menu, index) => ({ ...menu, order: order + index }));
+}
+
+/** The items whose id is in `pages` (all, without it); a group with none of its pages left goes, one with some links to its first left. */
+function keep(menus: Menus, pages: readonly string[] | undefined): Menus {
+  if (!pages) return menus;
+  return menus.flatMap(menu => {
+    if (!menu.children?.length) return pages.includes(menu.id) ? [menu] : [];
+    const children = menu.children.filter(child => pages.includes(child.id));
+    return children.length ? [{ ...menu, routerLink: children[0].routerLink, children }] : [];
+  });
 }
 
 /**

@@ -10,6 +10,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { RouterLink } from '@angular/router';
 import { catchError, debounceTime, map, of, switchMap } from 'rxjs';
+import { AccessService, hasPage } from '../core/access.service';
 import { NotificationsAdminApi } from '../core/api.service';
 import { TemplatePreview, TenantTypeDetail } from '../core/models';
 import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, submit, whenChanged } from '../shared/forms';
@@ -55,6 +56,7 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
             <tr><th>Correlation key</th><td>{{ t.correlation }}</td></tr>
           </tbody></table>
         </section>
+        @if (hasGroups()) {
         <section class="na-card" data-testid="type-group">
           <h2>Display group</h2>
           <p class="na-hint">Where its items go in people's inboxes here. The type declares <span class="na-mono">{{ t.displayGroup }}</span>;
@@ -74,6 +76,7 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
           <na-form-errors [errors]="groupErrors" />
           @if (moved()) { <p class="na-small" data-testid="type-group-moved">{{ moved() }}</p> }
         </section>
+        }
       </div>
 
       <section class="na-card" data-testid="templates">
@@ -182,13 +185,17 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
 export class TypePage {
   private readonly api = inject(NotificationsAdminApi);
   private readonly sanitizer = inject(DomSanitizer);
+  private readonly access = toSignal(inject(AccessService).load());
   readonly tenantId = input.required<string>();
   readonly key = input.required<string>();
   protected readonly defaultLocale = DEFAULT_LOCALE;
 
   protected readonly detail = apiResource({ params: () => ({ tenantId: this.tenantId(), key: this.key() }),
     stream: ({ params }) => this.api.type(params.tenantId, params.key) });
-  protected readonly groups = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.displayGroups(params) });
+  /** Whether the deployment has display groups (an embedded host has no inbox): the section, and its read, only then. */
+  protected readonly hasGroups = computed(() => { const a = this.access(); return !!a && hasPage(a, 'display-groups'); });
+  protected readonly groups = apiResource({ params: () => this.hasGroups() ? this.tenantId() : undefined,
+    stream: ({ params }) => this.api.displayGroups(params) });
   protected readonly detailError = computed(() => problemText(this.detail.error()));
   protected readonly groupsError = computed(() => problemText(this.groups.error()));
 

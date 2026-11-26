@@ -44,6 +44,9 @@ import { NOTIFICATIONS_ADMIN_OPTIONS, normalizeBasePath, under } from '../core/o
             tenant, its notifications are administered here.</p>
         }
       }
+      @case ('page') {
+        <p data-testid="no-access-page">This page isn't part of this deployment's notifications.</p>
+      }
       @case ('platform-only') {
         <p data-testid="no-access-platform-only">Applications and their tenants are kept by platform admins, and your account isn't one.</p>
       }
