@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Juice.Notifications.EF.PostgreSQL.Migrations
 {
     [DbContext(typeof(NotificationsDbContext))]
-    [Migration("20261126080259_SendHealthIndexes")]
+    [Migration("20261126082759_SendHealthIndexes")]
     partial class SendHealthIndexes
     {
         /// <inheritdoc />
@@ -1963,6 +1963,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .IsRequired()
                         .HasColumnType("jsonb")
                         .HasColumnName("links");
+
+                    b.Property<DateTimeOffset?>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
 
                     b.Property<string>("Priority")
                         .IsRequired()

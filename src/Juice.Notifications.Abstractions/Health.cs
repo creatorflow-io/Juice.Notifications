@@ -70,6 +70,11 @@ namespace Juice.Notifications
         /// How long the oldest delivery still in flight (<c>Pending</c>, <c>Sending</c>, <c>Retrying</c>) has existed, by its creation; null when
         /// none is. A dry run's deliveries (<c>WouldSend</c>) make no attempts and are never in flight, so they show in neither signal.
         /// </summary>
+        /// <remarks>
+        /// In service mode, deliveries that an inactive (suspended) tenant's gate holds <c>Pending</c> on purpose count as in flight too, so one
+        /// suspended tenant can make this grow on a healthy pipeline. Embedded hosts use the open gate and aren't affected. Excluding them is
+        /// deferred (#55), to the service's own dead-man.
+        /// </remarks>
         public TimeSpan? OldestUndelivered { get; init; }
 
         public static readonly TimeSpan DefaultWindow = TimeSpan.FromMinutes(15);
