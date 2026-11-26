@@ -414,9 +414,15 @@ namespace Juice.Notifications.IntegrationTests
             var since = now - SendHealth.DefaultWindow;
             Assert.Contains("\"Index Name\": \"ix_delivery_attempts_at\"",
                 await PlanAsync(db => db.Attempts.Where(a => a.At >= since && a.Outcome == AttemptOutcome.Delivered).Take(SendHealth.MaxCount), now, count: true));
-            DeliveryStatus[] inFlight = [DeliveryStatus.Pending, DeliveryStatus.Sending, DeliveryStatus.Retrying];
+            // The health read's own query: its statuses are literals, the index's filter, so no plan (generic or custom) has a parameter to doubt.
+            await using (var context = _database.Context())
+            {
+                var sql = Juice.Notifications.Stages.NotificationsPipelineHealth.OldestInFlight(context.Deliveries).Take(1).ToQueryString();
+                Assert.DoesNotContain("ANY (", sql);
+                Assert.Contains("IN ('Pending', 'Sending', 'Retrying')", sql);
+            }
             Assert.Contains("\"Index Name\": \"ix_deliveries_in_flight\"",
-                await PlanAsync(db => db.Deliveries.Where(d => inFlight.Contains(d.Status)).OrderBy(d => d.CreatedAt).Select(d => d.CreatedAt).Take(1), now, count: false));
+                await PlanAsync(db => Juice.Notifications.Stages.NotificationsPipelineHealth.OldestInFlight(db.Deliveries).Take(1), now, count: false));
         }
 
         private async Task<string> PlanAsync<T>(Func<NotificationsDbContext, IQueryable<T>> query, DateTimeOffset now, bool count)
