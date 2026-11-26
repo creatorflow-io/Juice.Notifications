@@ -119,7 +119,8 @@ namespace Juice.Notifications.Workflows
                 {
                     var routeKeys = window.Select(w => w.Key).ToHashSet(StringComparer.Ordinal);
                     var digested = waiting.Where(r => r.RouteKey is { } key && routeKeys.Contains(key)).Select(r => r.Id).ToHashSet();
-                    await JoinDigestAsync(db, row, request, new DigestStep(TimeSpan.FromSeconds(window.Key), DigestKeys.Route), context.Now, ct, digested);
+                    await JoinDigestAsync(db, row, request, new DigestStep(TimeSpan.FromSeconds(window.Key), DigestKeys.Route), context.Now,
+                        Delivering.DeliveryPlannerStage.DryRun(context), ct, digested);
                     waiting = waiting.Where(r => !digested.Contains(r.Id)).ToList();
                 }
                 if (waiting.Count == 0)
