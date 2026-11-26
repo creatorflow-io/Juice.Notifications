@@ -191,5 +191,140 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.Single(await db.Digests.AsNoTracking().ToListAsync(Ct));
             }
         }
+
+        // QA (M46-1).
+
+        /// <summary>
+        /// A storm on a route with its own digest: the route's digest takes what reaches it, so there is one digest (the route's window), not a
+        /// storm digest beside it; the route without one takes the storm's digest as before.
+        /// </summary>
+        [Fact]
+        public async Task A_storm_on_a_digest_route_shares_the_routes_one_digest()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                foreach (var key in new[] { "grouped", "at-once" })
+                {
+                    db.Storms.Add(new Storm { TenantId = Tenant, RouteKey = key, StartedAt = _clock.GetUtcNow(), LastHighAt = _clock.GetUtcNow(), Peak = 500 });
+                }
+                await db.SaveChangesAsync(Ct);
+            }
+            for (var n = 1; n <= 4; n++)
+            {
+                await NotificationAsync(_plain, n);
+            }
+            await PlanAsync();
+            Assert.Empty(await DeliveriesAsync("grouped"));
+            await using (var db = _database.Context())
+            {
+                var grouped = Assert.Single(await db.Digests.AsNoTracking().Where(d => d.Key == "grouped").ToListAsync(Ct));
+                Assert.Equal((DigestKeys.Route, _clock.GetUtcNow().AddSeconds(60)), (grouped.By, grouped.NextAt!.Value));
+            }
+
+            _clock.Advance(TimeSpan.FromSeconds(60));
+            await DrainAsync<Digest, DigestStage>("digest");
+            var delivery = Assert.Single(await DeliveriesAsync("grouped"));
+            await using (var db = _database.Context())
+            {
+                Assert.Equal(4, await db.DeliveryItems.CountAsync(i => i.DeliveryId == delivery.Id, Ct));
+                Assert.Single(await db.Digests.AsNoTracking().Where(d => d.Key == "grouped").ToListAsync(Ct));
+            }
+        }
+
+        /// <summary>
+        /// A digest route with two targets and a webhook template that reads <c>delivery.id</c>: each target's delivery of the one digest is its
+        /// own, and its body carries its own id (M46-0's per-delivery render).
+        /// </summary>
+        [Fact]
+        public async Task Each_target_of_a_route_digest_gets_a_body_with_its_own_delivery_id()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                var integration = await db.Integrations.AsNoTracking().SingleAsync(i => i.TenantId == Tenant, Ct);
+                var second = new IntegrationTarget
+                {
+                    TenantId = Tenant, IntegrationId = integration.Id, Key = "grouped-2", Address = "https://hooks.example.com/grouped-2", DefinitionHash = "h",
+                    UpdatedAt = Seed.Now,
+                };
+                var route = await db.Routes.SingleAsync(r => r.TenantId == Tenant && r.Key == "grouped", Ct);
+                route.Targets = ["grouped", "grouped-2"];
+                db.Add(second);
+                db.RouteTargets.Add(new RouteTarget { TenantId = Tenant, RouteId = route.Id, TargetId = second.Id, Position = 1 });
+                db.Templates.Add(new Template
+                {
+                    TypeId = _plain.Id, Channel = Channels.Webhook, Locale = "en", Version = 1, Engine = "scriban", CreatedAt = Seed.Now,
+                    Body = """{"id": {{ delivery.id | json.encode }}, "n": {{ items | array.size }}}""",
+                });
+                await db.SaveChangesAsync(Ct);
+                _targets["grouped-2"] = second.Id;
+            }
+            await NotificationAsync(_plain, 1);
+            await NotificationAsync(_plain, 2);
+            await PlanAsync();
+            _clock.Advance(TimeSpan.FromSeconds(60));
+            await DrainAsync<Digest, DigestStage>("digest");
+
+            var deliveries = (await DeliveriesAsync("grouped")).Concat(await DeliveriesAsync("grouped-2")).ToList();
+            Assert.Equal(2, deliveries.Count);
+            Assert.Single(deliveries.Select(d => d.DigestId).Distinct());
+            Assert.All(deliveries, d => Assert.Equal($$"""{"id": "{{d.Id}}", "n": 2}""",
+                JsonDocument.Parse(d.Content).RootElement.GetProperty("Body").GetString()));
+        }
+
+        /// <summary>
+        /// An escalation step that names the digest route by key sends at once (the route's digest is for what reaches it at firing): the step's
+        /// delivery is no digest's, while the firing's waits in the route's window.
+        /// </summary>
+        [Fact]
+        public async Task An_escalation_step_to_a_digest_route_sends_at_once()
+        {
+            LocalStack.RequireAvailable();
+            var escalating = new NotificationType
+            {
+                ApplicationId = _app, Key = "routes.paged", Version = 1, Name = "Paged", Category = "alerts", DisplayGroup = DisplayGroups.General,
+                Priority = NotificationPriority.High, Schema = "{}", SchemaHash = "h",
+                Workflow = """[{"step":"send"},{"policyFrom":"labels.policy","step":"escalate"}]""", DeclarationHash = "d", CreatedAt = Seed.Now,
+            };
+            Guid notification;
+            await using (var db = _database.Context())
+            {
+                db.Types.Add(escalating);
+                db.EscalationPolicies.Add(new EscalationPolicy
+                {
+                    TenantId = Tenant, Key = "page-now", Steps = """[{"afterMinutes":0,"recipients":[{"kind":"route","key":"grouped"}]}]""", DefinitionHash = "h",
+                    UpdatedAt = Seed.Now,
+                });
+                var now = _clock.GetUtcNow();
+                var correlation = new Correlation { TenantId = Tenant, ApplicationId = _app, Key = "incident:paged", CreatedAt = now, LastRequestAt = now, UpdatedAt = now };
+                db.Correlations.Add(correlation);
+                var request = Seed.Request(Tenant, _app, escalating.Id, "paged-1");
+                db.Entry(request).Property(r => r.TypeKey).CurrentValue = escalating.Key;
+                db.Entry(request).Property(r => r.CorrelationKey).CurrentValue = correlation.Key;
+                db.Entry(request).Property(r => r.CorrelationId).CurrentValue = correlation.Id;
+                db.Entry(request).Property(r => r.Labels).CurrentValue = new Dictionary<string, string> { ["policy"] = "page-now" };
+                db.Entry(request).Property(r => r.Recipients).CurrentValue = """[{"kind":"route"}]""";
+                var row = Seed.Notification(Tenant, request.Id);
+                row.NextAt = now;
+                db.AddRange(request, row);
+                await db.SaveChangesAsync(Ct);
+                notification = row.Id;
+            }
+            await PlanAsync();
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            await PlanAsync();
+
+            await using var check = _database.Context();
+            var stepped = await (from i in check.DeliveryItems
+                                 join r in check.Recipients on new { i.TenantId, Id = i.RecipientId } equals new { r.TenantId, r.Id }
+                                 join d in check.Deliveries on new { i.TenantId, Id = i.DeliveryId } equals new { d.TenantId, d.Id }
+                                 where r.NotificationId == notification && r.EscalationStep == 1
+                                 select new { r.NamedAs, d.DigestId }).AsNoTracking().ToListAsync(Ct);
+            var step = Assert.Single(stepped);
+            Assert.Equal(("route:grouped", (Guid?)null), (step.NamedAs, step.DigestId));
+            // The firing's own recipient of the route waits in its window.
+            Assert.Single(await check.Digests.AsNoTracking().Where(d => d.Key == "grouped" && d.TypeKey == escalating.Key && d.State == DigestState.Open).ToListAsync(Ct));
+        }
     }
 }
