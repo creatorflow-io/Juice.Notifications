@@ -75,41 +75,62 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(new PipelineHealth(now.AddSeconds(-2), TimeSpan.FromMinutes(3), TimeSpan.FromSeconds(40), true), health);
         }
 
+        /// <summary>
+        /// Each read is a limit over its due index, in next_at order, with no sort (review of #4): planned with sequential scans allowed, over a few
+        /// thousand rows (most finished, the rest due later), analysed, as the planner would see a real backlog.
+        /// </summary>
         [Theory]
         [InlineData("deliveries", "ix_deliveries_due")]
         [InlineData("notifications", "ix_notifications_due")]
-        public async Task Each_read_goes_through_its_due_index(string table, string index)
+        public async Task Each_read_is_a_limit_over_its_due_index_without_a_sort(string table, string index)
         {
             LocalStack.RequireAvailable();
-            await using var db = await _database.MigratedAsync();
-            await using var connection = (Npgsql.NpgsqlConnection)db.Database.GetDbConnection();
-            await connection.OpenAsync(Ct);
-            await using (var off = new Npgsql.NpgsqlCommand("SET enable_seqscan = off", connection))
-            {
-                await off.ExecuteNonQueryAsync(Ct);
-            }
-            // The query the health read sends, as EF writes it.
             var now = _clock.GetUtcNow();
+            await using var db = await _database.MigratedAsync();
+            var app = Seed.Application("plans");
+            var type = Seed.Type(app.Id, "plans.alert");
+            var integration = Seed.Integration(Tenant);
+            db.AddRange(app, type, integration, new ApplicationTenant { ApplicationId = app.Id, TenantId = Tenant, LinkedAt = Seed.Now });
+            for (var i = 0; i < 3000; i++)
+            {
+                // A tenth waiting (due later), the rest finished: the partial index holds only the waiting ones.
+                DateTimeOffset? nextAt = i % 10 == 0 ? now.AddMinutes(1 + i) : null;
+                if (table == "deliveries")
+                {
+                    var d = Seed.Delivery(Tenant, integration.Id);
+                    (d.NextAt, d.Status) = (nextAt, nextAt is null ? DeliveryStatus.Delivered : DeliveryStatus.Pending);
+                    db.Deliveries.Add(d);
+                }
+                else
+                {
+                    var request = Seed.Request(Tenant, app.Id, type.Id, $"k{i}");
+                    var notification = Seed.Notification(Tenant, request.Id);
+                    notification.NextAt = nextAt;
+                    db.AddRange(request, notification);
+                }
+            }
+            await db.SaveChangesAsync(Ct);
+            await db.Database.ExecuteSqlRawAsync(table == "deliveries" ? "ANALYZE notifications.deliveries" : "ANALYZE notifications.notifications", Ct);
+
+            // The query the health read sends, as EF writes it; its parameters are declared on the comment lines before it.
             var sql = table == "deliveries"
                 ? db.Deliveries.Where(r => r.NextAt <= now && (r.LeaseUntil == null || r.LeaseUntil < now)).OrderBy(r => r.NextAt).Select(r => r.NextAt).Take(1).ToQueryString()
                 : db.Notifications.Where(r => r.NextAt <= now && (r.LeaseUntil == null || r.LeaseUntil < now)).OrderBy(r => r.NextAt).Select(r => r.NextAt).Take(1).ToQueryString();
-            // ToQueryString declares each parameter on a comment line (-- @name='value' …) before the statement: the time is now, a count is 1.
+            var connection = (Npgsql.NpgsqlConnection)db.Database.GetDbConnection();
+            await connection.OpenAsync(Ct);
             var lines = sql.Split('\n');
-            await using var explain = new Npgsql.NpgsqlCommand("EXPLAIN " + string.Join('\n', lines.Where(l => !l.StartsWith("--", StringComparison.Ordinal))), connection);
+            await using var explain = new Npgsql.NpgsqlCommand("EXPLAIN (FORMAT JSON) " + string.Join('\n', lines.Where(l => !l.StartsWith("--", StringComparison.Ordinal))), connection);
             foreach (var declared in lines.Where(l => l.StartsWith("-- @", StringComparison.Ordinal)))
             {
                 var name = declared[4..declared.IndexOf('=')];
                 explain.Parameters.AddWithValue(name, declared.Contains("DateTime", StringComparison.Ordinal) || declared.Contains("timestamp", StringComparison.Ordinal) ? now : 1);
             }
-            var plan = new List<string>();
-            await using (var reader = await explain.ExecuteReaderAsync(Ct))
-            {
-                while (await reader.ReadAsync(Ct))
-                {
-                    plan.Add(reader.GetString(0));
-                }
-            }
-            Assert.Contains(plan, line => line.Contains(index, StringComparison.Ordinal));
+            using var plan = System.Text.Json.JsonDocument.Parse((string)(await explain.ExecuteScalarAsync(Ct))!);
+            var top = plan.RootElement[0].GetProperty("Plan");
+            Assert.Equal("Limit", top.GetProperty("Node Type").GetString());
+            var scan = Assert.Single(top.GetProperty("Plans").EnumerateArray());
+            Assert.Equal(("Index Scan", index), (scan.GetProperty("Node Type").GetString(), scan.GetProperty("Index Name").GetString()));
+            Assert.DoesNotContain("\"Sort\"", plan.RootElement.GetRawText());
         }
     }
 }

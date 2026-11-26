@@ -77,14 +77,18 @@ namespace Juice.Notifications.Tests
             Assert.Null(passes.LastPassAt("dispatcher"));
         }
 
+        /// <summary>
+        /// The last pass recorded is the one read, even when the clock went back (review of #4): keeping the largest time would show a dispatcher
+        /// that stopped after the jump as fresh until the clock caught up.
+        /// </summary>
         [Fact]
-        public void A_later_pass_on_another_worker_never_moves_the_time_back()
+        public void The_last_pass_is_the_one_recorded_even_after_the_clock_went_back()
         {
             var passes = new StagePasses();
             var at = new DateTimeOffset(2026, 11, 26, 9, 0, 0, TimeSpan.Zero);
             passes.Record("dispatcher", at);
-            passes.Record("dispatcher", at.AddSeconds(-1));
-            Assert.Equal(at, passes.LastPassAt("dispatcher"));
+            passes.Record("dispatcher", at.AddHours(-1));
+            Assert.Equal(at.AddHours(-1), passes.LastPassAt("dispatcher"));
         }
     }
 }

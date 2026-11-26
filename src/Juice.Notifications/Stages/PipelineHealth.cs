@@ -12,7 +12,9 @@ namespace Juice.Notifications.Stages
     {
         private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _last = new(StringComparer.Ordinal);
 
-        internal void Record(string stage, DateTimeOffset at) => _last.AddOrUpdate(stage, at, (_, before) => at > before ? at : before);
+        // The time as recorded, the latest record winning: never the largest, so a clock set back can't keep a stopped dispatcher looking
+        // fresh until the clock catches up again.
+        internal void Record(string stage, DateTimeOffset at) => _last[stage] = at;
 
         /// <summary>The end of the stage's last pass here, or null before its first.</summary>
         public DateTimeOffset? LastPassAt(string stage) => _last.TryGetValue(stage, out var at) ? at : null;
