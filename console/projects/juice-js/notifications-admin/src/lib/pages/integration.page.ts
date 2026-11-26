@@ -41,9 +41,10 @@ import { IntegrationForm } from './integration-form';
         <div class="na-actions"><na-badge [state]="i.enabled ? 'enabled' : 'disabled'" data-testid="integration-state" />
           <span>{{ i.channel }} · {{ i.kind }} · priority {{ i.priority }}</span>
           <span class="na-muted na-small">updated {{ i.updatedAt | date: 'MMM d, y, HH:mm' }}</span></div>
-        @if (managed()) {
-          <p class="na-notice" data-testid="integration-managed">{{ managed() }}</p>
-          <table class="na-kv"><tbody>
+        <!-- Managed elsewhere, or the user may not configure (#17 review): what it holds, read-only, with nothing to submit. -->
+        @if (managed() || !can.configure()) {
+          @if (managed()) { <p class="na-notice" data-testid="integration-managed">{{ managed() }}</p> }
+          <table class="na-kv" data-testid="integration-read-only"><tbody>
             <tr><th>Settings</th><td><pre class="na-mono">{{ i.settings | json }}</pre></td></tr>
             <tr><th>Secret reference</th><td class="na-mono">{{ i.secretRef ?? '—' }}</td></tr>
           </tbody></table>
