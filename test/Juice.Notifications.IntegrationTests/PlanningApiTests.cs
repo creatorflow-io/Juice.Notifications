@@ -305,6 +305,29 @@ namespace Juice.Notifications.IntegrationTests
             Assert.True(await check.EscalationPolicies.AnyAsync(p => p.TenantId == tenant && p.Key == api && p.ManagedBy == ManagedBy.Api, Ct));
         }
 
+        /// <summary>A route's digest window (phase-5 M46-1): 0–3600 seconds, kept when a Put leaves it out, and shown with the route.</summary>
+        [Fact]
+        public async Task A_routes_digest_window_is_checked_kept_and_shown()
+        {
+            LocalStack.RequireAvailable();
+            var Tenant = $"/api/v1/tenants/{ProducerApp.OtherTenant}";
+            using var admin = await AdminAsync();
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/digest-hooks", new PutIntegrationBody("webhook", "webhook", Json("{}"), "env:NOTIFICATIONS_SECRET_HOOKS", 0, true), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/digest-hooks/targets/digest-t1", new PutTargetBody("https://hooks.example.com/digest", null, true), Ct));
+
+            foreach (var refused in new[] { -1, 3601 })
+            {
+                var response = await admin.PutAsJsonAsync($"{Tenant}/routes/digested", new PutRouteBody(Json("{}"), ["digest-t1"], true, refused), Ct);
+                Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidConfiguration), (response.StatusCode, await CodeAsync(response)));
+            }
+            var created = await admin.PutAsJsonAsync($"{Tenant}/routes/digested", new PutRouteBody(Json("{}"), ["digest-t1"], true, 60), Ct);
+            Assert.Equal(60, (await created.Content.ReadFromJsonAsync<RouteResponse>(Ct))!.DigestSeconds);
+            var kept = await admin.PutAsJsonAsync($"{Tenant}/routes/digested", new PutRouteBody(null, null, false), Ct);
+            Assert.Equal((false, 60), (await kept.Content.ReadFromJsonAsync<RouteResponse>(Ct)) is { } k ? (k.Enabled, k.DigestSeconds) : default);
+            var cleared = await admin.PutAsJsonAsync($"{Tenant}/routes/digested", new PutRouteBody(null, null, null, 0), Ct);
+            Assert.Equal(0, (await cleared.Content.ReadFromJsonAsync<RouteResponse>(Ct))!.DigestSeconds);
+        }
+
         /// <summary>A body can't name an owner: <c>managedBy</c> is no field of the API's, and what it writes is the API's.</summary>
         [Fact]
         public async Task A_body_naming_managed_by_changes_no_owner()

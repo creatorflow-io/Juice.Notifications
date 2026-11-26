@@ -74,7 +74,7 @@ namespace Juice.Notifications.Api
             tenant.MapGet("/routes", async (Guid tenantId, ConfigurationReader reader, CancellationToken ct)
                 => Results.Ok((await reader.RoutesAsync(tenantId, ct)).Select(ToResponse)));
             tenant.MapPut("/routes/{key}", (Guid tenantId, string key, PutRouteBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
-                => SendAsync(mediator, db, new PutRoute(tenantId, key, body.Match, body.Targets, body.Enabled), ToResponse, ct));
+                => SendAsync(mediator, db, new PutRoute(tenantId, key, body.Match, body.Targets, body.Enabled, body.DigestSeconds), ToResponse, ct));
             tenant.MapDelete("/routes/{key}", (Guid tenantId, string key, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => DeleteAsync(mediator, db, new DeleteRoute(tenantId, key), ct));
 
@@ -195,7 +195,7 @@ namespace Juice.Notifications.Api
 
         private static TargetResponse ToResponse(TargetView v) => new(v.Key, v.Address, v.AddressRef, v.Enabled, v.ManagedBy, v.UpdatedAt);
 
-        private static RouteResponse ToResponse(RouteView v) => new(v.Key, v.Match, v.Targets, v.Enabled, v.ManagedBy, v.UpdatedAt);
+        private static RouteResponse ToResponse(RouteView v) => new(v.Key, v.Match, v.Targets, v.Enabled, v.ManagedBy, v.UpdatedAt, v.DigestSeconds);
 
         private static AllowlistResponse ToResponse(AllowlistView v) => new(v.Destination, v.Ports, v.ManagedBy, v.UpdatedAt);
 

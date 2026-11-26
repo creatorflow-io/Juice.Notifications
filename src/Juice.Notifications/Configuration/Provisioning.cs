@@ -39,7 +39,7 @@ namespace Juice.Notifications.Configuration
 
     public sealed record ProvisionedTarget(string? Address, string? AddressRef, bool? Enabled);
 
-    public sealed record ProvisionedRoute(JsonElement? Match, List<string>? Targets, bool? Enabled);
+    public sealed record ProvisionedRoute(JsonElement? Match, List<string>? Targets, bool? Enabled, int? DigestSeconds = null);
 
     public sealed record ProvisionedAllowlistEntry(string? Destination, List<int>? Ports);
 
@@ -281,7 +281,7 @@ namespace Juice.Notifications.Configuration
                     problems.Add($"route '{key}': a route has a match ({{}} matches every notification) and its targets");
                     continue;
                 }
-                await Put($"route '{key}'", handlers.Handle(new PutRoute(tenantId, key, r.Match, r.Targets, r.Enabled ?? true) { ManagedBy = ManagedBy.Configuration }, ct));
+                await Put($"route '{key}'", handlers.Handle(new PutRoute(tenantId, key, r.Match, r.Targets, r.Enabled ?? true, r.DigestSeconds ?? 0) { ManagedBy = ManagedBy.Configuration }, ct));
             }
             var destinations = new HashSet<string>(StringComparer.Ordinal);
             foreach (var a in definition.Allowlist ?? [])
