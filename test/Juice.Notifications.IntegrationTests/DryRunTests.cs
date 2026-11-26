@@ -26,6 +26,19 @@ namespace Juice.Notifications.IntegrationTests
         private readonly ScratchDatabase _database = new();
         private readonly ManualClock _clock = new(new DateTimeOffset(2026, 11, 26, 9, 0, 0, TimeSpan.Zero));
         private readonly ScriptedProvider _email = new(Channels.Email);
+        private readonly RecordingHub _hub = new();
+
+        /// <summary>What the inbox hub would push to people.</summary>
+        private sealed class RecordingHub : Inbox.IInboxEvents
+        {
+            public System.Collections.Concurrent.ConcurrentQueue<Inbox.InboxChange> Changes { get; } = new();
+
+            public Task PublishAsync(Inbox.InboxChange change, CancellationToken ct)
+            {
+                Changes.Enqueue(change);
+                return Task.CompletedTask;
+            }
+        }
         private readonly Dictionary<bool, ServiceProvider> _dispatchers = [];
         private ServiceProvider? _planner;
 
@@ -73,6 +86,9 @@ namespace Juice.Notifications.IntegrationTests
                 services.AddPostgresClaimStore();
                 services.Configure<DeliveryOptions>(o => (o.DryRun, o.RetryBase) = (dryRun, TimeSpan.FromSeconds(1)));
                 services.AddSingleton<INotificationProvider>(_email);
+                // The inbox as the service writes it, with what the hub would push recorded.
+                services.AddSingleton<Inbox.IInboxEvents>(_hub);
+                Inbox.InboxRegistration.AddInboxProvider(services);
                 services.AddBuiltInChannels();
                 People.ContactEncryptionRegistration.AddContactEncryption(services);
                 services.AddStage<Delivery, DispatcherStage>(Options, runWorkers: false);
@@ -229,6 +245,73 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal((DeliveryStatus.Failed, (FailureCategory?)FailureCategory.Provider), ((await ReadAsync(disabled)).Row.Status, (await ReadAsync(disabled)).Row.FailureCategory));
 
             Assert.Equal(sends, _email.Sends);
+        }
+
+        /// <summary>
+        /// An integration secret (env: or file:) that isn't set fails the step, dry or not, as on release/0: the delivery stays Pending with the
+        /// runner's backoff (no attempt, nothing sent), and is given up as failed after the step-failure limit. Never would-send.
+        /// </summary>
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task An_unreadable_secret_fails_the_step_as_a_real_send_does(bool dryRun)
+        {
+            LocalStack.RequireAvailable();
+            var sends = _email.Sends;
+            var scene = await SceneAsync(secretRef: "env:NOTIFICATIONS_SECRET_DRY_RUN_UNSET_" + Guid.NewGuid().ToString("N"));
+            var delivery = await HandMadeAsync(scene, dryRun);
+            var pass = await DispatchAsync();
+            Assert.Equal((1, 1), (pass.Claimed, pass.Failed));
+            var (row, attempts) = await ReadAsync(delivery);
+            Assert.Equal((DeliveryStatus.Pending, 1, 0), (row.Status, row.StepFailures, attempts));
+            Assert.Equal(sends, _email.Sends);
+        }
+
+        /// <summary>
+        /// Shadow mode runs beside legacy, so a dry delivery must never reach a person: a dry inbox delivery writes no item and the hub tells no
+        /// one, while the same delivery planned for real does both (the control).
+        /// </summary>
+        [Fact]
+        public async Task A_dry_inbox_delivery_writes_no_item_and_tells_no_one()
+        {
+            LocalStack.RequireAvailable();
+            var scene = await SceneAsync();
+            Delivery Inbox(Guid integration, Subscriber person, bool dryRun) => new()
+            {
+                TenantId = scene.Tenant, Channel = Channels.Inbox, IntegrationId = integration, DestinationKey = $"inbox:{person.Id}",
+                DestinationSnapshot = $$"""{"subscriber":"{{person.Id}}"}""", Locale = "en", RendererVersion = "test",
+                Content = $$"""{"type":"{{scene.Type.Key}}","title":"Disk full","body":"db-1"}""", CreatedAt = _clock.GetUtcNow(), Status = DeliveryStatus.Pending,
+                NextAt = _clock.GetUtcNow(), DryRun = dryRun,
+            };
+            Delivery dry, real;
+            await using (var db = _database.Context())
+            {
+                var inbox = new Integration
+                {
+                    TenantId = scene.Tenant, Key = Notifications.Inbox.InboxIntegrations.Key, Channel = Channels.Inbox, Kind = Notifications.Inbox.InboxIntegrations.Kind,
+                    Settings = "{}", ManagedBy = ManagedBy.Service, DefinitionHash = "h", UpdatedAt = Seed.Now,
+                };
+                var (ann, ben) = (new Subscriber { TenantId = scene.Tenant, Source = "local", ExternalId = "ann", CreatedAt = Seed.Now },
+                    new Subscriber { TenantId = scene.Tenant, Source = "local", ExternalId = "ben", CreatedAt = Seed.Now });
+                (dry, real) = (Inbox(inbox.Id, ann, dryRun: true), Inbox(inbox.Id, ben, dryRun: false));
+                // One recipient (a group, say) reaching both people.
+                var recipient = Seed.Recipient(scene.Tenant, scene.Notification.Id);
+                db.AddRange(inbox, ann, ben, recipient, dry, real,
+                    new DeliveryItem { TenantId = scene.Tenant, DeliveryId = dry.Id, RecipientId = recipient.Id, RequestId = scene.Request.Id, DestinationKey = dry.DestinationKey, Channel = Channels.Inbox },
+                    new DeliveryItem { TenantId = scene.Tenant, DeliveryId = real.Id, RecipientId = recipient.Id, RequestId = scene.Request.Id, DestinationKey = real.DestinationKey, Channel = Channels.Inbox });
+                await db.SaveChangesAsync(Ct);
+            }
+
+            await DispatchAsync();
+
+            Assert.Equal(DeliveryStatus.WouldSend, (await ReadAsync(dry)).Row.Status);
+            Assert.Equal(DeliveryStatus.Delivered, (await ReadAsync(real)).Row.Status);
+            await using var check = _database.Context();
+            Assert.False(await check.InboxItems.AnyAsync(i => i.TenantId == scene.Tenant && i.DeliveryId == dry.Id, Ct));
+            var item = await check.InboxItems.AsNoTracking().SingleAsync(i => i.TenantId == scene.Tenant && i.DeliveryId == real.Id, Ct);
+            var told = _hub.Changes.Where(c => c.TenantId == scene.Tenant).ToList();
+            Assert.Equal([item.Id], told.SelectMany(c => c.ItemIds));
+            Assert.DoesNotContain(told, c => c.SubscriberId == Guid.Parse(dry.DestinationKey["inbox:".Length..]));
         }
 
         [Fact]

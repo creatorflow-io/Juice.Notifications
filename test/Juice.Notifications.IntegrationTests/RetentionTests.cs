@@ -175,6 +175,22 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal("", kept.Content);
         }
 
+        /// <summary>A would-send delivery (dry run, M44-2) is finished: it goes at the request retention (90 days by default), as a delivered one does.</summary>
+        [Fact]
+        public async Task An_old_would_send_delivery_is_removed_and_a_recent_one_kept()
+        {
+            LocalStack.RequireAvailable();
+            var old = await SeedAsync(TimeSpan.FromDays(100), status: DeliveryStatus.WouldSend);
+            var recent = await SeedAsync(TimeSpan.FromHours(1), status: DeliveryStatus.WouldSend);
+
+            await Worker.PurgeAsync(Ct);
+
+            await using var check = App.Database.Context();
+            Assert.False(await check.Deliveries.AnyAsync(d => d.Id == old.Delivery.Id, Ct));
+            Assert.False(await check.Requests.AnyAsync(r => r.Id == old.Request.Id, Ct));
+            Assert.True(await check.Deliveries.AnyAsync(d => d.Id == recent.Delivery.Id, Ct));
+        }
+
         [Fact]
         public async Task Retention_is_a_tenant_setting_within_bounds()
         {

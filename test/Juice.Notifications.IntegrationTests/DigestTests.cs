@@ -174,6 +174,55 @@ namespace Juice.Notifications.IntegrationTests
         /// notification joining at that moment either is among the members it fails, or finds the digest closed and opens the next one; none is
         /// left waiting in a digest that never sends.
         /// </summary>
+        /// <summary>
+        /// A digest closed in dry run (phase-5-plan I67) plans dry deliveries, fixed from its own close (one option value for all its members),
+        /// and the dispatcher records them as would-send: nothing goes to the webhooks.
+        /// </summary>
+        [Fact]
+        public async Task A_digest_closed_in_dry_run_plans_dry_deliveries_that_end_as_would_send()
+        {
+            LocalStack.RequireAvailable();
+            var services = new ServiceCollection().AddLogging(l => l.AddProvider(new ErrorLogProvider()));
+            services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
+            services.AddSingleton<TimeProvider>(_clock);
+            services.AddPostgresClaimStore();
+            services.Configure<Providers.DeliveryOptions>(o => o.DryRun = true);
+            services.AddPlanning(Options, runWorkers: false);
+            services.AddDeliveryPlanning(Options, runWorkers: false);
+            services.AddDispatching(Options, runWorkers: false);
+            await using var dry = services.BuildServiceProvider();
+            async Task Drain<T, TStage>(string stage) where T : Claimable, ITenantOwned where TStage : class, IStage<T>
+            {
+                PassResult pass;
+                do
+                {
+                    pass = await dry.GetRequiredService<StageRunner<T, TStage>>().RunOnceAsync(stage, Options, Ct);
+                    Assert.Equal(0, pass.Failed);
+                }
+                while (pass.Claimed > 0);
+            }
+
+            for (var n = 1; n <= 3; n++)
+            {
+                await NotificationAsync(n);
+            }
+            await Drain<Notification, PlannerStage>("planner");
+            _clock.Advance(TimeSpan.FromSeconds(60));
+            await Drain<Digest, DigestStage>("digest");
+            await using (var db = _database.Context())
+            {
+                var planned = await db.Deliveries.AsNoTracking().ToListAsync(Ct);
+                Assert.Equal(2, planned.Count);
+                Assert.All(planned, d => Assert.Equal((true, DeliveryStatus.Pending), (d.DryRun, d.Status)));
+                Assert.All(planned, d => Assert.NotNull(d.DigestId));
+            }
+
+            await Drain<Delivery, Delivering.DispatcherStage>("dispatcher");
+            await using var check = _database.Context();
+            Assert.All(await check.Deliveries.AsNoTracking().ToListAsync(Ct), d => Assert.Equal((DeliveryStatus.WouldSend, 0), (d.Status, d.Attempts)));
+            Assert.Empty(await check.Attempts.ToListAsync(Ct));
+        }
+
         [Fact]
         public async Task A_digest_given_up_while_open_takes_the_joining_lock_and_fails_every_member()
         {
