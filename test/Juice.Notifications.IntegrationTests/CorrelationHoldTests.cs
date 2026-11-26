@@ -594,5 +594,95 @@ namespace Juice.Notifications.IntegrationTests
             await RunAsync();
             Assert.Equal([.. Crew, ("lee", 1)], await PeopleAsync(id));
         }
+
+        // QA (M44-1): the edge cases of m44-architecture §9 that the cases above leave out.
+
+        /// <summary>A policy edited shorter while a step is parked: the release finds no step left and exhausts the escalation.</summary>
+        [Fact]
+        public async Task A_policy_edited_shorter_while_parked_exhausts_the_escalation_at_the_release()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                db.EscalationPolicies.Add(new EscalationPolicy
+                {
+                    TenantId = Tenant, Key = "shrinks", DefinitionHash = "h", UpdatedAt = Seed.Now,
+                    Steps = """
+                        [{"afterMinutes":5,"recipients":[{"id":"lead","kind":"group","resolver":"staff"}]},
+                         {"afterMinutes":10,"recipients":[{"id":"boss","kind":"group","resolver":"staff"}]}]
+                        """,
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+            var (id, key) = await NotificationAsync("shrinks");
+            await RunAsync();
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await RunAsync();
+            Assert.Equal([.. Crew, ("lee", 1)], await PeopleAsync(id));
+
+            // The second step falls due under the hold and parks; the policy then loses it.
+            await HeldAsync(key);
+            _clock.Advance(TimeSpan.FromMinutes(10));
+            await RunAsync();
+            var parked = await EscalationAsync(id);
+            Assert.Equal((1, true), (parked.NextStep, parked.HeldAt is not null));
+            await using (var db = _database.Context())
+            {
+                await db.EscalationPolicies.Where(p => p.TenantId == Tenant && p.Key == "shrinks")
+                    .ExecuteUpdateAsync(s => s.SetProperty(p => p.Steps, """[{"afterMinutes":5,"recipients":[{"id":"lead","kind":"group","resolver":"staff"}]}]"""), Ct);
+            }
+
+            Assert.Equal(1, (await ReleasedAsync(key)).Resumed);
+            await RunAsync();
+            var exhausted = await EscalationAsync(id);
+            Assert.Equal((EscalationState.Exhausted, (DateTimeOffset?)null), (exhausted.State, exhausted.HeldAt));
+            Assert.Equal([.. Crew, ("lee", 1)], await PeopleAsync(id));
+        }
+
+        /// <summary>A cancel under a hold stops the parked escalation as cancelled; the hold stays recorded and its release resumes nothing.</summary>
+        [Fact]
+        public async Task A_cancel_under_a_hold_stops_the_parked_escalation_and_the_release_resumes_nothing()
+        {
+            LocalStack.RequireAvailable();
+            var (id, key) = await NotificationAsync("keeps");
+            await RunAsync();
+            await HeldAsync(key);
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await RunAsync();
+            Assert.NotNull((await EscalationAsync(id)).HeldAt);
+
+            await using (var db = _database.Context())
+            {
+                Assert.Equal(OutcomeKind.Ok, (await Lifecycle(db).CancelAsync(Tenant, _seed.App, key, "eve", Ct)).Kind);
+            }
+            var stopped = await EscalationAsync(id);
+            Assert.Equal((EscalationState.Stopped, "cancelled", (DateTimeOffset?)null), (stopped.State, stopped.StopReason, stopped.HeldAt));
+            Assert.NotNull((await CorrelationAsync(key)).HeldAt);
+
+            var released = await ReleasedAsync(key);
+            Assert.Equal((true, 0), (released.Changed, released.Resumed));
+            _clock.Advance(TimeSpan.FromMinutes(30));
+            await RunAsync();
+            Assert.Equal(Crew, await PeopleAsync(id));
+        }
+
+        /// <summary>A correlation with nothing escalating can be held and released: the hold is recorded, nothing is fenced or resumed.</summary>
+        [Fact]
+        public async Task A_correlation_without_an_escalation_is_held_and_released_with_nothing_to_resume()
+        {
+            LocalStack.RequireAvailable();
+            var key = "quiet:" + Guid.NewGuid().ToString("N");
+            await using (var db = _database.Context())
+            {
+                await CorrelationBook.ForRequestAsync(db, Tenant, _seed.App, key, _clock.GetUtcNow(), Ct);
+                await db.SaveChangesAsync(Ct);
+            }
+            var held = await HeldAsync(key);
+            Assert.Equal((true, 0, CorrelationState.Open), (held.Changed, held.Resumed, held.View.State));
+            Assert.NotNull((await CorrelationAsync(key)).HeldAt);
+            var released = await ReleasedAsync(key);
+            Assert.Equal((true, 0), (released.Changed, released.Resumed));
+            Assert.Null((await CorrelationAsync(key)).HeldAt);
+        }
     }
 }
