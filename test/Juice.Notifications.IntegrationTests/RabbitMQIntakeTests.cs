@@ -318,6 +318,33 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains("user_id", refused.ToString());
         }
 
+        /// <summary>
+        /// QA (M45-n): <c>occurredAt</c> over the broker is read as over HTTP: one in range is kept as sent, one with a <c>+07:00</c> offset is
+        /// the same instant (kept in UTC, not a save that fails and parks the message), and one an hour ahead or thirty days old is accepted
+        /// and kept as sent (the escalate step clamps it).
+        /// </summary>
+        [Fact]
+        public async Task An_occurrence_over_the_broker_is_kept_as_sent_in_any_offset_and_out_of_range()
+        {
+            LocalStack.RequireAvailable();
+            var (kept, local, ahead, old) = ("q-" + Short(), "q-" + Short(), "q-" + Short(), "q-" + Short());
+            var now = DateTimeOffset.UtcNow;
+            static string With(string message, string at) => message.Replace("\"Labels\":", $"\"occurredAt\": \"{at}\",\n  \"Labels\":");
+            static string Utc(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'");
+            var at = now.AddMinutes(-3);
+            await PublishAsync(intake.Producer, intake.Producer, With(Message(kept), Utc(at)));
+            await PublishAsync(intake.Producer, intake.Producer, With(Message(local), at.ToOffset(TimeSpan.FromHours(7)).ToString("yyyy-MM-dd'T'HH:mm:ss.fffzzz")));
+            await PublishAsync(intake.Producer, intake.Producer, With(Message(ahead), Utc(now.AddHours(1))));
+            await PublishAsync(intake.Producer, intake.Producer, With(Message(old), Utc(now.AddDays(-30))));
+
+            Assert.Equal(at.ToUnixTimeMilliseconds(), (await AcceptedAsync(kept)).OccurredAt!.Value.ToUnixTimeMilliseconds());
+            Assert.Equal(at.ToUnixTimeMilliseconds(), (await AcceptedAsync(local)).OccurredAt!.Value.ToUnixTimeMilliseconds());
+            var future = await AcceptedAsync(ahead);
+            Assert.Equal(now.AddHours(1).ToUnixTimeMilliseconds(), future.OccurredAt!.Value.ToUnixTimeMilliseconds()); // as sent: the escalate step clamps
+            var past = await AcceptedAsync(old);
+            Assert.Equal(now.AddDays(-30).ToUnixTimeMilliseconds(), past.OccurredAt!.Value.ToUnixTimeMilliseconds());
+        }
+
         [Fact]
         public async Task A_request_published_twice_and_sent_over_http_with_the_same_key_is_one_request()
         {
