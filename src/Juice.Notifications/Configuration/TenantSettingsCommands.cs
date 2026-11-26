@@ -11,7 +11,7 @@ namespace Juice.Notifications.Configuration
 
     /// <summary>Sets a tenant's settings (phase-4-plan §4): the storm threshold (I43); a null field returns to the deployment's default.</summary>
     public sealed record PutTenantSettings(Guid NotificationTenantId, int? StormThreshold, int? RequestRetentionDays = null, int? ContentRetentionDays = null)
-        : MessageBase, IRequest<Outcome<TenantSettingsView>>;
+        : MessageBase, ITenantCommand, IRequest<Outcome<TenantSettingsView>>;
 
     internal static class TenantSettingsViews
     {

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using Juice.MediatR;
-using Juice.Messaging.Outbox;
 using Juice.Notifications.Correlations;
 using Juice.Notifications.Data;
 using Juice.Notifications.Intake;
@@ -13,9 +12,10 @@ namespace Juice.Notifications.Embedded
     /// <see cref="INotificationClient"/> in the host's transaction (phase-5-plan I58, I59). Each call runs in a scope of its own whose
     /// <see cref="NotificationsDbContext"/> is on the host's connection and enlisted in its transaction: the command's handler changes rows, this
     /// saves them (its save dispatches their audit events) and the outbox without committing, and the host's commit makes them durable with its own change, or
-    /// its rollback drops them. The transaction behavior sees the open transaction and leaves it to its owner.
+    /// its rollback drops them (<see cref="HostScope"/>, which <see cref="INotificationsHostScope"/> also is). The transaction behavior sees the
+    /// open transaction and leaves it to its owner.
     /// </summary>
-    internal sealed class EmbeddedNotificationClient(IServiceScopeFactory scopes, NotificationsEmbeddedOptions options,
+    internal sealed class EmbeddedNotificationClient(HostScope hostScope, NotificationsEmbeddedOptions options,
         INotificationTransaction? transaction = null) : INotificationClient
     {
         public Task<NotificationAccepted> SendAsync(NotificationToSend notification, CancellationToken cancellationToken = default)
@@ -105,33 +105,18 @@ namespace Juice.Notifications.Embedded
         }
 
         /// <summary>
-        /// Runs <paramref name="work"/> on the host's connection, in its transaction, then saves what it changed and the outbox without
-        /// committing. Refused without an open transaction: there would be nothing to commit the request with.
+        /// Runs <paramref name="work"/> in the host's transaction (<see cref="HostScope"/>), with the host's application. Refused without an
+        /// open transaction: there would be nothing to commit the request with.
         /// </summary>
-        private async Task<T> InHostTransactionAsync<T>(Func<IServiceProvider, NotificationsDbContext, Data.Application, Task<T>> work,
+        private Task<T> InHostTransactionAsync<T>(Func<IServiceProvider, NotificationsDbContext, Data.Application, Task<T>> work,
             CancellationToken cancellationToken)
-        {
-            if (transaction?.Connection is not { } connection || transaction.Transaction is not { } hostTransaction)
+            => hostScope.InHostTransactionAsync("embedded", async (services, db) =>
             {
-                throw new NotificationRefusedException(ErrorCodes.NoTransaction,
-                    "No transaction is open: a notification is written in the host's transaction, and commits or rolls back with its change.");
-            }
-            await using var scope = scopes.CreateAsyncScope();
-            scope.ServiceProvider.GetRequiredService<HostConnection>().Connection = connection;
-            var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
-            await db.Database.UseTransactionAsync(hostTransaction, cancellationToken);
-            using var context = NotificationsMessageContext.Begin("embedded");
-            var application = await db.Applications.AsNoTracking().SingleOrDefaultAsync(a => a.Key == options.ApplicationKey, cancellationToken)
-                ?? throw new InvalidOperationException(
-                    $"The application {options.ApplicationKey} isn't provisioned yet: the embedded pipeline declares it at start (its hosted service).");
-            var result = await work(scope.ServiceProvider, db, application);
-            // The context isn't managed by the transaction behavior (the host's transaction was open), so its save dispatches its own audit
-            // events, to the host's sink, inside the host's transaction.
-            await db.SaveChangesAsync(cancellationToken);
-            await scope.ServiceProvider.GetRequiredService<IOutboxService<NotificationsDbContext>>()
-                .SaveEventsAsync(db.Database.CurrentTransaction?.TransactionId, cancellationToken);
-            return result;
-        }
+                var application = await db.Applications.AsNoTracking().SingleOrDefaultAsync(a => a.Key == options.ApplicationKey, cancellationToken)
+                    ?? throw new InvalidOperationException(
+                        $"The application {options.ApplicationKey} isn't provisioned yet: the embedded pipeline declares it at start (its hosted service).");
+                return await work(services, db, application);
+            }, cancellationToken);
 
         /// <summary>The outcome's value, or its refusal as the HTTP API would give it.</summary>
         private static T Value<T>(Outcome<T> outcome)

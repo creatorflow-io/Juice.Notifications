@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Juice.Notifications.Data;
+using Juice.Notifications.Configuration;
 using Juice.Notifications.Embedded;
 using Juice.Notifications.Types;
 using Microsoft.EntityFrameworkCore;
@@ -438,6 +439,273 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Null(health.OldestDueAny);
         }
 
+        private static PutIntegration Hooks(string key, Guid? id = null, string secretRef = TestHooks.SecretRef)
+            => new(Tenant, key, "webhook", "webhook", JsonSerializer.SerializeToElement(new { }), secretRef, 0, true) { Id = id };
+
+        /// <summary>
+        /// A host that writes its own row and the pipeline's setup together (M46-2, the webhooks alias): one transaction, so its commit keeps
+        /// both and its rollback leaves neither.
+        /// </summary>
+        [Fact]
+        public async Task The_host_scope_commits_and_rolls_back_with_the_host()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            foreach (var (name, commit) in new[] { ("committed", true), ("rolled-back", false) })
+            {
+                await host.InHostScopeAsync(async (hostDb, scope) =>
+                {
+                    hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = name });
+                    await hostDb.SaveChangesAsync(Ct);
+                    var outcome = await scope.RunAsync(work => work.SendAsync(Hooks($"hooks-{name}"), Ct), Ct);
+                    Assert.Equal(OutcomeKind.Ok, outcome.Kind);
+                    return commit;
+                });
+            }
+            await using var db = _database.Context();
+            await using var check = host.HostContext();
+            Assert.Equal(["committed"], await check.Things.Where(t => t.Name == "committed" || t.Name == "rolled-back").Select(t => t.Name).ToListAsync(Ct));
+            Assert.Equal(["hooks-committed"], await db.Integrations.Where(i => i.Key.StartsWith("hooks-")).Select(i => i.Key).ToListAsync(Ct));
+        }
+
+        /// <summary>A command the pipeline refuses, or one that fails, takes the host's own row with it when the host rolls back on it (M46-2).</summary>
+        [Fact]
+        public async Task A_refused_or_failed_pipeline_command_rolls_the_host_row_back()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            // Refused: a secret the API may not name. The host rolls back on the refusal.
+            await host.InHostScopeAsync(async (hostDb, scope) =>
+            {
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "refused" });
+                await hostDb.SaveChangesAsync(Ct);
+                var outcome = await scope.RunAsync(work => work.SendAsync(Hooks("hooks-refused", secretRef: "env:OTHER_SECRET"), Ct), Ct);
+                return outcome.Kind == OutcomeKind.Ok;
+            });
+            // Failed: the second command breaks the unique key the first one took (an id another integration has), in the database itself.
+            await Assert.ThrowsAnyAsync<Exception>(() => host.InHostScopeAsync(async (hostDb, scope) =>
+            {
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "failed" });
+                await hostDb.SaveChangesAsync(Ct);
+                return await scope.RunAsync(async work =>
+                {
+                    Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(Hooks("hooks-failed"), Ct)).Kind);
+                    work.Db.Integrations.Add(new Integration
+                    {
+                        TenantId = Tenant, Key = "hooks-failed", Channel = "webhook", Kind = "webhook", Settings = "{}", DefinitionHash = "h",
+                    });
+                    await work.Db.SaveChangesAsync(Ct);
+                    return true;
+                }, Ct);
+            }));
+            await using var db = _database.Context();
+            await using var check = host.HostContext();
+            Assert.False(await check.Things.AnyAsync(t => t.Name == "refused" || t.Name == "failed", Ct));
+            Assert.False(await db.Integrations.AnyAsync(i => i.Key == "hooks-refused" || i.Key == "hooks-failed", Ct));
+        }
+
+        [Fact]
+        public async Task Without_a_host_transaction_the_host_scope_is_refused()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await using var scope = host.Services.CreateAsyncScope();
+            var refused = await Assert.ThrowsAsync<NotificationRefusedException>(() =>
+                scope.ServiceProvider.GetRequiredService<INotificationsHostScope>().RunAsync(work => work.SendAsync(Hooks("hooks-none"), Ct), Ct));
+            Assert.Equal(ErrorCodes.NoTransaction, refused.Code);
+        }
+
+        /// <summary>
+        /// Two host transactions create the same integration at once (the same key, or the same caller's id): the second waits on the first's
+        /// row, and when the first commits its save loses. It is undone to its savepoint and answered as a conflict, and the second host's
+        /// transaction goes on: its next command is saved and it commits (QA M46-2, round 1).
+        /// </summary>
+        [Theory]
+        [InlineData(false, ErrorCodes.ConcurrentChange)]
+        [InlineData(true, ErrorCodes.IdInUse)]
+        public async Task A_create_racing_another_host_transaction_is_a_conflict_and_the_host_transaction_goes_on(bool sameId, string code)
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var suffix = Guid.NewGuid().ToString("N")[..6];
+            var id = Guid.CreateVersion7();
+            var (first, second) = sameId ? ($"race-a-{suffix}", $"race-b-{suffix}") : ($"race-{suffix}", $"race-{suffix}");
+            Task<(Outcome<IntegrationView> Raced, Outcome<AllowlistView> Next)>? racing = null;
+            await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work =>
+            {
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(Hooks(first, sameId ? id : null), Ct)).Kind);
+                // The other host transaction, while this one is open: its insert waits on this one's row.
+                racing = host.InHostScopeAsync((_, other) => other.RunAsync(async w =>
+                    (await w.SendAsync(Hooks(second, sameId ? id : null), Ct), await w.SendAsync(new PutAllowlistEntry(Tenant, $"race-{suffix}.example.com", [8443]), Ct)), Ct));
+                await LockWaitAsync();
+                return true;
+            }, Ct));
+            var (raced, next) = await racing!;
+            Assert.Equal((OutcomeKind.Conflict, code), (raced.Kind, raced.Code));
+            Assert.Equal(OutcomeKind.Ok, next.Kind);
+
+            await using var db = _database.Context();
+            Assert.Equal(sameId ? [first] : [first], await db.Integrations.Where(i => i.Key == first || i.Key == second).Select(i => i.Key).Distinct().ToListAsync(Ct));
+            Assert.True(await db.Allowlist.AnyAsync(a => a.Destination == $"race-{suffix}.example.com", Ct), "the second host transaction committed its next command");
+        }
+
+        [Fact]
+        public async Task A_command_for_another_tenant_or_an_empty_id_is_refused()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var (other, empty) = await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work =>
+                (await work.SendAsync(new PutAllowlistEntry(Guid.CreateVersion7(), "elsewhere.example.com", null), Ct),
+                 await work.SendAsync(Hooks("hooks-empty", Guid.Empty), Ct)), Ct));
+            Assert.Equal((OutcomeKind.Forbidden, ErrorCodes.TenantForbidden), (other.Kind, other.Code));
+            Assert.Equal((OutcomeKind.Invalid, ErrorCodes.InvalidRequest, "/id"), (empty.Kind, empty.Code, Assert.Single(empty.Errors!).Pointer));
+            await using var db = _database.Context();
+            Assert.False(await db.Allowlist.AnyAsync(a => a.Destination == "elsewhere.example.com", Ct));
+        }
+
+        /// <summary>Two commands in one host scope: each change is heard by the host's audit sink once, and the outbox holds what it should, once.</summary>
+        [Fact]
+        public async Task Two_commands_in_one_host_scope_are_audited_once_each_and_add_nothing_twice_to_the_outbox()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await using var db = _database.Context();
+            var outboxBefore = await db.Database.SqlQuery<int>($"SELECT count(*)::int AS \"Value\" FROM notifications.outbox_events").SingleAsync(Ct);
+            var before = host.Audit.Changes.Count;
+            await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work =>
+            {
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(Hooks("hooks-once"), Ct)).Kind);
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(new PutAllowlistEntry(Tenant, "once.example.com", [8443]), Ct)).Kind);
+                return true;
+            }, Ct));
+            var heard = host.Audit.Changes.Skip(before).ToList();
+            Assert.Single(heard, c => c.Table == "integrations");
+            Assert.Single(heard, c => c.Table == "destination_allowlist");
+            Assert.Equal(2, heard.Count);
+            // Setup changes raise no outbox message (they are audited through the host's sink, in its transaction).
+            Assert.Equal(outboxBefore, await db.Database.SqlQuery<int>($"SELECT count(*)::int AS \"Value\" FROM notifications.outbox_events").SingleAsync(Ct));
+        }
+
+        /// <summary>
+        /// Fail closed (M46-2 round 2): only a tenant setup command for the host's tenant runs in the host scope. Platform-wide commands
+        /// (applications, types, tenant links), a request (the client's) and people commands are not_allowed; the templates and a delivery's retry
+        /// are the tenant's, and run.
+        /// </summary>
+        [Fact]
+        public async Task Only_tenant_setup_commands_run_in_the_host_scope()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var refused = await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work => new (string Kind, OutcomeKind Outcome, string? Code)[]
+            {
+                Answer("application", await work.SendAsync(new Applications.CreateApplication("hostapp", "Host app", "hostapp-client"), Ct)),
+                Answer("link", await work.SendAsync(new Applications.LinkTenant("host", Tenant), Ct)),
+                Answer("type", await work.SendAsync(new DeclareType(Guid.CreateVersion7(), "host", new TypeDeclaration(Type, "x", "x", null, null, null, null,
+                    JsonSerializer.SerializeToElement(new { type = "object" }), CorrelationRules.Optional, null, null, null)), Ct)),
+                Answer("request", await work.SendAsync(new Intake.AcceptNotification(Tenant, Guid.CreateVersion7(), "host",
+                    new Intake.NotificationSubmission(Type, null, "k", null, null, null, null, null, null, null, null), null, true), Ct)),
+                Answer("people", await work.SendAsync(new People.AddMute(Tenant, null, JsonSerializer.SerializeToElement(new { type = Type }), null,
+                    DateTimeOffset.UtcNow.AddHours(1), "x", "host"), Ct)),
+                Answer("template", await work.SendAsync(new PutTenantTemplate(Tenant, Type, "webhook", null, "{\"x\":1}"), Ct)),
+                Answer("retry", await work.SendAsync(new History.RetryDelivery(Tenant, Guid.CreateVersion7()), Ct)),
+            }, Ct));
+            static (string, OutcomeKind, string?) Answer<T>(string kind, Outcome<T> outcome) => (kind, outcome.Kind, outcome.Code);
+            Assert.All(refused.Where(r => r.Kind is "application" or "link" or "type" or "request" or "people"),
+                r => Assert.Equal((r.Kind, OutcomeKind.Forbidden, ErrorCodes.NotAllowed), r));
+            Assert.Equal(OutcomeKind.Ok, refused.Single(r => r.Kind == "template").Outcome);
+            // The retry ran (its handler answered: no such delivery), not refused by the scope.
+            Assert.Equal(OutcomeKind.NotFound, refused.Single(r => r.Kind == "retry").Outcome);
+            await using var db = _database.Context();
+            Assert.False(await db.Applications.AnyAsync(a => a.Key == "hostapp", Ct));
+            Assert.False(await db.Mutes.AnyAsync(m => m.TenantId == Tenant && m.Reason == "x", Ct));
+        }
+
+        /// <summary>Fails the save of one integration's delete (once): what the delete's handler did with its own statements must be undone too.</summary>
+        private sealed class FailingDelete(string key) : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+        {
+            public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+                Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData, Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+                CancellationToken cancellationToken = default)
+                => eventData.Context!.ChangeTracker.Entries<Integration>().Any(e => e.State == EntityState.Deleted && e.Entity.Key == key)
+                    ? throw new DbUpdateConcurrencyException("The delete lost a race (forced).")
+                    : ValueTask.FromResult(result);
+        }
+
+        /// <summary>
+        /// The savepoint is taken before the command runs (M46-2 round 2): a delete releases stale route rows with its own statement, then its
+        /// save loses a race. The statement is undone with it (the stale row is still there after the host commits), and the host's
+        /// transaction goes on.
+        /// </summary>
+        [Fact]
+        public async Task A_failed_command_is_undone_with_what_its_handler_wrote_itself()
+        {
+            LocalStack.RequireAvailable();
+            const string key = "stale-hooks";
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false,
+                services: s => s.ConfigureDbContext<NotificationsDbContext>(o => o.AddInterceptors(new FailingDelete(key))));
+            await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work =>
+            {
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(Hooks(key), Ct)).Kind);
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(new PutTarget(Tenant, key, "stale-target", "https://hooks.example.com/stale", null, true), Ct)).Kind);
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(new PutRoute(Tenant, "stale-route", JsonSerializer.SerializeToElement(new { type = "host.*" }),
+                    ["stale-target"], true), Ct)).Kind);
+                return true;
+            }, Ct));
+            // A replica's leftover: the route no longer names the target, its route_targets row stays (what the delete releases first).
+            await using (var db = _database.Context())
+            {
+                await db.Database.ExecuteSqlAsync($"UPDATE notifications.routes SET targets = '{{}}' WHERE tenant_id = {Tenant} AND key = 'stale-route'", Ct);
+                Assert.Equal(1, await StaleRowsAsync(db));
+                Assert.Empty((await db.Routes.AsNoTracking().SingleAsync(r => r.TenantId == Tenant && r.Key == "stale-route", Ct)).Targets);
+            }
+
+            var outcome = await host.InHostScopeAsync(async (hostDb, scope) =>
+            {
+                var deleted = await scope.RunAsync(work => work.SendAsync(new DeleteIntegration(Tenant, key), Ct), Ct);
+                // The host's transaction is usable: its own row commits.
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "after the undo" });
+                await hostDb.SaveChangesAsync(Ct);
+                return deleted;
+            });
+            Assert.Equal((OutcomeKind.Conflict, ErrorCodes.ConcurrentChange), (outcome.Kind, outcome.Code));
+            await using var check = _database.Context();
+            Assert.True(await check.Integrations.AnyAsync(i => i.TenantId == Tenant && i.Key == key, Ct));
+            Assert.Equal(1, await StaleRowsAsync(check)); // the stale row the delete released is back
+            await using var hostCheck = host.HostContext();
+            Assert.True(await hostCheck.Things.AnyAsync(t => t.Name == "after the undo", Ct));
+        }
+
+        /// <summary>The stale route's route_targets rows.</summary>
+        private static Task<int> StaleRowsAsync(NotificationsDbContext db)
+            => (from rt in db.RouteTargets
+                join r in db.Routes on new { rt.TenantId, Id = rt.RouteId } equals new { r.TenantId, r.Id }
+                where rt.TenantId == Tenant && r.Key == "stale-route"
+                select rt).CountAsync(Ct);
+
+        /// <summary>
+        /// An in-process caller's integration id (M46-2): a create takes it; another integration's is refused, and so is a different one for an
+        /// existing integration, whose id never changes.
+        /// </summary>
+        [Fact]
+        public async Task An_integration_takes_the_callers_id_once_and_refuses_one_taken()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var id = Guid.CreateVersion7();
+            var outcomes = await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work => new[]
+            {
+                await work.SendAsync(Hooks("hooks-kept", id), Ct),
+                await work.SendAsync(Hooks("hooks-kept", id), Ct),                 // the same: unchanged
+                await work.SendAsync(Hooks("hooks-other", id), Ct),                // another integration's id
+                await work.SendAsync(Hooks("hooks-kept", Guid.CreateVersion7()), Ct), // a different id for this one
+            }, Ct));
+            Assert.Equal([(OutcomeKind.Ok, null), (OutcomeKind.Ok, null), (OutcomeKind.Conflict, ErrorCodes.IdInUse), (OutcomeKind.Conflict, ErrorCodes.IdInUse)],
+                outcomes.Select(o => (o.Kind, o.Code)));
+            await using var db = _database.Context();
+            Assert.Equal(id, (await db.Integrations.SingleAsync(i => i.Key == "hooks-kept", Ct)).Id);
+            Assert.False(await db.Integrations.AnyAsync(i => i.Key == "hooks-other", Ct));
+        }
+
         [Fact]
         public void The_container_holds_nothing_of_the_service()
         {
@@ -548,7 +816,7 @@ namespace Juice.Notifications.IntegrationTests
             };
 
             public static async Task<EmbeddedHost> StartAsync(string connectionString, bool runStages, Receiver? receiver = null,
-                string applicationName = "The host")
+                string applicationName = "The host", Action<IServiceCollection>? services = null, string? provisioning = null)
             {
                 var builder = Host.CreateApplicationBuilder();
                 var settings = new Dictionary<string, string?>
@@ -561,7 +829,13 @@ namespace Juice.Notifications.IntegrationTests
                     // The receiver is plain http on this machine's private address, allowlisted (as the local stack allows).
                     ["Notifications:Delivery:AllowHttpToAllowlisted"] = "true",
                 };
-                if (receiver is not null)
+                if (provisioning is not null)
+                {
+                    var path = Path.Combine(Path.GetTempPath(), $"embedded-provisioning-{Guid.NewGuid():N}.json");
+                    await File.WriteAllTextAsync(path, provisioning);
+                    settings["Notifications:Provisioning:Path"] = path;
+                }
+                else                 if (receiver is not null)
                 {
                     var path = Path.Combine(Path.GetTempPath(), $"embedded-provisioning-{Guid.NewGuid():N}.json");
                     await File.WriteAllTextAsync(path, $$"""
@@ -595,6 +869,7 @@ namespace Juice.Notifications.IntegrationTests
                 builder.Services.AddSingleton<RecordingSink>();
                 builder.Services.AddSingleton<INotificationsAuditSink>(sp => sp.GetRequiredService<RecordingSink>());
                 builder.Services.AddJuiceNotificationsEmbedded(builder.Configuration.GetSection("Notifications"), Configure(connectionString, applicationName));
+                services?.Invoke(builder.Services);
                 var host = builder.Build();
                 await host.StartAsync(Ct);
                 return new EmbeddedHost(host, connectionString);
@@ -622,6 +897,22 @@ namespace Juice.Notifications.IntegrationTests
                 {
                     action();
                 }
+                return result;
+            }
+
+            /// <summary>Host work in its transaction through the host scope (M46-2): committed unless it returns false; an exception rolls it back.</summary>
+            public async Task<T> InHostScopeAsync<T>(Func<HostDbContext, INotificationsHostScope, Task<T>> work)
+            {
+                await using var scope = _host.Services.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<HostDbContext>();
+                await using var transaction = await db.Database.BeginTransactionAsync(Ct);
+                var result = await work(db, scope.ServiceProvider.GetRequiredService<INotificationsHostScope>());
+                if (result is false)
+                {
+                    await transaction.RollbackAsync(Ct);
+                    return result;
+                }
+                await transaction.CommitAsync(Ct);
                 return result;
             }
 
