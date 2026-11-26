@@ -252,6 +252,8 @@ namespace Juice.Notifications.Planning
             var truncated = new Dictionary<string, string>(StringComparer.Ordinal);
             // Routes an escalation step named by key that reached nobody (disabled or gone).
             var missingRoutes = new Dictionary<string, string>(StringComparer.Ordinal);
+            // Routes an escalation step named by key that it reaches: each step that names one sends to it again (decision G5).
+            var byKey = new HashSet<string>(StringComparer.Ordinal);
             // A person reached through several names is one recipient: the names, and the first resolver that reached them, by person.
             var people = new Dictionary<(string Source, string ExternalId), (ResolvedPerson Person, SortedSet<string> Via, string Resolver)>();
             foreach (var spec in specs)
@@ -286,6 +288,10 @@ namespace Juice.Notifications.Planning
                 foreach (var destination in result.Destinations)
                 {
                     planned.TryAdd(destination.NamedAs, (destination, resolverKey));
+                }
+                if (spec is { Kind: RecipientKinds.Route, Key: not null })
+                {
+                    byKey.UnionWith(result.Destinations.Select(d => d.NamedAs));
                 }
                 if (spec is { Kind: RecipientKinds.Route, Key: not null } && result.Destinations.Count == 0)
                 {
@@ -404,10 +410,14 @@ namespace Juice.Notifications.Planning
             }
             if (escalating)
             {
-                // Nobody twice: anyone the notification reached already (the request's plan, an earlier step) isn't added again.
+                // Nobody twice: anyone the notification reached already (the request's plan, an earlier step) isn't added again. A route the step
+                // names by its key is the exception (decision G5): as a legacy step sent alert.escalated to every endpoint it named, whatever they
+                // had been sent, each step that names it reaches it once, the step's own record (named once per step) being the only one that counts.
                 var reached = (await db.Recipients.AsNoTracking().Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Kind != RecipientKind.Name)
-                    .Select(r => r.NamedAs).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
-                due.RemoveAll(r => reached.Contains(r.NamedAs));
+                    .Select(r => new { r.NamedAs, r.EscalationStep }).ToListAsync(ct));
+                var anyStep = reached.Select(r => r.NamedAs).ToHashSet(StringComparer.Ordinal);
+                var thisStep = reached.Where(r => r.EscalationStep == row.EscalationStep).Select(r => r.NamedAs).ToHashSet(StringComparer.Ordinal);
+                due.RemoveAll(r => byKey.Contains(r.NamedAs) ? thisStep.Contains(r.NamedAs) : anyStep.Contains(r.NamedAs));
                 if (!due.Any(r => r.Kind != RecipientKind.Name))
                 {
                     // Nobody new: the next step runs at once, not after its wait (design §7.1).

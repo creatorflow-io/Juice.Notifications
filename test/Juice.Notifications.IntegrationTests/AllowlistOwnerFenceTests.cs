@@ -66,5 +66,34 @@ namespace Juice.Notifications.IntegrationTests
             await using var check = _database.Context();
             Assert.True(await check.Allowlist.AnyAsync(a => a.TenantId == Tenant, Ct));
         }
+
+        /// <summary>
+        /// The same fence on a route (review of #3, round 2): a takeover that keeps the definition moves no hash, so the owner itself is the token
+        /// (integrations, targets, routes and policies alike).
+        /// </summary>
+        [Fact]
+        public async Task A_route_change_decided_on_a_stale_owner_is_a_concurrent_change_even_with_the_same_definition()
+        {
+            LocalStack.RequireAvailable();
+            await using (var seed = await _database.MigratedAsync())
+            {
+                seed.Routes.Add(new Route { TenantId = Tenant, Key = "ops", Match = "{}", Targets = [], DefinitionHash = "h", ManagedBy = ManagedBy.Api, UpdatedAt = Seed.Now });
+                await seed.SaveChangesAsync(Ct);
+            }
+            await using var db = _database.Context();
+            var read = await db.Routes.SingleAsync(r => r.TenantId == Tenant && r.Key == "ops", Ct);
+
+            await using (var provisioning = _database.Context())
+            {
+                // The file takes it over with the same definition: the hash stays as it was.
+                (await provisioning.Routes.SingleAsync(r => r.TenantId == Tenant && r.Key == "ops", Ct)).ManagedBy = ManagedBy.Configuration;
+                await provisioning.SaveChangesAsync(Ct);
+            }
+            read.Enabled = false;
+            var conflict = await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => db.SaveChangesAsync(Ct));
+            Assert.Equal(ConflictKind.RowGone, DbConflicts.Classify(conflict)!.Kind);
+            await using var check = _database.Context();
+            Assert.True((await check.Routes.AsNoTracking().SingleAsync(r => r.Key == "ops", Ct)).Enabled);
+        }
     }
 }

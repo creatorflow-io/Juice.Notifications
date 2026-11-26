@@ -180,7 +180,7 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Kind).HasMaxLength(40);
                 e.Property(x => x.Settings).HasColumnType("jsonb");
                 e.Property(x => x.SecretRef).HasMaxLength(500);
-                e.Property(x => x.ManagedBy).HasMaxLength(20);
+                e.Property(x => x.ManagedBy).HasMaxLength(20).IsConcurrencyToken(); // the owner fences writes too (G1): a definition unchanged by a takeover moves no hash
                 // The hash covers every field a PUT can change, so it fences updates: two PUTs that merged fields from the same stale read
                 // can't both land, and the stored hash always describes the row.
                 e.Property(x => x.DefinitionHash).HasMaxLength(64).IsConcurrencyToken();
@@ -194,7 +194,7 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Key).HasMaxLength(63);
                 e.Property(x => x.Address).HasMaxLength(2000);
                 e.Property(x => x.AddressRef).HasMaxLength(500);
-                e.Property(x => x.ManagedBy).HasMaxLength(20);
+                e.Property(x => x.ManagedBy).HasMaxLength(20).IsConcurrencyToken(); // the owner fences writes too (G1): a definition unchanged by a takeover moves no hash
                 e.Property(x => x.DefinitionHash).HasMaxLength(64).IsConcurrencyToken();
                 e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
                 e.HasOne<Integration>().WithMany().HasForeignKey(x => new { x.TenantId, x.IntegrationId }).OnDelete(DeleteBehavior.Cascade);
@@ -206,7 +206,7 @@ namespace Juice.Notifications.Data
                 TenantKey(e);
                 e.Property(x => x.Key).HasMaxLength(63);
                 e.Property(x => x.Match).HasColumnType("jsonb");
-                e.Property(x => x.ManagedBy).HasMaxLength(20);
+                e.Property(x => x.ManagedBy).HasMaxLength(20).IsConcurrencyToken(); // the owner fences writes too (G1): a definition unchanged by a takeover moves no hash
                 e.Property(x => x.DefinitionHash).HasMaxLength(64).IsConcurrencyToken();
                 e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
             });
@@ -571,7 +571,7 @@ namespace Juice.Notifications.Data
                 TenantKey(e);
                 e.Property(x => x.Key).HasMaxLength(63);
                 e.Property(x => x.Steps).HasColumnType("jsonb");
-                e.Property(x => x.ManagedBy).HasMaxLength(20);
+                e.Property(x => x.ManagedBy).HasMaxLength(20).IsConcurrencyToken(); // the owner fences writes too (G1): a definition unchanged by a takeover moves no hash
                 e.Property(x => x.DefinitionHash).HasMaxLength(64).IsConcurrencyToken();
                 e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique().HasDatabaseName(Constraints.EscalationPolicyKey);
             });
