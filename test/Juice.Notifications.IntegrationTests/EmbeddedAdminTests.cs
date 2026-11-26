@@ -386,7 +386,18 @@ namespace Juice.Notifications.IntegrationTests
             using var operatorClient = Client(app, "Operator");
             var list = (await (await OkAsync(operatorClient.GetAsync($"{Api}/notifications", Ct))).Content.ReadFromJsonAsync<JsonElement>(Ct));
             var id = list.GetProperty("items")[0].GetProperty("id").GetGuid();
-            var detail = (await (await OkAsync(operatorClient.GetAsync($"{Api}/notifications/{id}", Ct))).Content.ReadFromJsonAsync<JsonElement>(Ct));
+            // The receiver has it before the dispatcher saves Delivered: read until it does (as DeliveryTests.DeliveredAsync waits).
+            JsonElement detail = default;
+            for (var i = 0; i < 150; i++)
+            {
+                detail = (await (await OkAsync(operatorClient.GetAsync($"{Api}/notifications/{id}", Ct))).Content.ReadFromJsonAsync<JsonElement>(Ct));
+                if (detail.GetProperty("deliveries") is { ValueKind: JsonValueKind.Array } ds && ds.GetArrayLength() > 0
+                    && ds[0].GetProperty("status").GetString() == "delivered")
+                {
+                    break;
+                }
+                await Task.Delay(100, Ct);
+            }
             Assert.Equal(("adminhost.thing", "delivered"), (detail.GetProperty("type").GetString(), detail.GetProperty("deliveries")[0].GetProperty("status").GetString()));
             Assert.Equal((HttpStatusCode.NotFound, ErrorCodes.NotFound), await ProblemAsync(operatorClient.GetAsync($"{Api}/notifications/{Guid.CreateVersion7()}", Ct)));
             using var viewer = Client(app, "Viewer");
