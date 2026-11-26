@@ -129,6 +129,29 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Null((await OkAsync<CorrelationResponse>(producer.GetAsync(Path(key), Ct))).HeldAt);
         }
 
+        /// <summary>
+        /// Another tenant's path: a token naming a tenant is refused before the endpoint (<c>tenant_forbidden</c>, the tenant pattern); a producer
+        /// names any tenant, and there its key is no correlation of its (not found), so the hold in its own tenant is untouched.
+        /// </summary>
+        [Fact]
+        public async Task Another_tenants_path_is_forbidden_to_a_tenant_token_and_holds_nothing_for_a_producer()
+        {
+            LocalStack.RequireAvailable();
+            var key = await CorrelationAsync();
+            var other = $"/api/v1/tenants/{ProducerApp.OtherTenant}/correlations/{Uri.EscapeDataString(key)}";
+            using var admin = fixture.App.Client(await LocalStack.TenantAdminTokenAsync());
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.TenantForbidden, ""),
+                await ProblemAsync(admin.PostAsJsonAsync($"{other}/hold", new HoldCorrelationBody("silence:7", null), Ct)));
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.TenantForbidden, ""), await ProblemAsync(admin.PostAsync($"{other}/release", null, Ct)));
+
+            using var producer = await fixture.ProducerAsync();
+            Assert.Equal((HttpStatusCode.NotFound, ErrorCodes.NotFound, ""),
+                await ProblemAsync(producer.PostAsJsonAsync($"{other}/hold", new HoldCorrelationBody("silence:7", null), Ct)));
+            await OkAsync<CorrelationResponse>(producer.PostAsJsonAsync($"{Path(key)}/hold", new HoldCorrelationBody("silence:7", null), Ct));
+            Assert.Equal((HttpStatusCode.NotFound, ErrorCodes.NotFound, ""), await ProblemAsync(producer.PostAsync($"{other}/release", null, Ct)));
+            Assert.Equal("silence:7", (await OkAsync<CorrelationResponse>(producer.GetAsync(Path(key), Ct))).HoldReason);
+        }
+
         [Fact]
         public async Task A_disabled_application_still_holds_and_releases_and_a_key_with_a_slash_round_trips()
         {
