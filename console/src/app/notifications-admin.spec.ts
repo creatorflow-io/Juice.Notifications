@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRouteSnapshot, Router, RouterStateSnapshot, UrlTree, provideRouter } from '@angular/router';
 import {
-  Access, AccessService, NOTIFICATIONS_ADMIN_OPTIONS, NOTIFICATIONS_ADMIN_PAGES, notificationsAdminMenus, pageGuard, readAccess,
+  Access, AccessService, NOTIFICATIONS_ADMIN_OPTIONS, NOTIFICATIONS_ADMIN_PAGES, notificationsAdminMenus, pageGuard, readAccess, tenantRights,
 } from '@juice-js/notifications-admin';
 import { Observable, firstValueFrom, isObservable, of } from 'rxjs';
 
@@ -56,5 +56,23 @@ describe('notifications admin, per hosting mode', () => {
     expect(router.serializeUrl(refused as UrlTree)).toBe('/notifications/no-access?reason=page&returnUrl=%2Fnotifications%2Ftenants%2Ft1%2Fsubscribers');
     expect(await run('routes')).toBe(true);
     expect(await run(undefined)).toBe(true);
+  });
+
+  it('reads the rights of the tenant the page shows, every right under allTenants, and none before the access is read', () => {
+    const read = (a: Access | undefined, tenant: string) => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({ providers: [{ provide: AccessService, useValue: { load: () => (a ? of(a) : new Observable<Access>()) } }] });
+      return TestBed.runInInjectionContext(() => tenantRights(() => tenant));
+    };
+    const operator = readAccess({ platformAdmin: false, allTenants: false, mode: 'embedded', pages: NOTIFICATIONS_ADMIN_PAGES.embedded,
+      tenants: [{ id: 'T1', name: null, rights: ['read', 'operate'] }] });
+    const rights = read(operator, 't1');
+    expect([rights.configure(), rights.operate()]).toEqual([false, true]);
+    const other = read(operator, 't2');
+    expect([other.configure(), other.operate()]).toEqual([false, false]);
+    const platform = read(readAccess({ platformAdmin: true, allTenants: true, tenants: [] }), 'any');
+    expect([platform.configure(), platform.operate()]).toEqual([true, true]);
+    const unread = read(undefined, 't1');
+    expect([unread.configure(), unread.operate()]).toEqual([false, false]);
   });
 });

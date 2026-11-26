@@ -14,6 +14,7 @@ import { FieldErrorsComponent, FormErrors, FormErrorsComponent, MatchDraft, Matc
   matchText, rowAction, submit, whenChanged } from '../shared/forms';
 import { cursorList } from '../shared/resource';
 import { Badge, instant, problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 const PAGE = 50;
 
@@ -28,7 +29,7 @@ const PAGE = 50;
   template: `
     <div class="na-head"><h1>Mutes</h1><span class="na-spacer"></span>
       <mat-checkbox [ngModel]="all()" (ngModelChange)="all.set($event)" data-testid="mutes-all">Show ended and cancelled</mat-checkbox>
-      @if (!adding()) { <button mat-flat-button type="button" (click)="add()" data-testid="mute-new">New mute</button> }
+      @if (!adding()) { @if (can.configure()) { <button mat-flat-button type="button" (click)="add()" data-testid="mute-new">New mute</button> } }
       <button mat-stroked-button type="button" (click)="list.first.reload()" data-testid="refresh">Refresh</button></div>
     @if (adding()) {
       <form class="na-form na-card" (ngSubmit)="save()" data-testid="mute-form">
@@ -77,7 +78,7 @@ const PAGE = 50;
                   <button mat-flat-button type="button" (click)="cancel(m.id)" [disabled]="busy()" data-testid="mute-cancel-confirm">Cancel the mute</button>
                   <button mat-button type="button" (click)="confirming.set(null)">Keep</button>
                 } @else {
-                  <button mat-button type="button" (click)="confirming.set(m.id)" data-testid="mute-cancel">Cancel…</button>
+                  @if (can.configure()) { <button mat-button type="button" (click)="confirming.set(m.id)" data-testid="mute-cancel">Cancel…</button> }
                 }
               }
             </td>
@@ -95,6 +96,8 @@ const PAGE = 50;
 export class MutesPage {
   private readonly api = inject(NotificationsAdminApi);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
 
   protected readonly all = signal(false);
   // The API pages mutes by the last one's id (newest first) and answers a plain list: a full page may have more after it.

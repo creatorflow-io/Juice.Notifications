@@ -11,6 +11,7 @@ import { DeliveryFilter, NotificationsAdminApi } from '../core/api.service';
 import { DELIVERY_STATUSES } from '../core/models';
 import { cursorList } from '../shared/resource';
 import { Badge, TenantLinkPipe, instant, localInput, problemText, words } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /**
  * The tenant's deliveries, newest first (phase-4c-plan §4): filtered by status, channel, integration, type, request and time, all in the
@@ -52,8 +53,8 @@ import { Badge, TenantLinkPipe, instant, localInput, problemText, words } from '
         @if (request()) {
           <span class="na-muted na-small">Replay takes no notification id: clear it to replay what the other filters match.</span>
         } @else if (!confirming()) {
-          <button mat-stroked-button type="button" (click)="confirming.set(true)" [disabled]="!readAt() || replaying()" data-testid="replay">
-            Replay these failed deliveries</button>
+          @if (can.operate()) { <button mat-stroked-button type="button" (click)="confirming.set(true)" [disabled]="!readAt() || replaying()" data-testid="replay">
+            Replay these failed deliveries</button> }
         } @else {
           <span>Put back every failed delivery this filter matches{{ list.hasMore() ? '' : ' (' + list.items().length + ')' }}, up to the newest
             shown ({{ readAt() | date: 'HH:mm:ss' }})?</span>
@@ -97,6 +98,8 @@ export class DeliveriesPage {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
   readonly status = input<string>();
   readonly channel = input<string>();
   readonly integration = input<string>();

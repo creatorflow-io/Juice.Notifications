@@ -16,6 +16,7 @@ import {
 } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /**
  * The tenant's routes (design §6.3): which notifications (by type, labels and priority) reach which targets. A route is edited above the
@@ -27,7 +28,7 @@ import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
     MatSelectModule, Badge, TenantLinkPipe, FieldErrorsComponent, FormErrorsComponent, MatchEditorComponent],
   template: `
     <div class="na-head"><h1>Routes</h1><span class="na-spacer"></span>
-      @if (!editing()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!routes.hasValue()" data-testid="route-new">New route</button> }
+      @if (!editing()) { @if (can.configure()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!routes.hasValue()" data-testid="route-new">New route</button> } }
       <button mat-stroked-button type="button" (click)="reload()" data-testid="refresh">Refresh</button></div>
     @if (editing(); as e) {
       <form class="na-form na-card" (ngSubmit)="save()" data-testid="route-form">
@@ -82,12 +83,12 @@ import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
             <td class="na-nowrap">{{ r.updatedAt | date: 'MMM d, HH:mm' }}</td>
             <td class="na-nowrap">
               @if (r.managedBy === 'api') {
-                <button mat-button type="button" (click)="edit(r)" data-testid="route-edit">Edit</button>
+                @if (can.configure()) { <button mat-button type="button" (click)="edit(r)" data-testid="route-edit">Edit</button> }
                 @if (confirming() === r.key) {
                   <button mat-flat-button type="button" (click)="delete(r.key)" [disabled]="busy()" data-testid="route-delete-confirm">Delete</button>
                   <button mat-button type="button" (click)="confirming.set(null)">Keep</button>
                 } @else {
-                  <button mat-button type="button" (click)="confirming.set(r.key)" data-testid="route-delete">Delete…</button>
+                  @if (can.configure()) { <button mat-button type="button" (click)="confirming.set(r.key)" data-testid="route-delete">Delete…</button> }
                 }
               } @else { <span class="na-muted na-small" [title]="note(r)">read only</span> }
             </td>
@@ -100,6 +101,8 @@ import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
 export class RoutesPage {
   private readonly api = inject(NotificationsAdminApi);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
 
   protected readonly routes = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.routes(params) });
   protected readonly integrations = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.integrations(params) });

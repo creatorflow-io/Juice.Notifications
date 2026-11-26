@@ -6,6 +6,7 @@ import { RouterLink } from '@angular/router';
 import { NotificationsAdminApi } from '../core/api.service';
 import { apiResource } from '../shared/resource';
 import { Badge, TenantLinkPipe, problemText, words } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /**
  * One delivery (phase-4c-plan §4): where it went and through what, the recipients it carries, every attempt with its outcome, and, when
@@ -30,7 +31,7 @@ import { Badge, TenantLinkPipe, problemText, words } from '../shared/ui';
           @if (d.delivery.failureCategory) { <span class="na-muted">{{ label(d.delivery.failureCategory) }}</span> }
           <span class="na-spacer"></span>
           @if (d.delivery.status === 'failed') {
-            <button mat-flat-button type="button" (click)="retry()" [disabled]="retrying()" data-testid="retry">Retry</button>
+            @if (can.operate()) { <button mat-flat-button type="button" (click)="retry()" [disabled]="retrying()" data-testid="retry">Retry</button> }
           }
           @if (retried(); as r) { <span data-testid="retry-result">Sent again: {{ label(r.status) }}, retry {{ r.replays }}.</span> }
           @if (retryError()) { <span class="na-error" data-testid="retry-error">{{ retryError() }}</span> }
@@ -86,6 +87,8 @@ import { Badge, TenantLinkPipe, problemText, words } from '../shared/ui';
 export class DeliveryPage {
   private readonly api = inject(NotificationsAdminApi);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
   readonly id = input.required<string>();
 
   protected readonly label = words;

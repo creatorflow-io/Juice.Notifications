@@ -9,6 +9,7 @@ import { RouterLink } from '@angular/router';
 import { NotificationsAdminApi } from '../core/api.service';
 import { apiResource } from '../shared/resource';
 import { Badge, TenantLinkPipe, problemText, words } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /**
  * One correlation (design §5.3): its state, who acknowledged and resolved it, how its recipients and deliveries stand, and its latest
@@ -41,15 +42,15 @@ import { Badge, TenantLinkPipe, problemText, words } from '../shared/ui';
           <tr><th>Recipients</th><td>{{ counts(c.recipients) || '—' }}</td></tr>
           <tr><th>Deliveries</th><td>{{ counts(c.deliveries) || '—' }}</td></tr>
         </tbody></table>
-        @if (c.state === 'open' || c.state === 'acknowledged') {
+        @if (can.configure() && (c.state === 'open' || c.state === 'acknowledged')) {
           <form class="na-actions" (ngSubmit)="change('resolve')">
             @if (c.state === 'open') {
-              <button mat-stroked-button type="button" (click)="change('acknowledge')" [disabled]="busy()" data-testid="acknowledge">Acknowledge</button>
+              @if (can.configure()) { <button mat-stroked-button type="button" (click)="change('acknowledge')" [disabled]="busy()" data-testid="acknowledge">Acknowledge</button> }
             }
             <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Outcome</mat-label>
               <input matInput name="outcome" [(ngModel)]="outcome" maxlength="500" data-testid="resolve-outcome"></mat-form-field>
-            <button mat-flat-button type="submit" [disabled]="busy()" data-testid="resolve">Resolve</button>
-            <button mat-button type="button" (click)="change('cancel')" [disabled]="busy()" data-testid="cancel">Cancel it</button>
+            @if (can.configure()) { <button mat-flat-button type="submit" [disabled]="busy()" data-testid="resolve">Resolve</button> }
+            @if (can.configure()) { <button mat-button type="button" (click)="change('cancel')" [disabled]="busy()" data-testid="cancel">Cancel it</button> }
             <span class="na-muted na-small">Resolving or cancelling stops what's still due (escalations, waiting steps).</span>
           </form>
         }
@@ -77,6 +78,8 @@ import { Badge, TenantLinkPipe, problemText, words } from '../shared/ui';
 export class CorrelationPage {
   private readonly api = inject(NotificationsAdminApi);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
   readonly application = input.required<string>();
   readonly key = input.required<string>();
 

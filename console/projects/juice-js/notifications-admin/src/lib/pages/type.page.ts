@@ -16,6 +16,7 @@ import { TemplatePreview, TenantTypeDetail } from '../core/models';
 import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { TenantLinkPipe, problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /** The locale every type has; others only as the type declares them (the API refuses a tenant's own in any other). */
 const DEFAULT_LOCALE = 'en';
@@ -122,16 +123,16 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
               }
               @if (!t.serviceType) {
                 <div class="na-actions">
-                  <button mat-flat-button type="button" (click)="save()" [disabled]="busy() || !dirty() || !body().trim()" data-testid="template-save">Save</button>
-                  <button mat-button type="button" (click)="revert()" [disabled]="busy() || !dirty()" data-testid="template-revert">Revert</button>
+                  @if (can.configure()) { <button mat-flat-button type="button" (click)="save()" [disabled]="busy() || !dirty() || !body().trim()" data-testid="template-save">Save</button> }
+                  @if (can.configure()) { <button mat-button type="button" (click)="revert()" [disabled]="busy() || !dirty()" data-testid="template-revert">Revert</button> }
                   @if (tpl.tenant !== null) {
                     @if (confirmingRemove()) {
                       <span class="na-confirm">Use the application's again{{ tpl.application === null ? ' (it has none here: nothing would be sent on this channel by a template)' : '' }}?
                         <button mat-flat-button type="button" (click)="remove()" [disabled]="busy()" data-testid="template-remove-confirm">Use it</button>
                         <button mat-button type="button" (click)="confirmingRemove.set(false)">Keep ours</button></span>
                     } @else {
-                      <button mat-button type="button" (click)="confirmingRemove.set(true)" [disabled]="busy() || dirty()" data-testid="template-remove">
-                        Use the application's…</button>
+                      @if (can.configure()) { <button mat-button type="button" (click)="confirmingRemove.set(true)" [disabled]="busy() || dirty()" data-testid="template-remove">
+                        Use the application's…</button> }
                     }
                   }
                   @if (saved()) { <span role="status" data-testid="template-saved">{{ saved() }}</span> }
@@ -187,6 +188,8 @@ export class TypePage {
   private readonly sanitizer = inject(DomSanitizer);
   private readonly access = toSignal(inject(AccessService).load());
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
   readonly key = input.required<string>();
   protected readonly defaultLocale = DEFAULT_LOCALE;
 

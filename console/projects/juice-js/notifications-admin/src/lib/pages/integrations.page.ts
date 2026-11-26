@@ -9,6 +9,7 @@ import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
 import { whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 import { IntegrationForm } from './integration-form';
 
 /**
@@ -20,8 +21,8 @@ import { IntegrationForm } from './integration-form';
   imports: [DatePipe, RouterLink, MatButtonModule, MatProgressBarModule, Badge, TenantLinkPipe, IntegrationForm],
   template: `
     <div class="na-head"><h1>Integrations</h1><span class="na-spacer"></span>
-      @if (!creating()) { <button mat-flat-button type="button" (click)="creating.set(true)" [disabled]="!providers.value() || !integrations.hasValue()" data-testid="integration-new">
-        New integration</button> }
+      @if (!creating()) { @if (can.configure()) { <button mat-flat-button type="button" (click)="creating.set(true)" [disabled]="!providers.value() || !integrations.hasValue()" data-testid="integration-new">
+        New integration</button> } }
       <button mat-stroked-button type="button" (click)="refresh()" data-testid="refresh">Refresh</button></div>
     <!-- Only with the list read: a PUT creates or replaces, so a new key is checked against the tenant's. -->
     @if (creating() && integrations.hasValue() && providers.value(); as available) {
@@ -53,6 +54,8 @@ export class IntegrationsPage {
   private readonly router = inject(Router);
   private readonly base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
 
   protected readonly integrations = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.integrations(params) });
   protected readonly providers = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.providers(params) });

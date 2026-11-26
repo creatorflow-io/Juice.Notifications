@@ -13,6 +13,7 @@ import { ESCALATION_RECIPIENT_KINDS, EscalationPolicy, EscalationRecipient, Esca
 import { FieldErrorsComponent, FormErrors, FormErrorsComponent, KEY_PATTERN, isBlankNumber, managedNote, rowAction, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /** A recipient as the form edits it: every field there, the ones its kind doesn't take left out when saved. */
 interface RecipientDraft { kind: EscalationRecipient['kind']; id: string; key: string; resolver: string; }
@@ -28,7 +29,7 @@ interface StepDraft { afterMinutes: number | null; recipients: RecipientDraft[];
     MatSelectModule, FieldErrorsComponent, FormErrorsComponent],
   template: `
     <div class="na-head"><h1>Escalation policies</h1><span class="na-spacer"></span>
-      @if (!editing()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!policies.hasValue()" data-testid="policy-new">New policy</button> }
+      @if (!editing()) { @if (can.configure()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!policies.hasValue()" data-testid="policy-new">New policy</button> } }
       <button mat-stroked-button type="button" (click)="reload()" data-testid="refresh">Refresh</button></div>
     @if (editing(); as e) {
       <form class="na-form na-card" (ngSubmit)="save()" data-testid="policy-form">
@@ -105,12 +106,12 @@ interface StepDraft { afterMinutes: number | null; recipients: RecipientDraft[];
             <td class="na-nowrap">{{ p.updatedAt | date: 'MMM d, HH:mm' }}</td>
             <td class="na-nowrap">
               @if (p.managedBy === 'api') {
-                <button mat-button type="button" (click)="edit(p)" data-testid="policy-edit">Edit</button>
+                @if (can.configure()) { <button mat-button type="button" (click)="edit(p)" data-testid="policy-edit">Edit</button> }
                 @if (confirming() === p.key) {
                   <button mat-flat-button type="button" (click)="delete(p.key)" [disabled]="busy()" data-testid="policy-delete-confirm">Delete</button>
                   <button mat-button type="button" (click)="confirming.set(null)">Keep</button>
                 } @else {
-                  <button mat-button type="button" (click)="confirming.set(p.key)" data-testid="policy-delete">Delete…</button>
+                  @if (can.configure()) { <button mat-button type="button" (click)="confirming.set(p.key)" data-testid="policy-delete">Delete…</button> }
                 }
               } @else { <span class="na-muted na-small" [title]="note(p)">read only</span> }
             </td>
@@ -123,6 +124,8 @@ interface StepDraft { afterMinutes: number | null; recipients: RecipientDraft[];
 export class EscalationPoliciesPage {
   private readonly api = inject(NotificationsAdminApi);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
 
   protected readonly policies = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.escalationPolicies(params) });
   protected readonly resolvers = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.resolvers(params) });
