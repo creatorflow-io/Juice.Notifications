@@ -54,6 +54,7 @@ namespace Juice.Notifications.Events
     /// once). Every event names its application, tenant and correlation key; the rest depends on <see cref="Event"/>. The routing key is
     /// <c>{Application}.notification.{Event}</c>.
     /// </summary>
+    [Juice.Messaging.Attributes.Domain(Hosting.NotificationsPipeline.Domain)]
     public sealed record NotificationEvent : IntegrationEvent
     {
         /// <summary><see cref="ProducerEventNames"/>: <c>interaction</c>, <c>delivery.failed</c>, …</summary>

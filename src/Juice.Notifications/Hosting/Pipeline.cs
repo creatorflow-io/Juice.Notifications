@@ -80,7 +80,10 @@ namespace Juice.Notifications.Hosting
             options.BeforeStages?.Invoke(services);
 
             services.AddMediatR(mediator => mediator.RegisterServicesFromAssemblyContaining<CreateApplication>(includeNonPublicTypes: true));
-            services.AddScoped(typeof(IPipelineBehavior<,>), typeof(NotificationsTransactionBehavior<,>));
+            // The transaction wraps the pipeline's own commands only: an embedded host's commands go through its own behavior (U2).
+            services.AddScoped(typeof(NotificationsTransactionBehavior<,>));
+            services.AddSingleton(new NotificationsCommands(NotificationsPipeline.CommandAssemblies));
+            services.AddScoped(typeof(IPipelineBehavior<,>), typeof(NotificationsPipelineTransaction<,>));
             services.AddNotificationsMessaging(configuration);
 
             // Channels (design D24): webhook and email built in; provider packages add theirs.
@@ -175,7 +178,8 @@ namespace Juice.Notifications.Hosting
 
         /// <summary>
         /// Events to producers go to RabbitMQ (the <c>events</c> producer, its topic exchange; the routing key is the event's name,
-        /// <c>{app}.notification.{event}</c>); everything else takes the <c>local</c> route.
+        /// <c>{app}.notification.{event}</c>); the pipeline's other messages take the <c>local</c> route. A message that isn't the pipeline's
+        /// (not of <see cref="NotificationsPipeline.Domain"/>: an embedded host's) gets no route here, so its own policy alone routes it (U2).
         /// </summary>
         private sealed class NotificationsRoutes(Microsoft.Extensions.Options.IOptions<Events.EventsOptions> events) : IMessagePublishingPolicy
         {
@@ -183,9 +187,10 @@ namespace Juice.Notifications.Hosting
             private static readonly IReadOnlyCollection<PublishRoute> LocalRoutes = [new PublishRoute(Local, string.Empty)];
 
             public ValueTask<IReadOnlyCollection<PublishRoute>> ResolveAsync(PolicyResolveContext context)
-                => ValueTask.FromResult<IReadOnlyCollection<PublishRoute>>(events.Value.Enabled && context.EventType == nameof(Events.NotificationEvent)
-                    ? [new PublishRoute(Events.EventsRouting.Publisher, events.Value.Exchange)]
-                    : LocalRoutes);
+                => ValueTask.FromResult<IReadOnlyCollection<PublishRoute>>(context.Domain != NotificationsPipeline.Domain ? []
+                    : events.Value.Enabled && context.EventType == nameof(Events.NotificationEvent)
+                        ? [new PublishRoute(Events.EventsRouting.Publisher, events.Value.Exchange)]
+                        : LocalRoutes);
         }
     }
 

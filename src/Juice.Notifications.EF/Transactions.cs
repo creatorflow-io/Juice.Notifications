@@ -16,6 +16,35 @@ namespace Juice.Notifications.Data
         where TRequest : IRequest<TResponse>;
 
     /// <summary>
+    /// Which commands are the pipeline's (phase-5 waves §5.2, U2): those declared in <see cref="Assemblies"/>. Registered by the pipeline's
+    /// hosting (<c>Juice.Notifications.Hosting.NotificationsPipeline</c>), which names its assemblies; never matched by name.
+    /// </summary>
+    public sealed class NotificationsCommands(IReadOnlyCollection<System.Reflection.Assembly> assemblies)
+    {
+        public IReadOnlyCollection<System.Reflection.Assembly> Assemblies { get; } = assemblies;
+
+        public bool Owns(Type request) => Assemblies.Contains(request.Assembly);
+    }
+
+    /// <summary>
+    /// <see cref="NotificationsTransactionBehavior{TRequest, TResponse}"/> around the pipeline's own commands only (<see cref="NotificationsCommands"/>):
+    /// any other request in the container (an embedded host's) goes straight on, and no notifications context or transaction is made for it.
+    /// Same order as the transaction it wraps. Here, not in the core, so the core's mediator scan doesn't register it a second time.
+    /// </summary>
+    public sealed class NotificationsPipelineTransaction<TRequest, TResponse>(IServiceProvider services, NotificationsCommands commands)
+        : IPipelineBehavior<TRequest, TResponse>
+        where TRequest : IRequest<TResponse>
+    {
+        public int Order => int.MaxValue - 20;
+
+        public ValueTask<TResponse> Handle(TRequest request, RequestHandlerDelegate<TRequest, TResponse> next, CancellationToken cancellationToken)
+            => commands.Owns(typeof(TRequest))
+                ? Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions
+                    .GetRequiredService<NotificationsTransactionBehavior<TRequest, TResponse>>(services).Handle(request, next, cancellationToken)
+                : next.Invoke(request, cancellationToken);
+    }
+
+    /// <summary>
     /// The ambient <see cref="MessageContext"/> every entry point needs before sending a command that may publish (a worker's pass, a request).
     /// Starts one when none is active and clears it after; inside an active one it does nothing.
     /// </summary>

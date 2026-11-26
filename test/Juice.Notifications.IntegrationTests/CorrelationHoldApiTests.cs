@@ -174,5 +174,84 @@ namespace Juice.Notifications.IntegrationTests
                 await db.Applications.Where(a => a.Key == ProducerApp.Key).ExecuteUpdateAsync(s => s.SetProperty(a => a.Enabled, true), CancellationToken.None);
             }
         }
+
+        // QA (M44-1): the forced race of m44-architecture §9 over HTTP, and calls at once.
+
+        /// <summary>
+        /// A release that meets another change of the correlation (an update held by another connection, committed while the release waits on
+        /// it) answers 409 <c>concurrent_change</c>, and asking again answers on the new state. The same for a hold.
+        /// </summary>
+        [Theory]
+        [InlineData("release")]
+        [InlineData("hold")]
+        public async Task A_hold_or_release_racing_another_change_is_409_concurrent_change_and_asking_again_answers(string op)
+        {
+            LocalStack.RequireAvailable();
+            var key = await CorrelationAsync();
+            using var producer = await fixture.ProducerAsync();
+            if (op == "release")
+            {
+                await OkAsync<CorrelationResponse>(producer.PostAsJsonAsync($"{Path(key)}/hold", new HoldCorrelationBody("silence:7", null), Ct));
+            }
+            Task<HttpResponseMessage> Call() => op == "release"
+                ? producer.PostAsync($"{Path(key)}/release", null, Ct)
+                : producer.PostAsJsonAsync($"{Path(key)}/hold", new HoldCorrelationBody("silence:7", null), Ct);
+
+            await using (var other = fixture.App.Database.Context())
+            {
+                await using var transaction = await other.Database.BeginTransactionAsync(Ct);
+                await other.Database.ExecuteSqlAsync($"UPDATE notifications.correlations SET updated_at = now() WHERE key = {key}", Ct);
+                var call = Call();
+                await LockWaitAsync();
+                await transaction.CommitAsync(Ct);
+                Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.ConcurrentChange, ""), await ProblemAsync(call));
+            }
+            var again = await OkAsync<CorrelationResponse>(Call());
+            Assert.Equal(op == "hold", again.HeldAt is not null);
+        }
+
+        /// <summary>Holds and releases of one correlation at once: each answers 200 or 409 <c>concurrent_change</c>, never an error, and a last release clears it.</summary>
+        [Fact]
+        public async Task Holds_and_releases_at_once_answer_200_or_409_concurrent_change()
+        {
+            LocalStack.RequireAvailable();
+            var key = await CorrelationAsync();
+            using var producer = await fixture.ProducerAsync();
+            var answers = await Task.WhenAll(Enumerable.Range(0, 24).Select(i => i % 2 == 0
+                ? ProblemOrOkAsync(producer.PostAsJsonAsync($"{Path(key)}/hold", new HoldCorrelationBody("silence:" + (i % 3), null), Ct))
+                : ProblemOrOkAsync(producer.PostAsync($"{Path(key)}/release", null, Ct))));
+            Assert.All(answers, a => Assert.True(a is (HttpStatusCode.OK, "") or (HttpStatusCode.Conflict, ErrorCodes.ConcurrentChange), $"{a.Status} {a.Code}"));
+            Assert.Contains(answers, a => a.Status == HttpStatusCode.OK);
+
+            Assert.Null((await OkAsync<CorrelationResponse>(producer.PostAsync($"{Path(key)}/release", null, Ct))).HeldAt);
+            Assert.Null((await OkAsync<CorrelationResponse>(producer.GetAsync(Path(key), Ct))).HeldAt);
+
+            static async Task<(HttpStatusCode Status, string Code)> ProblemOrOkAsync(Task<HttpResponseMessage> call)
+            {
+                var response = await call;
+                if (response.StatusCode == HttpStatusCode.OK)
+                {
+                    return (HttpStatusCode.OK, "");
+                }
+                using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct));
+                return (response.StatusCode, json.RootElement.TryGetProperty("code", out var code) ? code.GetString()! : "");
+            }
+        }
+
+        /// <summary>Waits until a statement of this database waits on a row lock: the call has read and is blocked on its update.</summary>
+        private async Task LockWaitAsync()
+        {
+            await using var db = fixture.App.Database.Context();
+            for (var i = 0; i < 100; i++)
+            {
+                if (await db.Database.SqlQuery<int>($"SELECT count(*)::int AS \"Value\" FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'")
+                    .SingleAsync(Ct) > 0)
+                {
+                    return;
+                }
+                await Task.Delay(50, Ct);
+            }
+            Assert.Fail("The call never waited on the other transaction.");
+        }
     }
 }
