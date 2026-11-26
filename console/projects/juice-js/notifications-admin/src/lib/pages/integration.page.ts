@@ -14,6 +14,7 @@ import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
 import { FieldErrorsComponent, FormErrors, FormErrorsComponent, KEY_PATTERN, KIND_HINTS, SECRET_REF_HINT, managedNote, rowAction, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 import { IntegrationForm } from './integration-form';
 
 /**
@@ -40,9 +41,10 @@ import { IntegrationForm } from './integration-form';
         <div class="na-actions"><na-badge [state]="i.enabled ? 'enabled' : 'disabled'" data-testid="integration-state" />
           <span>{{ i.channel }} · {{ i.kind }} · priority {{ i.priority }}</span>
           <span class="na-muted na-small">updated {{ i.updatedAt | date: 'MMM d, y, HH:mm' }}</span></div>
-        @if (managed()) {
-          <p class="na-notice" data-testid="integration-managed">{{ managed() }}</p>
-          <table class="na-kv"><tbody>
+        <!-- Managed elsewhere, or the user may not configure (#17 review): what it holds, read-only, with nothing to submit. -->
+        @if (managed() || !can.configure()) {
+          @if (managed()) { <p class="na-notice" data-testid="integration-managed">{{ managed() }}</p> }
+          <table class="na-kv" data-testid="integration-read-only"><tbody>
             <tr><th>Settings</th><td><pre class="na-mono">{{ i.settings | json }}</pre></td></tr>
             <tr><th>Secret reference</th><td class="na-mono">{{ i.secretRef ?? '—' }}</td></tr>
           </tbody></table>
@@ -50,11 +52,11 @@ import { IntegrationForm } from './integration-form';
           <na-integration-form [tenantId]="tenantId()" [providers]="available" [existing]="i" [reloadFn]="reloadFn" (saved)="reload()" />
           <div class="na-actions">
             @if (provider()?.registersCallbacks) {
-              <button mat-stroked-button type="button" (click)="registerCallbacks()" [disabled]="busy()" data-testid="integration-callbacks">
-                Register callbacks</button>
+              @if (can.configure()) { <button mat-stroked-button type="button" (click)="registerCallbacks()" [disabled]="busy()" data-testid="integration-callbacks">
+                Register callbacks</button> }
             }
             @if (!confirmingDelete()) {
-              <button mat-button type="button" (click)="confirmingDelete.set(true)" data-testid="integration-delete">Delete…</button>
+              @if (can.configure()) { <button mat-button type="button" (click)="confirmingDelete.set(true)" data-testid="integration-delete">Delete…</button> }
             } @else {
               <span class="na-confirm">Delete {{ i.key }} and its {{ i.targets.length }} target(s)?
                 <button mat-flat-button type="button" (click)="delete()" [disabled]="busy()" data-testid="integration-delete-confirm">Delete</button>
@@ -69,7 +71,7 @@ import { IntegrationForm } from './integration-form';
       @if (i.managedBy !== 'service') {
         <section class="na-card">
           <div class="na-head"><h2>Targets</h2><span class="na-spacer"></span>
-            @if (!managed() && !editing()) { <button mat-stroked-button type="button" (click)="edit(null)" data-testid="target-new">Add a target</button> }</div>
+            @if (!managed() && !editing()) { @if (can.configure()) { <button mat-stroked-button type="button" (click)="edit(null)" data-testid="target-new">Add a target</button> } }</div>
           <p class="na-hint">Shared destinations routes name. {{ targetHint() }}</p>
           @if (editing(); as e) {
             <form class="na-form na-card" (ngSubmit)="saveTarget()" data-testid="target-form">
@@ -104,12 +106,12 @@ import { IntegrationForm } from './integration-form';
                   <td class="na-nowrap">{{ t.updatedAt | date: 'MMM d, HH:mm' }}</td>
                   <td class="na-nowrap">
                     @if (!managed() && t.managedBy === 'api') {
-                      <button mat-button type="button" (click)="edit(t)" data-testid="target-edit">Edit</button>
+                      @if (can.configure()) { <button mat-button type="button" (click)="edit(t)" data-testid="target-edit">Edit</button> }
                       @if (confirmingTarget() === t.key) {
                         <button mat-flat-button type="button" (click)="deleteTarget(t.key)" [disabled]="busy()" data-testid="target-delete-confirm">Delete</button>
                         <button mat-button type="button" (click)="confirmingTarget.set(null)">Keep</button>
                       } @else {
-                        <button mat-button type="button" (click)="confirmingTarget.set(t.key)" data-testid="target-delete">Delete…</button>
+                        @if (can.configure()) { <button mat-button type="button" (click)="confirmingTarget.set(t.key)" data-testid="target-delete">Delete…</button> }
                       }
                     }
                   </td>
@@ -127,6 +129,8 @@ export class IntegrationPage {
   private readonly router = inject(Router);
   private readonly base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
   readonly key = input.required<string>();
 
   // The API has no read of one integration: the tenant's list, and this one in it (null when it isn't there).

@@ -1,5 +1,6 @@
 import { DatePipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCheckboxModule } from '@angular/material/checkbox';
@@ -8,11 +9,13 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
+import { AccessService, hasPage } from '../core/access.service';
 import { NotificationsAdminApi } from '../core/api.service';
 import { ESCALATION_RECIPIENT_KINDS, EscalationPolicy, EscalationRecipient, EscalationStep } from '../core/models';
 import { FieldErrorsComponent, FormErrors, FormErrorsComponent, KEY_PATTERN, isBlankNumber, managedNote, rowAction, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /** A recipient as the form edits it: every field there, the ones its kind doesn't take left out when saved. */
 interface RecipientDraft { kind: EscalationRecipient['kind']; id: string; key: string; resolver: string; }
@@ -28,7 +31,7 @@ interface StepDraft { afterMinutes: number | null; recipients: RecipientDraft[];
     MatSelectModule, FieldErrorsComponent, FormErrorsComponent],
   template: `
     <div class="na-head"><h1>Escalation policies</h1><span class="na-spacer"></span>
-      @if (!editing()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!policies.hasValue()" data-testid="policy-new">New policy</button> }
+      @if (!editing()) { @if (can.configure()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!policies.hasValue()" data-testid="policy-new">New policy</button> } }
       <button mat-stroked-button type="button" (click)="reload()" data-testid="refresh">Refresh</button></div>
     @if (editing(); as e) {
       <form class="na-form na-card" (ngSubmit)="save()" data-testid="policy-form">
@@ -57,7 +60,7 @@ interface StepDraft { afterMinutes: number | null; recipients: RecipientDraft[];
               <div class="na-filters" data-testid="step-recipient">
                 <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Recipient</mat-label>
                   <mat-select [name]="'kind-' + s + '-' + j" [(ngModel)]="r.kind" (ngModelChange)="kindChanged(r)" data-testid="recipient-kind">
-                    @for (k of kinds; track k) { <mat-option [value]="k">{{ k === 'route' ? "the route's targets" : k }}</mat-option> }
+                    @for (k of kinds(); track k) { <mat-option [value]="k">{{ k === 'route' ? "the route's targets" : k }}</mat-option> }
                   </mat-select></mat-form-field>
                 @if (r.kind === 'topic') {
                   <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Topic key</mat-label>
@@ -105,12 +108,12 @@ interface StepDraft { afterMinutes: number | null; recipients: RecipientDraft[];
             <td class="na-nowrap">{{ p.updatedAt | date: 'MMM d, HH:mm' }}</td>
             <td class="na-nowrap">
               @if (p.managedBy === 'api') {
-                <button mat-button type="button" (click)="edit(p)" data-testid="policy-edit">Edit</button>
+                @if (can.configure()) { <button mat-button type="button" (click)="edit(p)" data-testid="policy-edit">Edit</button> }
                 @if (confirming() === p.key) {
                   <button mat-flat-button type="button" (click)="delete(p.key)" [disabled]="busy()" data-testid="policy-delete-confirm">Delete</button>
                   <button mat-button type="button" (click)="confirming.set(null)">Keep</button>
                 } @else {
-                  <button mat-button type="button" (click)="confirming.set(p.key)" data-testid="policy-delete">Delete…</button>
+                  @if (can.configure()) { <button mat-button type="button" (click)="confirming.set(p.key)" data-testid="policy-delete">Delete…</button> }
                 }
               } @else { <span class="na-muted na-small" [title]="note(p)">read only</span> }
             </td>
@@ -123,12 +126,21 @@ interface StepDraft { afterMinutes: number | null; recipients: RecipientDraft[];
 export class EscalationPoliciesPage {
   private readonly api = inject(NotificationsAdminApi);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
 
   protected readonly policies = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.escalationPolicies(params) });
-  protected readonly resolvers = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.resolvers(params) });
+  private readonly access = toSignal(inject(AccessService).load());
+  /**
+   * Whether the deployment has people (resolvers): an embedded host has none (phase 5, M44), so its steps go to the route's targets only, and
+   * the resolvers, which it doesn't serve, aren't read.
+   */
+  protected readonly hasPeople = computed(() => { const a = this.access(); return !!a && hasPage(a, 'resolvers'); });
+  protected readonly resolvers = apiResource({ params: () => this.hasPeople() ? this.tenantId() : undefined,
+    stream: ({ params }) => this.api.resolvers(params) });
   protected readonly error = computed(() => problemText(this.policies.error()));
   protected readonly resolversError = computed(() => problemText(this.resolvers.error()));
-  protected readonly kinds = ESCALATION_RECIPIENT_KINDS;
+  protected readonly kinds = computed(() => this.hasPeople() ? ESCALATION_RECIPIENT_KINDS : ESCALATION_RECIPIENT_KINDS.filter(k => k === 'route'));
   protected readonly keyPattern = KEY_PATTERN;
   protected readonly errors = new FormErrors();
   protected readonly editing = signal<{ isNew: boolean } | null>(null);
@@ -165,7 +177,8 @@ export class EscalationPoliciesPage {
   }
 
   protected recipient(): RecipientDraft {
-    return { kind: 'user', id: '', key: '', resolver: this.resolversFor('user')[0]?.key ?? '' };
+    return this.hasPeople() ? { kind: 'user', id: '', key: '', resolver: this.resolversFor('user')[0]?.key ?? '' }
+      : { kind: 'route', id: '', key: '', resolver: '' };
   }
 
   /** The tenant's enabled resolvers that handle a kind of person. */

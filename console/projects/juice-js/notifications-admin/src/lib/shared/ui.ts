@@ -2,8 +2,9 @@ import { ChangeDetectionStrategy, Component, Pipe, PipeTransform, computed, inje
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
 import { Problem } from '../core/models';
 
+// `wouldSend` (dry run) has no tone on purpose: recorded, not sent; neither done nor under way.
 const OK = new Set(['delivered', 'accepted', 'planned', 'resolved', 'closed', 'enabled']);
-const WARN = new Set(['pending', 'sending', 'retrying', 'planning', 'running', 'open', 'acknowledged', 'deferred', 'muted', 'optedOut', 'truncated', 'active', 'upcoming']);
+const WARN = new Set(['held', 'pending', 'sending', 'retrying', 'planning', 'running', 'open', 'acknowledged', 'deferred', 'muted', 'optedOut', 'truncated', 'active', 'upcoming']);
 const BAD = new Set(['failed', 'bounced', 'expired', 'resolverUnavailable']);
 
 /** A state as a badge: delivered and done green, under way or held amber, failed red, the rest grey. */

@@ -1,15 +1,15 @@
 import { inject } from '@angular/core';
-import { CanActivateFn, Router, UrlTree } from '@angular/router';
+import { CanActivateChildFn, CanActivateFn, Router, UrlTree } from '@angular/router';
 import { map } from 'rxjs';
-import { Access, AccessService } from './access.service';
+import { Access, AccessService, hasPage } from './access.service';
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from './options';
 
 /**
  * Why the no-access page is shown: nothing to administer, not the user's tenant (or not a tenant id), the platform's pages without being a
  * platform admin, or the access couldn't be read; or, from the API's tenant refusals, a tenant the deployment doesn't know, one not active,
- * or one still starting.
+ * or one still starting; or a page this deployment doesn't have (`page`: an embedded host has no people pages).
  */
-export type NoAccessReason = 'none' | 'tenant' | 'platform-only' | 'unavailable' | 'unknown' | 'inactive' | 'starting';
+export type NoAccessReason = 'none' | 'tenant' | 'platform-only' | 'unavailable' | 'unknown' | 'inactive' | 'starting' | 'page';
 
 /** The no-access page, saying why, with the link the user opened (its "try again" goes back there). */
 function noAccess(router: Router, base: string, access: Access, reason: NoAccessReason, returnUrl: string): UrlTree {
@@ -71,4 +71,18 @@ export const platformGuard: CanActivateFn = (_, state) => {
   const router = inject(Router);
   const base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
   return access.load().pipe(map(a => a.platformAdmin || noAccess(router, base, a, 'platform-only', state.url)));
+};
+
+/**
+ * A tenant page the deployment has (phase 5, M44): its route's `data.page` (an id of `NOTIFICATIONS_ADMIN_PAGES`) must be in the access
+ * read's `pages`, else the no-access page says it isn't part of this deployment. The menu shows only those pages; this covers a link.
+ */
+export const pageGuard: CanActivateChildFn = (route, state) => {
+  const page = route.data['page'] as string | undefined;
+  if (!page) return true;
+  const access = inject(AccessService);
+  const router = inject(Router);
+  const base = inject(NOTIFICATIONS_ADMIN_OPTIONS).basePath;
+  return access.load().pipe(map(a => a.unavailable ? noAccess(router, base, a, 'unavailable', state.url)
+    : hasPage(a, page) || noAccess(router, base, a, 'page', state.url)));
 };

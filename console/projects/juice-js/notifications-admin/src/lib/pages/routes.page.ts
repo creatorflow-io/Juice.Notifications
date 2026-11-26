@@ -16,6 +16,7 @@ import {
 } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /**
  * The tenant's routes (design §6.3): which notifications (by type, labels and priority) reach which targets. A route is edited above the
@@ -27,7 +28,7 @@ import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
     MatSelectModule, Badge, TenantLinkPipe, FieldErrorsComponent, FormErrorsComponent, MatchEditorComponent],
   template: `
     <div class="na-head"><h1>Routes</h1><span class="na-spacer"></span>
-      @if (!editing()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!routes.hasValue()" data-testid="route-new">New route</button> }
+      @if (!editing()) { @if (can.configure()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!routes.hasValue()" data-testid="route-new">New route</button> } }
       <button mat-stroked-button type="button" (click)="reload()" data-testid="refresh">Refresh</button></div>
     @if (editing(); as e) {
       <form class="na-form na-card" (ngSubmit)="save()" data-testid="route-form">
@@ -38,6 +39,12 @@ import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
           <mat-checkbox name="enabled" [(ngModel)]="draft.enabled" data-testid="route-enabled">Enabled</mat-checkbox>
         </div>
         <na-field-errors [messages]="errors.at('/key')" pointer="/key" />
+        <div class="na-filters">
+          <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Digest window (seconds)</mat-label>
+            <input matInput type="number" name="digestSeconds" [(ngModel)]="draft.digestSeconds" min="0" max="3600" step="1" data-testid="route-digest"></mat-form-field>
+          <span class="na-hint">0 sends each at once; up to 3600 sends what reaches the route within the window as one digest per type.</span>
+        </div>
+        <na-field-errors [messages]="errors.at('/digestSeconds')" pointer="/digestSeconds" />
         <p class="na-hint">Matches: what the route takes. Leave everything empty for every notification.</p>
         <na-match-editor [draft]="draft.match" [errors]="errors" />
         <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Targets</mat-label>
@@ -64,28 +71,29 @@ import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
     @if (routes.isLoading()) { <mat-progress-bar mode="indeterminate" /> }
     @if (routes.error()) { <p class="na-error" data-testid="routes-error">{{ error() }}</p> }
     <table class="na-table" data-testid="routes">
-      <thead><tr><th>Route</th><th>Matches</th><th>Targets</th><th>State</th><th>Updated</th><th></th></tr></thead>
+      <thead><tr><th>Route</th><th>Matches</th><th>Targets</th><th>Digest</th><th>State</th><th>Updated</th><th></th></tr></thead>
       <tbody>
         @for (r of routes.value() ?? []; track r.key) {
           <tr data-testid="route-row" [attr.data-key]="r.key" [class.na-off]="!r.enabled">
             <td>{{ r.key }}@if (r.managedBy === 'config') { <div class="na-muted na-small">from configuration</div> }</td>
             <td class="na-small">{{ text(r) }}</td>
             <td>{{ r.targets.join(', ') }}</td>
+            <td class="na-nowrap" data-testid="route-digest-shown">@if (r.digestSeconds) { {{ r.digestSeconds }} s } @else { at once }</td>
             <td><na-badge [state]="r.enabled ? 'enabled' : 'disabled'" /></td>
             <td class="na-nowrap">{{ r.updatedAt | date: 'MMM d, HH:mm' }}</td>
             <td class="na-nowrap">
               @if (r.managedBy === 'api') {
-                <button mat-button type="button" (click)="edit(r)" data-testid="route-edit">Edit</button>
+                @if (can.configure()) { <button mat-button type="button" (click)="edit(r)" data-testid="route-edit">Edit</button> }
                 @if (confirming() === r.key) {
                   <button mat-flat-button type="button" (click)="delete(r.key)" [disabled]="busy()" data-testid="route-delete-confirm">Delete</button>
                   <button mat-button type="button" (click)="confirming.set(null)">Keep</button>
                 } @else {
-                  <button mat-button type="button" (click)="confirming.set(r.key)" data-testid="route-delete">Delete…</button>
+                  @if (can.configure()) { <button mat-button type="button" (click)="confirming.set(r.key)" data-testid="route-delete">Delete…</button> }
                 }
               } @else { <span class="na-muted na-small" [title]="note(r)">read only</span> }
             </td>
           </tr>
-        } @empty { @if (!routes.isLoading()) { <tr><td colspan="6" class="na-muted">No routes yet.</td></tr> } }
+        } @empty { @if (!routes.isLoading()) { <tr><td colspan="7" class="na-muted">No routes yet.</td></tr> } }
       </tbody>
     </table>
     @if (rowError()) { <p class="na-error" data-testid="route-row-error">{{ rowError() }}</p> }`,
@@ -93,6 +101,8 @@ import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
 export class RoutesPage {
   private readonly api = inject(NotificationsAdminApi);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
 
   protected readonly routes = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.routes(params) });
   protected readonly integrations = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.integrations(params) });
@@ -108,13 +118,13 @@ export class RoutesPage {
     return this.draft.targets.filter(k => !listed.has(k));
   }
   protected readonly keyPattern = KEY_PATTERN;
-  protected readonly shown = ['/key', '/match', '/targets'];
+  protected readonly shown = ['/key', '/match', '/targets', '/digestSeconds'];
   protected readonly errors = new FormErrors();
   protected readonly editing = signal<{ isNew: boolean } | null>(null);
   protected readonly busy = signal(false);
   protected readonly confirming = signal<string | null>(null);
   protected readonly rowError = signal('');
-  protected draft: { key: string; match: MatchDraft; targets: string[]; enabled: boolean } = this.blank();
+  protected draft: { key: string; match: MatchDraft; targets: string[]; enabled: boolean; digestSeconds: number } = this.blank();
   protected readonly text = (r: Route) => matchText(r.match);
   protected readonly note = (r: Route) => managedNote(r.managedBy);
   protected readonly reloadFn = () => this.reload();
@@ -125,7 +135,7 @@ export class RoutesPage {
   }
 
   private blank() {
-    return { key: '', match: matchDraft({}), targets: [] as string[], enabled: true };
+    return { key: '', match: matchDraft({}), targets: [] as string[], enabled: true, digestSeconds: 0 };
   }
 
   private close(): void {
@@ -143,7 +153,7 @@ export class RoutesPage {
   }
 
   protected edit(r: Route | null): void {
-    this.draft = r ? { key: r.key, match: matchDraft(r.match), targets: [...r.targets], enabled: r.enabled } : this.blank();
+    this.draft = r ? { key: r.key, match: matchDraft(r.match), targets: [...r.targets], enabled: r.enabled, digestSeconds: r.digestSeconds ?? 0 } : this.blank();
     this.errors.clear();
     this.rowError.set('');
     this.editing.set({ isNew: !r });
@@ -165,12 +175,18 @@ export class RoutesPage {
       this.errors.local('/key', `There is a route ${key} already: edit it instead.`);
       return;
     }
+    const digest = Number(this.draft.digestSeconds ?? 0);
+    if (!Number.isInteger(digest) || digest < 0 || digest > 3600) {
+      this.errors.local('/digestSeconds', 'The digest window is 0 to 3600 whole seconds.');
+      return;
+    }
     const problem = matchProblem(this.draft.match);
     if (problem) {
       this.errors.local(problem.pointer, problem.message);
       return;
     }
-    submit(this.api.putRoute(this.tenantId(), key, { match: matchOf(this.draft.match), targets: this.draft.targets, enabled: this.draft.enabled }),
+    submit(this.api.putRoute(this.tenantId(), key, { match: matchOf(this.draft.match), targets: this.draft.targets, enabled: this.draft.enabled,
+      digestSeconds: digest }),
       this.busy, this.errors, () => this.reload());
   }
 

@@ -11,6 +11,7 @@ import { TenantSettings } from '../core/models';
 import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { TenantLinkPipe, problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /** The API's bounds (TenantSettingsHandler). */
 const MAX_STORM_THRESHOLD = 100_000;
@@ -74,7 +75,7 @@ function drafted(s: TenantSettings): Draft {
           a delivery can be investigated after what it said is gone.</p>
         <na-form-errors [errors]="errors" [shown]="pointers" [reload]="reloadFn" />
         <div class="na-actions">
-          <button mat-flat-button type="submit" [disabled]="busy()" data-testid="settings-save">Save</button>
+          @if (can.configure()) { <button mat-flat-button type="submit" [disabled]="busy()" data-testid="settings-save">Save</button> }
           @if (saved()) { <span role="status" data-testid="settings-saved">Saved.</span> }
           <span class="na-spacer"></span>
           <span class="na-muted na-small">{{ s.updatedAt ? 'Changed ' + (s.updatedAt | date: 'MMM d, y, HH:mm') : 'Never changed' }}</span>
@@ -85,6 +86,8 @@ function drafted(s: TenantSettings): Draft {
 export class SettingsPage {
   private readonly api = inject(NotificationsAdminApi);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
 
   protected readonly settings = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.settings(params) });
   protected readonly error = computed(() => problemText(this.settings.error()));

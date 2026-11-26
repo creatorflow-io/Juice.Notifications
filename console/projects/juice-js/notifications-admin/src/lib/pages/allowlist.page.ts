@@ -10,6 +10,7 @@ import { AllowlistEntry } from '../core/models';
 import { FieldErrorsComponent, FormErrors, FormErrorsComponent, managedNote, rowAction, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /**
  * The tenant's destination allowlist (design §13.1): the private hosts and networks its webhooks may reach, and on which ports. Public
@@ -20,7 +21,7 @@ import { problemText } from '../shared/ui';
   imports: [DatePipe, FormsModule, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, FieldErrorsComponent, FormErrorsComponent],
   template: `
     <div class="na-head"><h1>Destination allowlist</h1><span class="na-spacer"></span>
-      @if (!editing()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!entries.hasValue()" data-testid="allow-new">Allow a destination</button> }
+      @if (!editing()) { @if (can.configure()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!entries.hasValue()" data-testid="allow-new">Allow a destination</button> } }
       <button mat-stroked-button type="button" (click)="reload()" data-testid="refresh">Refresh</button></div>
     <p class="na-hint">Private hosts and networks webhooks may reach. Public hosts need no entry: they are reached over https on port 443.</p>
     @if (editing(); as e) {
@@ -54,12 +55,12 @@ import { problemText } from '../shared/ui';
             <td class="na-nowrap">{{ a.updatedAt | date: 'MMM d, HH:mm' }}</td>
             <td class="na-nowrap">
               @if (a.managedBy === 'api') {
-                <button mat-button type="button" (click)="edit(a)" data-testid="allow-edit">Edit</button>
+                @if (can.configure()) { <button mat-button type="button" (click)="edit(a)" data-testid="allow-edit">Edit</button> }
                 @if (confirming() === a.destination) {
                   <button mat-flat-button type="button" (click)="delete(a.destination)" [disabled]="busy()" data-testid="allow-delete-confirm">Remove</button>
                   <button mat-button type="button" (click)="confirming.set(null)">Keep</button>
                 } @else {
-                  <button mat-button type="button" (click)="confirming.set(a.destination)" data-testid="allow-delete">Remove…</button>
+                  @if (can.configure()) { <button mat-button type="button" (click)="confirming.set(a.destination)" data-testid="allow-delete">Remove…</button> }
                 }
               } @else { <span class="na-muted na-small" [title]="note(a)">read only</span> }
             </td>
@@ -72,6 +73,8 @@ import { problemText } from '../shared/ui';
 export class AllowlistPage {
   private readonly api = inject(NotificationsAdminApi);
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
 
   protected readonly entries = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.allowlist(params) });
   protected readonly error = computed(() => problemText(this.entries.error()));

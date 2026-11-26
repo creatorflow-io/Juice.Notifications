@@ -161,8 +161,11 @@ export function managedNote(managedBy: ManagedBy | undefined): string {
     : managedBy === 'service' ? "The service's own: it can't be changed or deleted." : '';
 }
 
-/** A key as the API takes it: 1–63 lowercase letters, digits or hyphens, starting with a letter. */
-export const KEY_PATTERN = '[a-z][a-z0-9-]{0,62}';
+/**
+ * A key as the API takes it: 1–63 lowercase letters, digits or hyphens, starting with a letter. The hyphen is escaped: browsers compile an
+ * input's `pattern` with the `v` flag, where a bare `-` in a class is a syntax error and the pattern is dropped.
+ */
+export const KEY_PATTERN = '[a-z][a-z0-9\\-]{0,62}';
 
 /** A match as a form edits it: types one per line or comma, a row per label matcher, a minimum priority or none. */
 export interface MatchDraft { types: string; labels: { name: string; matcher: string }[]; minPriority: Priority | ''; }

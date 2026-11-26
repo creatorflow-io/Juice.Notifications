@@ -10,11 +10,13 @@ import { MatSelectModule } from '@angular/material/select';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { RouterLink } from '@angular/router';
 import { catchError, debounceTime, map, of, switchMap } from 'rxjs';
+import { AccessService, hasPage } from '../core/access.service';
 import { NotificationsAdminApi } from '../core/api.service';
 import { TemplatePreview, TenantTypeDetail } from '../core/models';
 import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { TenantLinkPipe, problemText } from '../shared/ui';
+import { tenantRights } from '../shared/rights';
 
 /** The locale every type has; others only as the type declares them (the API refuses a tenant's own in any other). */
 const DEFAULT_LOCALE = 'en';
@@ -55,6 +57,7 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
             <tr><th>Correlation key</th><td>{{ t.correlation }}</td></tr>
           </tbody></table>
         </section>
+        @if (hasGroups()) {
         <section class="na-card" data-testid="type-group">
           <h2>Display group</h2>
           <p class="na-hint">Where its items go in people's inboxes here. The type declares <span class="na-mono">{{ t.displayGroup }}</span>;
@@ -74,6 +77,7 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
           <na-form-errors [errors]="groupErrors" />
           @if (moved()) { <p class="na-small" data-testid="type-group-moved">{{ moved() }}</p> }
         </section>
+        }
       </div>
 
       <section class="na-card" data-testid="templates">
@@ -119,16 +123,16 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
               }
               @if (!t.serviceType) {
                 <div class="na-actions">
-                  <button mat-flat-button type="button" (click)="save()" [disabled]="busy() || !dirty() || !body().trim()" data-testid="template-save">Save</button>
-                  <button mat-button type="button" (click)="revert()" [disabled]="busy() || !dirty()" data-testid="template-revert">Revert</button>
+                  @if (can.configure()) { <button mat-flat-button type="button" (click)="save()" [disabled]="busy() || !dirty() || !body().trim()" data-testid="template-save">Save</button> }
+                  @if (can.configure()) { <button mat-button type="button" (click)="revert()" [disabled]="busy() || !dirty()" data-testid="template-revert">Revert</button> }
                   @if (tpl.tenant !== null) {
                     @if (confirmingRemove()) {
                       <span class="na-confirm">Use the application's again{{ tpl.application === null ? ' (it has none here: nothing would be sent on this channel by a template)' : '' }}?
                         <button mat-flat-button type="button" (click)="remove()" [disabled]="busy()" data-testid="template-remove-confirm">Use it</button>
                         <button mat-button type="button" (click)="confirmingRemove.set(false)">Keep ours</button></span>
                     } @else {
-                      <button mat-button type="button" (click)="confirmingRemove.set(true)" [disabled]="busy() || dirty()" data-testid="template-remove">
-                        Use the application's…</button>
+                      @if (can.configure()) { <button mat-button type="button" (click)="confirmingRemove.set(true)" [disabled]="busy() || dirty()" data-testid="template-remove">
+                        Use the application's…</button> }
                     }
                   }
                   @if (saved()) { <span role="status" data-testid="template-saved">{{ saved() }}</span> }
@@ -182,13 +186,19 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
 export class TypePage {
   private readonly api = inject(NotificationsAdminApi);
   private readonly sanitizer = inject(DomSanitizer);
+  private readonly access = toSignal(inject(AccessService).load());
   readonly tenantId = input.required<string>();
+  /** The user's rights here: controls they may not use are hidden (the API refuses them anyway). */
+  protected readonly can = tenantRights(() => this.tenantId());
   readonly key = input.required<string>();
   protected readonly defaultLocale = DEFAULT_LOCALE;
 
   protected readonly detail = apiResource({ params: () => ({ tenantId: this.tenantId(), key: this.key() }),
     stream: ({ params }) => this.api.type(params.tenantId, params.key) });
-  protected readonly groups = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.displayGroups(params) });
+  /** Whether the deployment has display groups (an embedded host has no inbox): the section, and its read, only then. */
+  protected readonly hasGroups = computed(() => { const a = this.access(); return !!a && hasPage(a, 'display-groups'); });
+  protected readonly groups = apiResource({ params: () => this.hasGroups() ? this.tenantId() : undefined,
+    stream: ({ params }) => this.api.displayGroups(params) });
   protected readonly detailError = computed(() => problemText(this.detail.error()));
   protected readonly groupsError = computed(() => problemText(this.groups.error()));
 
