@@ -469,5 +469,190 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains("\"Index Name\": \"ix_deliveries_failing\"", plan);
             Assert.DoesNotContain("\"Seq Scan\"", plan);
         }
+
+        // ─── QA (M49-0b) ───────────────────────────────────────────────────
+
+        /// <summary>
+        /// Through the real dispatcher and a provider that refuses every send: each pass adds a failed attempt, nothing succeeds, the oldest
+        /// undelivered grows with the clock, and no stage shows it (the delivery backs off without failing a step). One success then counts in
+        /// the window, and the delivery is no longer in flight.
+        /// </summary>
+        [Fact]
+        public async Task An_always_failing_provider_through_the_real_dispatcher_and_one_success_after()
+        {
+            LocalStack.RequireAvailable();
+            var provider = new ScriptedProvider(Channels.Webhook, "fake");
+            var options = new StageOptions { Batch = 10, Lease = TimeSpan.FromSeconds(60) };
+            var services = new ServiceCollection().AddLogging();
+            services.AddDbContext<NotificationsDbContext>(o => NotificationsDbContext.Configure(o, _database.ConnectionString));
+            services.AddSingleton<TimeProvider>(_clock);
+            services.AddPostgresClaimStore();
+            services.Configure<Providers.DeliveryOptions>(o => (o.MaxAttempts, o.RetryBase, o.RetryMax) = (50, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30)));
+            services.AddSingleton<INotificationProvider>(provider);
+            services.AddBuiltInChannels();
+            People.ContactEncryptionRegistration.AddContactEncryption(services);
+            services.AddStage<Delivery, Delivering.DispatcherStage>(options, runWorkers: false);
+            await using var sp = services.BuildServiceProvider();
+            var runner = sp.GetRequiredService<StageRunner<Delivery, Delivering.DispatcherStage>>();
+
+            var start = _clock.GetUtcNow();
+            await using (var db = _database.Context())
+            {
+                var fake = new Integration { TenantId = Tenant, Key = "fake-hook", Channel = Channels.Webhook, Kind = "fake", Settings = "{}", DefinitionHash = "d", UpdatedAt = Seed.Now };
+                // A delivery as the planner leaves one: its request, notification and recipient, and the item tying them.
+                var request = Seed.Request(Tenant, _app.Id, _type.Id, Guid.NewGuid().ToString("N"));
+                var notification = Seed.Notification(Tenant, request.Id);
+                (notification.State, notification.NextAt) = (NotificationState.Planned, null);
+                var recipient = Seed.Recipient(Tenant, notification.Id);
+                var d = new Delivery
+                {
+                    TenantId = Tenant, Channel = Channels.Webhook, IntegrationId = fake.Id, DestinationKey = "ext:webhook:https://example.com/hook",
+                    DestinationSnapshot = """{"address":"https://example.com/hook"}""", Locale = "en", RendererVersion = "test",
+                    Content = """{"subject":"s","text":"t"}""", CreatedAt = start, Status = DeliveryStatus.Pending, NextAt = start,
+                };
+                db.AddRange(fake, request, notification, recipient, d, new DeliveryItem
+                {
+                    TenantId = Tenant, DeliveryId = d.Id, RecipientId = recipient.Id, RequestId = request.Id, DestinationKey = d.DestinationKey, Channel = d.Channel,
+                });
+                db.Entry(d).Property(x => x.CreatedAt).CurrentValue = start;
+                await db.SaveChangesAsync(Ct);
+            }
+            for (var pass = 1; pass <= 4; pass++)
+            {
+                provider.Then(SendResult.Retry(FailureCategory.Provider, "503 from the provider", 503));
+                Assert.Equal(1, (await runner.RunOnceAsync("dispatcher", options, Ct)).Claimed);
+                var health = await ReadAsync();
+                Assert.Equal((0, pass, (TimeSpan?)(_clock.GetUtcNow() - start)), (health.Sends.Succeeded, health.Sends.Failed, health.Sends.OldestUndelivered));
+                Assert.Equal(0, health.Stages["dispatcher"].Failing);
+                // To just past its backoff (jittered), so the next pass takes it.
+                await using var db = _database.Context();
+                var next = (await db.Deliveries.AsNoTracking().SingleAsync(x => x.TenantId == Tenant && x.IntegrationId != _integration.Id, Ct)).NextAt!.Value;
+                _clock.Advance(next - _clock.GetUtcNow() + TimeSpan.FromMilliseconds(1));
+            }
+
+            provider.Then(SendResult.Delivered(200));
+            Assert.Equal(1, (await runner.RunOnceAsync("dispatcher", options, Ct)).Claimed);
+            var after = (await ReadAsync()).Sends;
+            Assert.Equal((1, 4, (TimeSpan?)null), (after.Succeeded, after.Failed, after.OldestUndelivered));
+        }
+
+        /// <summary>The window's edge: an attempt exactly 15 minutes old counts; one a microsecond older doesn't.</summary>
+        [Fact]
+        public async Task An_attempt_exactly_at_the_window_edge_counts_and_one_just_before_it_does_not()
+        {
+            LocalStack.RequireAvailable();
+            var edge = SendHealth.DefaultWindow;
+            await SendingAsync(TimeSpan.FromMinutes(30), DeliveryStatus.Failed,
+                (edge, AttemptOutcome.RetryableFailure), (edge + TimeSpan.FromTicks(10), AttemptOutcome.PermanentFailure));
+            await SendingAsync(TimeSpan.FromMinutes(30), DeliveryStatus.Delivered,
+                (edge, AttemptOutcome.Delivered), (edge + TimeSpan.FromTicks(10), AttemptOutcome.Accepted));
+            var sends = (await ReadAsync()).Sends;
+            Assert.Equal((1, 1), (sends.Succeeded, sends.Failed));
+        }
+
+        /// <summary>Each count stops at <see cref="SendHealth.MaxCount"/> (10,000), however many attempts the window holds.</summary>
+        [Fact]
+        public async Task The_counts_stop_at_ten_thousand()
+        {
+            LocalStack.RequireAvailable();
+            var d = await SendingAsync(TimeSpan.FromMinutes(30), DeliveryStatus.Failed);
+            await using (var db = _database.Context())
+            {
+                // 10,050 of each in the window (numbered apart), straight in SQL.
+                var since = _clock.GetUtcNow().AddMinutes(-5);
+                await db.Database.ExecuteSqlAsync($"""
+                    INSERT INTO notifications.delivery_attempts (tenant_id, id, delivery_id, number, integration_id, at, outcome, duration_ms)
+                    SELECT {Tenant}, gen_random_uuid(), {d.Id}, n, {_integration.Id}, {since}, CASE WHEN n % 2 = 0 THEN 'Delivered' ELSE 'RetryableFailure' END, 0
+                    FROM generate_series(1, 20100) AS n
+                    """, Ct);
+            }
+            var sends = (await ReadAsync()).Sends;
+            Assert.Equal((SendHealth.MaxCount, SendHealth.MaxCount), (sends.Succeeded, sends.Failed));
+        }
+
+        /// <summary>
+        /// QA (M49-0b) cost, run on demand (NOTIFICATIONS_QA_COST=1; seeding takes a minute): 2,000,000 deliveries (1 % in flight) and 3,000,000
+        /// attempts over 30 days, 60,000 of them in the last 15 minutes. The whole read, stages included, stays well under a second, and the
+        /// send reads' plans (EXPLAIN ANALYZE, written beside the tests as send-health-plans.txt) use their indexes.
+        /// </summary>
+        [Fact]
+        public async Task The_send_reads_stay_cheap_on_large_tables()
+        {
+            LocalStack.RequireAvailable();
+            Assert.SkipUnless(Environment.GetEnvironmentVariable("NOTIFICATIONS_QA_COST") == "1", "On demand: NOTIFICATIONS_QA_COST=1.");
+            const string Empty = "{}";
+            var now = _clock.GetUtcNow();
+            await using (var db = _database.Context())
+            {
+                db.Database.SetCommandTimeout(TimeSpan.FromMinutes(10));
+                await db.Database.ExecuteSqlAsync($"""
+                    INSERT INTO notifications.deliveries (tenant_id, id, channel, integration_id, destination_key, destination_snapshot, template_version, locale,
+                        renderer_version, content, priority, mandatory, status, attempts, created_at, version, next_at)
+                    SELECT {Tenant}, gen_random_uuid(), 'webhook', {_integration.Id}, 'ext:webhook:https://example.com/' || n, {Empty}, 0, 'en', 'test', {Empty}, 1, false,
+                        CASE WHEN n % 100 = 0 THEN 'Retrying' ELSE 'Delivered' END, 1, {now} - (n * interval '1 second'), 0,
+                        CASE WHEN n % 100 = 0 THEN {now} + interval '5 minutes' END
+                    FROM generate_series(1, 2000000) AS n
+                    """, Ct);
+                var sample = await db.Deliveries.AsNoTracking().Select(d => d.Id).FirstAsync(Ct);
+                await db.Database.ExecuteSqlAsync($"""
+                    INSERT INTO notifications.delivery_attempts (tenant_id, id, delivery_id, number, integration_id, at, outcome, duration_ms)
+                    SELECT {Tenant}, gen_random_uuid(), {sample}, n, {_integration.Id},
+                        CASE WHEN n <= 60000 THEN {now} - (n * interval '14 milliseconds') ELSE {now} - interval '20 minutes' - (n * interval '860 milliseconds') END,
+                        CASE WHEN n % 3 = 0 THEN 'RetryableFailure' ELSE 'Delivered' END, 0
+                    FROM generate_series(1, 3000000) AS n
+                    """, Ct);
+                await db.Database.ExecuteSqlRawAsync("ANALYZE notifications.deliveries; ANALYZE notifications.delivery_attempts", Ct);
+            }
+
+            await ReadAsync(); // warm
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var health = await ReadAsync();
+            var elapsed = watch.Elapsed;
+            Assert.Equal((SendHealth.MaxCount, SendHealth.MaxCount), (health.Sends.Succeeded, health.Sends.Failed));
+            Assert.Equal(TimeSpan.FromSeconds(2000000 - 2000000 % 100), health.Sends.OldestUndelivered);
+
+            var since = now - SendHealth.DefaultWindow;
+            AttemptOutcome[] succeeded = [AttemptOutcome.Delivered, AttemptOutcome.Accepted];
+            DeliveryStatus[] inFlight = [DeliveryStatus.Pending, DeliveryStatus.Sending, DeliveryStatus.Retrying];
+            var plans = new System.Text.StringBuilder($"read: {elapsed.TotalMilliseconds:0} ms\n\n");
+            foreach (var (name, sql) in new[]
+            {
+                ("succeeded", $"SELECT count(*) FROM (SELECT 1 FROM notifications.delivery_attempts d WHERE d.at >= '{since:O}' AND d.outcome IN ('Delivered','Accepted') LIMIT 10000) c"),
+                ("in flight", "SELECT d.created_at FROM notifications.deliveries d WHERE d.status IN ('Pending','Sending','Retrying') ORDER BY d.created_at LIMIT 1"),
+                ("in flight (as a parameter array)", "PREPARE f(text[]) AS SELECT d.created_at FROM notifications.deliveries d WHERE d.status = ANY($1) ORDER BY d.created_at LIMIT 1"),
+            })
+            {
+                await using var db = _database.Context();
+                var connection = (Npgsql.NpgsqlConnection)db.Database.GetDbConnection();
+                await connection.OpenAsync(Ct);
+                string text;
+                if (sql.StartsWith("PREPARE", StringComparison.Ordinal))
+                {
+                    await using (var prepare = new Npgsql.NpgsqlCommand(sql, connection)) { await prepare.ExecuteNonQueryAsync(Ct); }
+                    await using (var generic = new Npgsql.NpgsqlCommand("SET plan_cache_mode = force_generic_plan", connection)) { await generic.ExecuteNonQueryAsync(Ct); }
+                    await using var explain = new Npgsql.NpgsqlCommand("EXPLAIN (ANALYZE, BUFFERS) EXECUTE f('{Pending,Sending,Retrying}')", connection);
+                    text = await ReadPlanAsync(explain);
+                }
+                else
+                {
+                    await using var explain = new Npgsql.NpgsqlCommand("EXPLAIN (ANALYZE, BUFFERS) " + sql, connection);
+                    text = await ReadPlanAsync(explain);
+                }
+                plans.Append($"== {name}\n{text}\n");
+            }
+            await File.WriteAllTextAsync(Path.Combine(AppContext.BaseDirectory, "send-health-plans.txt"), plans.ToString(), Ct);
+            Assert.True(elapsed < TimeSpan.FromSeconds(1), $"the read took {elapsed.TotalMilliseconds:0} ms");
+
+            static async Task<string> ReadPlanAsync(Npgsql.NpgsqlCommand command)
+            {
+                var lines = new List<string>();
+                await using var reader = await command.ExecuteReaderAsync(Ct);
+                while (await reader.ReadAsync(Ct))
+                {
+                    lines.Add(reader.GetString(0));
+                }
+                return string.Join('\n', lines);
+            }
+        }
     }
 }
