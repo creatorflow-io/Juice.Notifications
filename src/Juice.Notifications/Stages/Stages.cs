@@ -164,6 +164,8 @@ namespace Juice.Notifications.Stages
                     case StepResult.LeaseLost: lost++; Telemetry.LeaseLost.Add(1, new KeyValuePair<string, object?>("stage", stageName)); break;
                     default: failed++; break;
                 }
+                // Progress, whatever the step's outcome (phase-5 M49-0): a long pass shows it is moving, not stuck.
+                passes?.Progress(stageName, clock.UtcNow());
             }
             passes?.Record(stageName, clock.UtcNow());
             return new PassResult(claims.Count, completed, lost, failed);

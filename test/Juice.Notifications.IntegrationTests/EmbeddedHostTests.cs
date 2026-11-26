@@ -369,7 +369,7 @@ namespace Juice.Notifications.IntegrationTests
             {
                 await using var scope = host.Services.CreateAsyncScope();
                 health = await scope.ServiceProvider.GetRequiredService<INotificationsPipelineHealth>().ReadAsync(Ct);
-                if (!runStages || health.DispatcherLastPassAt is not null)
+                if (!runStages || health.Stages["dispatcher"].LastPassEndedAt is not null)
                 {
                     break;
                 }
@@ -378,8 +378,9 @@ namespace Juice.Notifications.IntegrationTests
             while (DateTimeOffset.UtcNow < until);
 
             Assert.Equal(runStages, health.Running);
-            Assert.Equal(runStages, health.DispatcherLastPassAt is not null);
-            Assert.Null(health.OldestDueDelivery);
+            Assert.Equal(runStages, health.Stages["dispatcher"].LastPassEndedAt is not null);
+            Assert.Equal(["delivery-planner", "digest", "dispatcher", "escalation", "planner"], health.Stages.Keys.Order());
+            Assert.Null(health.OldestDueAny);
         }
 
         [Fact]

@@ -670,6 +670,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_deliveries_due")
                         .HasFilter("next_at IS NOT NULL");
 
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_deliveries_failing")
+                        .HasFilter("step_failures > 0");
+
                     b.HasIndex("Priority", "NextAt")
                         .IsDescending(true, false)
                         .HasDatabaseName("ix_deliveries_claim")
@@ -962,6 +966,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_digests_due")
                         .HasFilter("next_at IS NOT NULL");
 
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_digests_failing")
+                        .HasFilter("step_failures > 0");
+
                     b.HasIndex("TenantId", "TypeKey", "By", "Key")
                         .IsUnique()
                         .HasDatabaseName("ix_digests_open")
@@ -1092,6 +1100,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasIndex("NextAt")
                         .HasDatabaseName("ix_escalations_due")
                         .HasFilter("next_at IS NOT NULL");
+
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_escalations_failing")
+                        .HasFilter("step_failures > 0");
 
                     b.HasIndex("TenantId", "CorrelationId")
                         .HasDatabaseName("ix_escalations_correlation");
@@ -1724,6 +1736,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_notifications_due")
                         .HasFilter("next_at IS NOT NULL");
 
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_notifications_failing")
+                        .HasFilter("step_failures > 0");
+
                     b.HasIndex("TenantId", "RequestId")
                         .IsUnique()
                         .HasDatabaseName("ix_notifications_tenant_id_request_id");
@@ -1858,6 +1874,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasIndex("NextAt")
                         .HasDatabaseName("ix_notification_recipients_due")
                         .HasFilter("next_at IS NOT NULL");
+
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_notification_recipients_failing")
+                        .HasFilter("step_failures > 0");
 
                     b.HasIndex("TenantId", "DigestId")
                         .HasDatabaseName("ix_notification_recipients_digest")

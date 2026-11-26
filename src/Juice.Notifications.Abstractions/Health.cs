@@ -11,8 +11,36 @@ namespace Juice.Notifications
     }
 
     /// <summary>
-    /// The pipeline's health: when this replica's dispatcher last made a pass (null before the first), how long the oldest due delivery and the
-    /// oldest notification waiting for the planner have been due (null when none is), and whether the pipeline's stages are running here.
+    /// The pipeline's health (phase-5-waves-architecture §4, reshaped for M49-0): init properties only, so later additions aren't breaking.
     /// </summary>
-    public sealed record PipelineHealth(DateTimeOffset? DispatcherLastPassAt, TimeSpan? OldestDueDelivery, TimeSpan? OldestDueNotification, bool Running);
+    public sealed record PipelineHealth
+    {
+        /// <summary>Whether this host runs the stages (<c>Stages:Run</c>).</summary>
+        public bool Running { get; init; }
+
+        /// <summary>Every claimable stage, by its name: <c>planner</c>, <c>delivery-planner</c>, <c>digest</c>, <c>escalation</c>, <c>dispatcher</c>.</summary>
+        public IReadOnlyDictionary<string, StageHealth> Stages { get; init; } = new Dictionary<string, StageHealth>();
+
+        /// <summary>The largest <see cref="StageHealth.OldestDue"/> across the stages; null when nothing is due anywhere.</summary>
+        public TimeSpan? OldestDueAny { get; init; }
+    }
+
+    /// <summary>One stage's health: what this replica saw of it, and what the database says across replicas.</summary>
+    public sealed record StageHealth
+    {
+        /// <summary>This replica: when a pass last ended (null: none yet, or the stage doesn't run here).</summary>
+        public DateTimeOffset? LastPassEndedAt { get; init; }
+
+        /// <summary>This replica: when a step last finished, with any outcome (completed, failed, lease lost). Recorded after each step.</summary>
+        public DateTimeOffset? LastProgressAt { get; init; }
+
+        /// <summary>All replicas (database): how long the oldest row has been due and not leased (<c>next_at &lt;= now</c>, lease free); null when none.</summary>
+        public TimeSpan? OldestDue { get; init; }
+
+        /// <summary>All replicas (database): rows whose latest step failed (<c>step_failures &gt; 0</c>), counted up to <see cref="MaxFailing"/>.</summary>
+        public int Failing { get; init; }
+
+        /// <summary>Where <see cref="Failing"/> stops counting.</summary>
+        public const int MaxFailing = 1000;
+    }
 }
