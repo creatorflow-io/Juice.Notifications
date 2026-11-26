@@ -26,7 +26,7 @@ namespace Juice.Notifications.Embedded
             // The row's own tenant (in its key, for most): the context has no tenant accessor, so the event names none (empty).
             var tenant = !string.IsNullOrEmpty(notification.TenantId) ? notification.TenantId
                 : new[] { record.KeyValues, record.CurrentValues, record.OriginalValues }.Select(v => v.GetValueOrDefault("TenantId")).FirstOrDefault(v => v is not null)?.ToString();
-            await sink.RecordAsync(new NotificationsDataChange(record.Table, notification.Name, tenant, record.User ?? EmbeddedActor.Current,
+            await sink.RecordAsync(new NotificationsDataChange(record.Table, notification.Name, tenant, record.User ?? EmbeddedActor.Current ?? Hosting.NotificationsActor.Current,
                 record.KeyValues, record.OriginalValues, record.CurrentValues), cancellationToken);
         }
     }

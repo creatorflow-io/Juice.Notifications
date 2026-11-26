@@ -107,6 +107,8 @@ namespace Juice.Notifications.Admin
         private static async ValueTask<object?> MessageContextAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
         {
             using var message = NotificationsMessageContext.Begin("admin");
+            // Who an embedded host's audit sink names for the changes this request makes (the service's audit reads its own user).
+            using var actor = NotificationsActor.As(AdminCaller.Name(context.HttpContext.User));
             return await next(context);
         }
 

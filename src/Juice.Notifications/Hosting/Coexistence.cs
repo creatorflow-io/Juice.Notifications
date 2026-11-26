@@ -17,3 +17,30 @@ namespace Juice.Notifications.Hosting
         public static IReadOnlyCollection<Assembly> CommandAssemblies { get; } = [typeof(NotificationsPipeline).Assembly];
     }
 }
+
+namespace Juice.Notifications.Hosting
+{
+    /// <summary>
+    /// Who is changing the setup in this flow, for a host's audit sink when the change's own record names no user (m44-architecture §6.4): an
+    /// embedded host has no Juice HTTP user accessor, so the admin API names its signed-in caller here for the request.
+    /// </summary>
+    public static class NotificationsActor
+    {
+        private static readonly AsyncLocal<string?> Actor = new();
+
+        public static string? Current => Actor.Value;
+
+        /// <summary>Names <paramref name="actor"/> until the result is disposed (then the previous one again).</summary>
+        public static IDisposable As(string? actor)
+        {
+            var previous = Actor.Value;
+            Actor.Value = actor;
+            return new Restore(previous);
+        }
+
+        private sealed class Restore(string? previous) : IDisposable
+        {
+            public void Dispose() => Actor.Value = previous;
+        }
+    }
+}

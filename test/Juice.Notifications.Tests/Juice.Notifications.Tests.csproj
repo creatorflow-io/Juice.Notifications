@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Juice.Notifications\Juice.Notifications.csproj" />
+    <ProjectReference Include="..\..\src\Juice.Notifications.Admin\Juice.Notifications.Admin.csproj" />
     <ProjectReference Include="..\..\src\Juice.Notifications.Messaging\Juice.Notifications.Messaging.csproj" />
     <ProjectReference Include="..\..\src\Juice.Notifications.Providers.Chat\Juice.Notifications.Providers.Chat.csproj" />
     <ProjectReference Include="..\..\src\Juice.Notifications.Providers.Email\Juice.Notifications.Providers.Email.csproj" />
