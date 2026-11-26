@@ -760,6 +760,11 @@ namespace Juice.Notifications.Data
         /// </summary>
         public required string NamedAs { get; init; }
         public int EscalationStep { get; set; }
+        /// <summary>
+        /// Dry, as it was created (phase 5, M44-2c): the request's own recipients as the request was accepted; an escalation step's as the
+        /// pipeline ran when the step was planned. Its deliveries, and the digest it joins, take this, however late they are planned.
+        /// </summary>
+        public bool DryRun { get; set; }
         /// <summary>The digest it waits in (phase-3-plan I31): it is sent with the digest's other members when that closes.</summary>
         public Guid? DigestId { get; set; }
         public RecipientOutcome Outcome { get; set; }

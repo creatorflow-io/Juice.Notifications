@@ -123,6 +123,29 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(1, host.CommittedActions); // the duplicate wakes nothing
         }
 
+        /// <summary>
+        /// A request can ask to be dry (M44-2c, a call replayed after the switch), never to be real while the host is dry: the effective flag is
+        /// <c>Delivery:DryRun || DryRun</c>. Its answer, and a duplicate's, say it was accepted dry, so a producer resending after the switch
+        /// learns its original was never sent.
+        /// </summary>
+        [Theory]
+        [InlineData(false, true, true)]
+        [InlineData(true, false, true)]
+        [InlineData(false, false, false)]
+        public async Task A_request_is_dry_when_the_host_is_or_when_it_asks_and_its_duplicate_says_so(bool hostDry, bool asked, bool expected)
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false,
+                services: s => s.PostConfigure<Providers.DeliveryOptions>(o => o.DryRun = hostDry));
+            var key = $"asked-{hostDry}-{asked}";
+            var first = await host.InTransactionAsync(async (_, client) => await client.SendAsync(Notification(key) with { DryRun = asked }, Ct));
+            // Sent again as real: the original answers, with how it was accepted.
+            var again = await host.InTransactionAsync(async (_, client) => await client.SendAsync(Notification(key), Ct));
+            Assert.Equal((false, expected, true, expected), (first.Duplicate, first.DryRun, again.Duplicate, again.DryRun));
+            await using var db = _database.Context();
+            Assert.Equal(expected, (await db.Requests.AsNoTracking().SingleAsync(r => r.Id == first.Id, Ct)).DryRun);
+        }
+
         [Fact]
         public async Task Without_a_transaction_a_send_is_refused_and_people_are_no_recipients_here()
         {

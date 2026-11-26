@@ -413,9 +413,14 @@ namespace Juice.Notifications.Planning
                     });
                 }
             }
+            // Dry as they are created (M44-2c, §6.4): the request's own recipients as it was accepted; an escalation step's as the pipeline runs
+            // now, when the step is planned (legacy's escalation stops at the switch, so a step planned after it pages). The delivery planner
+            // and digest membership read only this, however late they take the recipient (quiet hours, a throttle, a busy notification).
+            var dry = escalating ? Delivering.DeliveryPlannerStage.DryRun(context) : request.DryRun;
             foreach (var recipient in due)
             {
                 recipient.EscalationStep = row.EscalationStep;
+                recipient.DryRun = dry;
             }
             if (escalating)
             {

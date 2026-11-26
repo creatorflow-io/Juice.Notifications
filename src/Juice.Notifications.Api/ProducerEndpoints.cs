@@ -113,7 +113,7 @@ namespace Juice.Notifications.Api
             }
             var submission = new NotificationSubmission(body.Type, body.TypeVersion, body.IdempotencyKey, body.CorrelationKey,
                 body.Recipients?.Select(r => new RecipientSpec(r?.Kind, r?.Channel, r?.Address, r?.Id, r?.Key, r?.Resolver)).ToList(), body.Actor is null ? null : new ActorSpec(body.Actor.Kind, body.Actor.Id),
-                body.Priority, body.Labels, body.Data, body.Links, body.ExpiresAt, body.OccurredAt);
+                body.Priority, body.Labels, body.Data, body.Links, body.ExpiresAt, body.OccurredAt, body.DryRun ?? false);
             var traceParent = Activity.Current is { IdFormat: ActivityIdFormat.W3C } activity ? activity.Id : null;
             return await ApiResults.SendAsync(mediator, db, new AcceptNotification(tenantId, caller.Id, caller.Key, submission, traceParent, caller.Enabled),
                 outcome =>
@@ -142,7 +142,7 @@ namespace Juice.Notifications.Api
 
         private static IResult Accepted(Guid tenantId, AcceptedView view)
         {
-            var response = new AcceptedResponse(view.Id, "accepted", view.Type, view.TypeVersion, view.AcceptedAt);
+            var response = new AcceptedResponse(view.Id, "accepted", view.Type, view.TypeVersion, view.AcceptedAt, view.DryRun);
             Telemetry.Requests.Add(1, new KeyValuePair<string, object?>("type", view.Type),
                 new KeyValuePair<string, object?>("outcome", view.Duplicate ? "duplicate" : "accepted"), new KeyValuePair<string, object?>("intake", "http"));
             return view.Duplicate

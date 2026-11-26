@@ -30,10 +30,13 @@ namespace Juice.Notifications.Api.Contracts
     public sealed record SendNotificationBody(
         string? Type, int? TypeVersion, string? IdempotencyKey, string? CorrelationKey, List<RecipientBody>? Recipients, ActorBody? Actor,
         string? Priority, Dictionary<string, string>? Labels, JsonElement? Data, Dictionary<string, string>? Links, DateTimeOffset? ExpiresAt,
-        DateTimeOffset? OccurredAt = null);
+        DateTimeOffset? OccurredAt = null, bool? DryRun = null);
 
-    /// <summary><c>202</c> for a new request; <c>200</c> with the original for a repeated idempotency key.</summary>
-    public sealed record AcceptedResponse(Guid Id, string Status, string Type, int TypeVersion, DateTimeOffset AcceptedAt);
+    /// <summary>
+    /// <c>202</c> for a new request; <c>200</c> with the original for a repeated idempotency key. <c>dryRun</c>: it was accepted dry (its own
+    /// recipients recorded, not sent), so a duplicate of it isn't sent either.
+    /// </summary>
+    public sealed record AcceptedResponse(Guid Id, string Status, string Type, int TypeVersion, DateTimeOffset AcceptedAt, bool DryRun = false);
 
     public sealed record NotificationResponse(
         Guid Id, string Type, int TypeVersion, string IdempotencyKey, string? CorrelationKey, NotificationPriority Priority,

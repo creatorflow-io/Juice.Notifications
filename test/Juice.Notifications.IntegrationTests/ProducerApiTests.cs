@@ -290,6 +290,31 @@ namespace Juice.Notifications.IntegrationTests
 
             Assert.Equal(HttpStatusCode.OK, again.StatusCode);
             Assert.Equal(first!.Id, (await again.Content.ReadFromJsonAsync<AcceptedResponse>(Ct))!.Id);
+            Assert.False(first.DryRun);
+        }
+
+        /// <summary>
+        /// A producer can ask for a dry request (M44-2c, <c>dryRun</c>): accepted dry (202 says so) and stored dry; the same key again answers 200
+        /// with the original, <c>dryRun: true</c>, though the resend didn't ask.
+        /// </summary>
+        [Fact]
+        public async Task A_request_asking_to_be_dry_is_and_its_duplicate_says_so()
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            var type = await DeclaredAsync(client, Type(NewType()));
+            var key = Guid.NewGuid().ToString("N");
+
+            var sent = await client.PostAsJsonAsync(SendUrl, Send(type, key) with { DryRun = true }, Ct);
+            Assert.Equal(HttpStatusCode.Accepted, sent.StatusCode);
+            var first = (await sent.Content.ReadFromJsonAsync<JsonElement>(Ct));
+            Assert.True(first.GetProperty("dryRun").GetBoolean());
+            var again = await client.PostAsJsonAsync(SendUrl, Send(type, key), Ct);
+            Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+            var original = await again.Content.ReadFromJsonAsync<JsonElement>(Ct);
+            Assert.Equal((first.GetProperty("id").GetGuid(), true), (original.GetProperty("id").GetGuid(), original.GetProperty("dryRun").GetBoolean()));
+            await using var db = producer.App.Database.Context();
+            Assert.True((await db.Requests.AsNoTracking().SingleAsync(r => r.Id == first.GetProperty("id").GetGuid(), Ct)).DryRun);
         }
 
         /// <summary>
