@@ -231,6 +231,31 @@ namespace Juice.Notifications.IntegrationTests
                 await ProblemAsync(operatorClient.PostAsJsonAsync($"{Api}/correlations/alert%3A1/resolve?application=adminhost", new ResolveCorrelationBody(null, null), Ct)));
         }
 
+        /// <summary>
+        /// A correlation is named by its application (keys are per application): an admin who leaves it out is told so at <c>/application</c>
+        /// (400), not refused as a non-admin (#14 review); a viewer is still refused.
+        /// </summary>
+        [Fact]
+        public async Task An_admin_leaving_out_the_correlations_application_is_told_it_is_missing()
+        {
+            LocalStack.RequireAvailable();
+            await using var app = await HostAsync();
+            using var admin = Client(app, "Admin");
+            foreach (var call in new Func<Task<HttpResponseMessage>>[]
+            {
+                () => admin.GetAsync($"{Api}/correlations/alert%3A1", Ct),
+                () => admin.PostAsJsonAsync($"{Api}/correlations/alert%3A1/resolve", new ResolveCorrelationBody(null, null), Ct),
+            })
+            {
+                using var response = await call();
+                var problem = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+                Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidRequest, "/application"),
+                    (response.StatusCode, problem.GetProperty("code").GetString(), problem.GetProperty("errors")[0].GetProperty("pointer").GetString()));
+            }
+            using var viewer = Client(app, "Viewer");
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantAdmin), await ProblemAsync(viewer.GetAsync($"{Api}/correlations/alert%3A1", Ct)));
+        }
+
         /// <summary>An admin configures the whole embedded setup end to end; each change is heard by the host's audit sink, naming the admin.</summary>
         [Fact]
         public async Task An_admin_configures_the_embedded_setup_and_the_host_hears_each_change_by_the_admins_name()
@@ -245,7 +270,8 @@ namespace Juice.Notifications.IntegrationTests
                 DateTimeOffset.UtcNow.AddHours(1), "maintenance"), Ct)))
             {
                 Assert.Equal(HttpStatusCode.Created, muted.StatusCode);
-                Assert.StartsWith($"/api/v1/tenants/{Tenant}/mutes/", muted.Headers.Location?.OriginalString);
+                // Under the admin's prefix, where it can be read again.
+                Assert.StartsWith($"{Api}/mutes/", muted.Headers.Location?.OriginalString);
             }
             await OkAsync(admin.PutAsJsonAsync($"{Api}/escalation-policies/page", new PutEscalationPolicyBody(
                 JsonSerializer.SerializeToElement(new[] { new { afterMinutes = 5, recipients = new[] { new { kind = "route" } } } }), true), Ct));
@@ -434,7 +460,7 @@ namespace Juice.Notifications.IntegrationTests
         {
             LocalStack.RequireAvailable();
             await using var app = await HostAsync();
-            AdminRoutes.AssertPagesAndRights(app.Services, AdminPages.Embedded, $"{Prefix}/api/v1/tenants/");
+            AdminRoutes.AssertPagesAndRights(app.Services, AdminPages.Embedded, $"{Prefix}/api/v1/tenants/", everyRouteIsAPage: true);
         }
 
         /// <summary>
@@ -519,12 +545,21 @@ namespace Juice.Notifications.IntegrationTests
     /// <summary>The admin's mapped routes, as the endpoint data source has them, checked against the pages and the rights rule.</summary>
     internal static class AdminRoutes
     {
-        public static void AssertPagesAndRights(IServiceProvider services, IReadOnlyList<string> pages, string tenantPrefix)
+        /// <summary>
+        /// Every route under <paramref name="tenantPrefix"/> with a page names one of <paramref name="pages"/> and needs its right. With
+        /// <paramref name="everyRouteIsAPage"/> (embedded), every route there must have a page first (none of the service's producer or callback
+        /// routes is there), so one without fails instead of being left out; the service also maps the producers' routes under the tenant.
+        /// </summary>
+        public static void AssertPagesAndRights(IServiceProvider services, IReadOnlyList<string> pages, string tenantPrefix, bool everyRouteIsAPage = false)
         {
-            var endpoints = services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
-                .Where(e => ("/" + e.RoutePattern.RawText?.TrimStart('/')).StartsWith(tenantPrefix, StringComparison.Ordinal)
-                    && e.Metadata.GetMetadata<AdminPageMetadata>() is not null)
-                .ToList();
+            var under = services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
+                .Where(e => ("/" + e.RoutePattern.RawText?.TrimStart('/')).StartsWith(tenantPrefix, StringComparison.Ordinal)).ToList();
+            if (everyRouteIsAPage)
+            {
+                var pageless = under.Where(e => e.Metadata.GetMetadata<AdminPageMetadata>() is null).Select(e => e.RoutePattern.RawText).ToList();
+                Assert.True(pageless.Count == 0, $"routes under {tenantPrefix} without a page: {string.Join(", ", pageless)}");
+            }
+            var endpoints = under.Where(e => e.Metadata.GetMetadata<AdminPageMetadata>() is not null).ToList();
             Assert.NotEmpty(endpoints);
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var endpoint in endpoints)

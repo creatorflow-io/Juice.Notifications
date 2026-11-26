@@ -55,13 +55,18 @@ namespace Juice.Notifications.Api
                 if (application is null)
                 {
                     // The producer's own: the service's hook says which application the caller is. Embedded, there are no HTTP producers.
-                    if (producers is null)
+                    var (caller, refusal) = producers is null ? (null, null) : await producers.ResolveAsync(user, ct);
+                    if (caller is not null)
                     {
-                        return (null, ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin,
-                            "The tenant's admins name the application (?application=): keys are per application."));
+                        return (new Owner(caller.Value, null), null);
                     }
-                    var (caller, refusal) = await producers.ResolveAsync(user, ct);
-                    return caller is null ? (null, refusal) : (new Owner(caller.Value, null), null);
+                    // An admin who left the application out is told what's missing (#14 review), in both modes; anyone else is refused as before.
+                    if (await access.RightsAsync(user, tenantId, ct) != AdminRights.None)
+                    {
+                        return (null, ApiResults.Problem(StatusCodes.Status400BadRequest, ErrorCodes.InvalidRequest, "Name the correlation's application.",
+                            [new FieldError("/application", "The tenant's admins name the application (?application=): keys are per application.")]));
+                    }
+                    return (null, refusal ?? ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin, "The caller doesn't administer this tenant."));
                 }
                 if (await access.RightsAsync(user, tenantId, ct) == AdminRights.None)
                 {

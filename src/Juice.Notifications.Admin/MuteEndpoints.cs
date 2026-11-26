@@ -19,7 +19,8 @@ namespace Juice.Notifications.Api
                 => Results.Ok((await reader.MutesAsync(tenantId, null, all ?? false, before, limit ?? 50, ct)).Select(ToResponse)));
             mutes.MapPost("/mutes", (Guid tenantId, AddMuteBody body, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => ApiResults.SendAsync(mediator, db, new AddMute(tenantId, null, body.Match, body.StartsAt, body.EndsAt, body.Reason, AdminCaller.Name(http.User)),
-                    o => Results.Created($"/api/v1/tenants/{tenantId}/mutes/{o.Value!.Id}", ToResponse(o.Value)), PreferenceConflict, ct));
+                    // Where it answers: under the host's prefix (and path base), as the request came.
+                    o => Results.Created($"{http.Request.PathBase}{http.Request.Path.Value!.TrimEnd('/')}/{o.Value!.Id}", ToResponse(o.Value)), PreferenceConflict, ct));
             mutes.MapDelete("/mutes/{id:guid}", (Guid tenantId, Guid id, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
                 => ApiResults.SendAsync(mediator, db, new CancelMute(tenantId, null, id), _ => Results.NoContent(), PreferenceConflict, ct));
         }
