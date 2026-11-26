@@ -62,7 +62,14 @@ namespace Juice.Notifications.Stages
 
         private static readonly AttemptOutcome[] Succeeded = [AttemptOutcome.Delivered, AttemptOutcome.Accepted];
         private static readonly AttemptOutcome[] Failed = [AttemptOutcome.RetryableFailure, AttemptOutcome.PermanentFailure, AttemptOutcome.Unknown];
-        private static readonly DeliveryStatus[] InFlight = [DeliveryStatus.Pending, DeliveryStatus.Sending, DeliveryStatus.Retrying];
+        /// <summary>
+        /// When the oldest delivery in flight was created. The statuses are constants, not a parameter, so the SQL says
+        /// <c>status IN ('Pending', 'Sending', 'Retrying')</c> as the partial index <c>ix_deliveries_in_flight</c> does: with a parameter, a
+        /// generic or auto-prepared plan can't prove the index's filter and scans the table (357 ms against 0.06 ms on QA's 2,000,000 rows).
+        /// </summary>
+        internal static IQueryable<DateTimeOffset?> OldestInFlight(IQueryable<Delivery> deliveries) => deliveries
+            .Where(d => d.Status == DeliveryStatus.Pending || d.Status == DeliveryStatus.Sending || d.Status == DeliveryStatus.Retrying)
+            .OrderBy(d => d.CreatedAt).Select(d => (DateTimeOffset?)d.CreatedAt);
 
         /// <summary>
         /// The attempts of the last <see cref="SendHealth.DefaultWindow"/> (through <c>ix_delivery_attempts_at</c>, each count capped), and the oldest
@@ -74,8 +81,7 @@ namespace Juice.Notifications.Stages
             var window = db.Attempts.AsNoTracking().Where(a => a.At >= since);
             var succeeded = await window.Where(a => Succeeded.Contains(a.Outcome)).Take(SendHealth.MaxCount).CountAsync(ct);
             var failed = await window.Where(a => Failed.Contains(a.Outcome)).Take(SendHealth.MaxCount).CountAsync(ct);
-            var oldest = await db.Deliveries.AsNoTracking().Where(d => InFlight.Contains(d.Status))
-                .OrderBy(d => d.CreatedAt).Select(d => (DateTimeOffset?)d.CreatedAt).FirstOrDefaultAsync(ct);
+            var oldest = await OldestInFlight(db.Deliveries.AsNoTracking()).FirstOrDefaultAsync(ct);
             return new SendHealth
             {
                 Window = SendHealth.DefaultWindow,
