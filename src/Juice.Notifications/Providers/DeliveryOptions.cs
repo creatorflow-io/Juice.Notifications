@@ -138,6 +138,27 @@ namespace Juice.Notifications.Providers
             return options.AliasSecretDirectory is { Length: > 0 } directory && InFolder(reference[5..], directory);
         }
 
+        /// <summary>
+        /// Why the API's and the alias's secret limits overlap, or null when they don't (M46-3 review): one env prefix starting with the other, or
+        /// the same folder, would let one writer name the other's secrets (an API admin, the alias's). The host fails to start on it.
+        /// </summary>
+        public static string? ScopeOverlap(DeliveryOptions options)
+        {
+            if (options.ApiSecretEnvPrefix is { Length: > 0 } api && options.AliasSecretEnvPrefix is { Length: > 0 } alias
+                && (api.StartsWith(alias, StringComparison.Ordinal) || alias.StartsWith(api, StringComparison.Ordinal)))
+            {
+                return $"Delivery:ApiSecretEnvPrefix ({api}) and Delivery:AliasSecretEnvPrefix ({alias}) overlap: one starts with the other, so one writer could name the other's secrets. Give them distinct prefixes.";
+            }
+            if (options.ApiSecretDirectory is { Length: > 0 } apiFolder && options.AliasSecretDirectory is { Length: > 0 } aliasFolder
+                && string.Equals(Folder(apiFolder), Folder(aliasFolder), StringComparison.OrdinalIgnoreCase))
+            {
+                return $"Delivery:ApiSecretDirectory and Delivery:AliasSecretDirectory are the same folder ({apiFolder}), so one writer could name the other's secrets. Give them distinct folders.";
+            }
+            return null;
+        }
+
+        private static string Folder(string directory) => Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
         private static bool InFolder(string path, string directory)
             => Path.IsPathRooted(path) && !path.Contains("..", StringComparison.Ordinal)
                 && string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)), Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal);

@@ -109,6 +109,10 @@ namespace Juice.Notifications.Hosting
             }
             services.AddDeliveryPlanning(configuration.GetSection("Stages:DeliveryPlanner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages);
             services.Configure<Providers.DeliveryOptions>(configuration.GetSection(Providers.DeliveryOptions.Section));
+            // The API's and the alias's secret limits never overlap (M46-3): checked as the host resolves them, after any PostConfigure of its own.
+            Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions.TryAddEnumerable(services,
+                ServiceDescriptor.Singleton<Microsoft.Extensions.Options.IValidateOptions<Providers.DeliveryOptions>, SecretScopeValidation>());
+            services.AddOptions<Providers.DeliveryOptions>().ValidateOnStart();
             // Dry run (I67) is loud: a host in it says so at start.
             services.AddHostedService<DryRunNotice>();
             // A dispatcher lease covers connect + request timeouts with room to spare (design §11).
@@ -224,5 +228,14 @@ namespace Juice.Notifications.Hosting
                 await db.Database.MigrateAsync(cancellationToken);
             }
         }
+    }
+
+    /// <summary>Fails the host's start when the API's and the alias's secret limits overlap (<see cref="Providers.SecretReferences.ScopeOverlap"/>).</summary>
+    internal sealed class SecretScopeValidation : Microsoft.Extensions.Options.IValidateOptions<Providers.DeliveryOptions>
+    {
+        public Microsoft.Extensions.Options.ValidateOptionsResult Validate(string? name, Providers.DeliveryOptions options)
+            => Providers.SecretReferences.ScopeOverlap(options) is { } overlap
+                ? Microsoft.Extensions.Options.ValidateOptionsResult.Fail(overlap)
+                : Microsoft.Extensions.Options.ValidateOptionsResult.Success;
     }
 }

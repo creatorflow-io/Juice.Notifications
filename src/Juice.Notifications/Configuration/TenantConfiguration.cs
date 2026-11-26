@@ -569,9 +569,13 @@ namespace Juice.Notifications.Configuration
                 // Only a secret the provider sends with what goes to the target's address (a webhook's signing key). An SMTP password goes to the
                 // deployment's mail server, never to a target.
                 if (Signs(integration.Channel, integration.Kind) && ConfigurationRules.SecretOutOfReach(delivery.Value, Caller(r.ManagedBy), "/integration", integration.SecretRef, $"The signing secret of integration {integration.Key}",
-                        integration.ManagedBy == ManagedBy.Configuration
-                            ? $"its targets are set in the deployment's configuration, under {integration.Key}"
-                            : $"give {integration.Key} a secret of yours first (its secretRef), then its targets") is { } integrationOutOfReach)
+                        integration.ManagedBy switch
+                        {
+                            ManagedBy.Configuration => $"its targets are set in the deployment's configuration, under {integration.Key}",
+                            // An alias row isn't the API's to give a secret: its targets come from the producer's own API (M46-3 review).
+                            ManagedBy.WebhooksAlias => $"its targets are set through the producer's own API, which manages {integration.Key}",
+                            _ => $"give {integration.Key} a secret of yours first (its secretRef), then its targets",
+                        }) is { } integrationOutOfReach)
                 {
                     return Invalid<TargetView>(integrationOutOfReach);
                 }

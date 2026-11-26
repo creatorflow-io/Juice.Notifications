@@ -104,7 +104,11 @@ namespace Juice.Notifications.IntegrationTests
             }
             using (var own = await admin.PutAsJsonAsync($"{Tenant}/integrations/{integration}/targets/admin-{Short()}", new PutTargetBody("https://elsewhere.example/hook", null, null), Ct))
             {
-                Assert.False(own.IsSuccessStatusCode, $"{own.StatusCode}: an admin's target would be signed with the alias's secret");
+                // Refused on the integration's signing secret, with the alias's remedy, not the API's.
+                Assert.Equal(HttpStatusCode.BadRequest, own.StatusCode);
+                var problem = await own.Content.ReadAsStringAsync(Ct);
+                Assert.Contains("\"/integration\"", problem);
+                Assert.Contains("through the producer's own API", problem);
             }
         }
 

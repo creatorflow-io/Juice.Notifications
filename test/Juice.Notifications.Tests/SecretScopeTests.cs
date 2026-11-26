@@ -44,6 +44,19 @@ namespace Juice.Notifications.Tests
         }
 
         [Theory]
+        [InlineData("JUICE_", "JUICE_WEBHOOK_", null, null, true)]
+        [InlineData("JUICE_WEBHOOK_OPS_", "JUICE_WEBHOOK_", null, null, true)]
+        [InlineData("NOTIFICATIONS_SECRET_", "JUICE_WEBHOOK_", null, null, false)]
+        [InlineData("NOTIFICATIONS_SECRET_", null, null, null, false)]
+        [InlineData("NOTIFICATIONS_SECRET_", "JUICE_WEBHOOK_", "/run/secrets/a", "/run/secrets/a/", true)]
+        [InlineData("NOTIFICATIONS_SECRET_", "JUICE_WEBHOOK_", "/run/secrets/a", "/run/secrets/b", false)]
+        public void The_api_and_alias_limits_may_not_overlap(string api, string? alias, string? apiFolder, string? aliasFolder, bool overlap)
+            => Assert.Equal(overlap, SecretReferences.ScopeOverlap(new DeliveryOptions
+            {
+                ApiSecretEnvPrefix = api, AliasSecretEnvPrefix = alias, ApiSecretDirectory = apiFolder, AliasSecretDirectory = aliasFolder,
+            }) is not null);
+
+        [Theory]
         [InlineData("env:JUICE_WEBHOOK_HOOK")]
         [InlineData("env:NOTIFICATIONS_SECRET_HOOK")]
         public void Without_its_limits_the_alias_names_nothing(string reference)
