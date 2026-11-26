@@ -20,7 +20,7 @@ namespace Juice.Notifications.History
     /// (<see cref="RetryDelivery"/>): the same id and content, attempts kept and numbered on, a fresh budget. At most 10,000 a call, oldest first.
     /// Admins only; the call is audited as any change through the API.
     /// </summary>
-    public sealed record ReplayDeliveries(Guid NotificationTenantId, ReplayFilter Filter) : MessageBase, IRequest<Outcome<ReplayedView>>
+    public sealed record ReplayDeliveries(Guid NotificationTenantId, ReplayFilter Filter) : MessageBase, Configuration.ITenantCommand, IRequest<Outcome<ReplayedView>>
     {
         public const int MaxLimit = 10_000;
     }

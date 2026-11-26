@@ -39,9 +39,9 @@ namespace Juice.Notifications.Types
         IReadOnlyList<TypeVersionView> Versions, IReadOnlyList<TenantTypeChannelDetail> Channels);
 
     public sealed record PutTenantTemplate(Guid NotificationTenantId, string TypeKey, string Channel, string? Locale, string? Body)
-        : MessageBase, IRequest<Outcome<TenantTemplateView>>;
+        : MessageBase, Configuration.ITenantCommand, IRequest<Outcome<TenantTemplateView>>;
 
-    public sealed record DeleteTenantTemplate(Guid NotificationTenantId, string TypeKey, string Channel, string? Locale) : MessageBase, IRequest<Outcome<bool>>;
+    public sealed record DeleteTenantTemplate(Guid NotificationTenantId, string TypeKey, string Channel, string? Locale) : MessageBase, Configuration.ITenantCommand, IRequest<Outcome<bool>>;
 
     public static class TenantTemplateRules
     {

@@ -37,40 +37,47 @@ namespace Juice.Notifications.Embedded
         private int _saves;
 
         /// <summary>
-        /// Sends a command and, when it succeeds, saves what it changed (in the host's transaction), so the commands after it see it. A refused
-        /// command saves nothing and its unsaved changes are dropped; the host decides whether that rolls its transaction back.
+        /// Sends a command and, when it succeeds, saves what it changed (in the host's transaction), so the commands after it see it.
         /// <para>
-        /// Each save is in a savepoint of the host's transaction: one that loses a race in the database (another transaction created the same
-        /// key or id at the same moment, a row changed under it) is undone to the savepoint and answered as a conflict, <c>id_in_use</c> or
-        /// <c>concurrent_change</c>, and the host's transaction stays usable. A command for another tenant than the host's is refused
-        /// (<c>tenant_forbidden</c>).
+        /// The command runs in a savepoint of the host's transaction, taken before it runs (a handler may write with its own statements, as a
+        /// delete releases stale rows): a refused command, or one that fails, is undone to the savepoint, so the host's transaction is neither
+        /// changed nor left aborted (25P02), and the host decides whether to roll back. One that loses a race in the database (another
+        /// transaction created the same key or id at the same moment, a row changed under it) is answered as a conflict, <c>id_in_use</c> or
+        /// <c>concurrent_change</c>.
+        /// </para>
+        /// <para>
+        /// Fail closed: only a command on one tenant's setup (<see cref="Configuration.ITenantCommand"/>), for the host's tenant, runs here; a
+        /// command for another tenant is <c>tenant_forbidden</c>, and any other command (platform-wide: applications, types, tenant links; a
+        /// request, which goes through <see cref="INotificationClient"/>; people) is <c>not_allowed</c>.
         /// </para>
         /// </summary>
         public async Task<Outcome<TResult>> SendAsync<TResult>(IRequest<Outcome<TResult>> command, CancellationToken cancellationToken = default)
         {
-            if (command is Configuration.ITenantCommand { NotificationTenantId: var tenant } && tenant != tenantId)
+            if (command is not Configuration.ITenantCommand { NotificationTenantId: var tenant })
+            {
+                return Outcome<TResult>.Forbidden(ErrorCodes.NotAllowed,
+                    $"{command.GetType().Name} isn't one of the tenant setup commands a host sends here (a request goes through the notification client).");
+            }
+            if (tenant != tenantId)
             {
                 return Outcome<TResult>.Forbidden(ErrorCodes.TenantForbidden, $"The host's notifications are its tenant's ({tenantId}) only, not {tenant}'s.");
-            }
-            var outcome = await services.GetRequiredService<IMediator>().Send(command, cancellationToken);
-            if (outcome.Kind is not (OutcomeKind.Ok or OutcomeKind.Created))
-            {
-                db.ChangeTracker.Clear();
-                return outcome;
             }
             var transaction = db.Database.CurrentTransaction
                 ?? throw new InvalidOperationException("The host scope's context is enlisted in the host's transaction.");
             var savepoint = $"notifications_host_work_{++_saves}";
             await transaction.CreateSavepointAsync(savepoint, cancellationToken);
+            Outcome<TResult> outcome;
             try
             {
-                await db.SaveChangesAsync(cancellationToken);
+                outcome = await services.GetRequiredService<IMediator>().Send(command, cancellationToken);
+                if (outcome.Kind is OutcomeKind.Ok or OutcomeKind.Created)
+                {
+                    await db.SaveChangesAsync(cancellationToken);
+                }
             }
             catch (Exception ex)
             {
-                // Undone to before this command: the host's transaction isn't left aborted (25P02) by a failed statement.
-                await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None);
-                db.ChangeTracker.Clear();
+                await UndoAsync(transaction, savepoint);
                 if (DbConflicts.Classify(ex) is { } conflict && conflict.Kind is ConflictKind.Unique or ConflictKind.RowGone or ConflictKind.Aborted)
                 {
                     return conflict is { Kind: ConflictKind.Unique, Constraint: Constraints.IntegrationId }
@@ -80,8 +87,21 @@ namespace Juice.Notifications.Embedded
                 }
                 throw;
             }
+            if (outcome.Kind is not (OutcomeKind.Ok or OutcomeKind.Created))
+            {
+                // Refused: whatever the handler wrote with its own statements is undone too, and its unsaved changes dropped.
+                await UndoAsync(transaction, savepoint);
+                return outcome;
+            }
             await transaction.ReleaseSavepointAsync(savepoint, cancellationToken);
             return outcome;
+        }
+
+        /// <summary>Back to before the command: its statements undone in the host's transaction, and nothing of it left to save.</summary>
+        private async Task UndoAsync(Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction, string savepoint)
+        {
+            await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None);
+            db.ChangeTracker.Clear();
         }
     }
 

@@ -587,6 +587,102 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
+        /// Fail closed (M46-2 round 2): only a tenant setup command for the host's tenant runs in the host scope. Platform-wide commands
+        /// (applications, types, tenant links), a request (the client's) and people commands are not_allowed; the templates and a delivery's retry
+        /// are the tenant's, and run.
+        /// </summary>
+        [Fact]
+        public async Task Only_tenant_setup_commands_run_in_the_host_scope()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var refused = await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work => new (string Kind, OutcomeKind Outcome, string? Code)[]
+            {
+                Answer("application", await work.SendAsync(new Applications.CreateApplication("hostapp", "Host app", "hostapp-client"), Ct)),
+                Answer("link", await work.SendAsync(new Applications.LinkTenant("host", Tenant), Ct)),
+                Answer("type", await work.SendAsync(new DeclareType(Guid.CreateVersion7(), "host", new TypeDeclaration(Type, "x", "x", null, null, null, null,
+                    JsonSerializer.SerializeToElement(new { type = "object" }), CorrelationRules.Optional, null, null, null)), Ct)),
+                Answer("request", await work.SendAsync(new Intake.AcceptNotification(Tenant, Guid.CreateVersion7(), "host",
+                    new Intake.NotificationSubmission(Type, null, "k", null, null, null, null, null, null, null, null), null, true), Ct)),
+                Answer("people", await work.SendAsync(new People.AddMute(Tenant, null, JsonSerializer.SerializeToElement(new { type = Type }), null,
+                    DateTimeOffset.UtcNow.AddHours(1), "x", "host"), Ct)),
+                Answer("template", await work.SendAsync(new PutTenantTemplate(Tenant, Type, "webhook", null, "{\"x\":1}"), Ct)),
+                Answer("retry", await work.SendAsync(new History.RetryDelivery(Tenant, Guid.CreateVersion7()), Ct)),
+            }, Ct));
+            static (string, OutcomeKind, string?) Answer<T>(string kind, Outcome<T> outcome) => (kind, outcome.Kind, outcome.Code);
+            Assert.All(refused.Where(r => r.Kind is "application" or "link" or "type" or "request" or "people"),
+                r => Assert.Equal((r.Kind, OutcomeKind.Forbidden, ErrorCodes.NotAllowed), r));
+            Assert.Equal(OutcomeKind.Ok, refused.Single(r => r.Kind == "template").Outcome);
+            // The retry ran (its handler answered: no such delivery), not refused by the scope.
+            Assert.Equal(OutcomeKind.NotFound, refused.Single(r => r.Kind == "retry").Outcome);
+            await using var db = _database.Context();
+            Assert.False(await db.Applications.AnyAsync(a => a.Key == "hostapp", Ct));
+            Assert.False(await db.Mutes.AnyAsync(m => m.TenantId == Tenant && m.Reason == "x", Ct));
+        }
+
+        /// <summary>Fails the save of one integration's delete (once): what the delete's handler did with its own statements must be undone too.</summary>
+        private sealed class FailingDelete(string key) : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+        {
+            public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+                Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData, Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+                CancellationToken cancellationToken = default)
+                => eventData.Context!.ChangeTracker.Entries<Integration>().Any(e => e.State == EntityState.Deleted && e.Entity.Key == key)
+                    ? throw new DbUpdateConcurrencyException("The delete lost a race (forced).")
+                    : ValueTask.FromResult(result);
+        }
+
+        /// <summary>
+        /// The savepoint is taken before the command runs (M46-2 round 2): a delete releases stale route rows with its own statement, then its
+        /// save loses a race. The statement is undone with it (the stale row is still there after the host commits), and the host's
+        /// transaction goes on.
+        /// </summary>
+        [Fact]
+        public async Task A_failed_command_is_undone_with_what_its_handler_wrote_itself()
+        {
+            LocalStack.RequireAvailable();
+            const string key = "stale-hooks";
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false,
+                services: s => s.ConfigureDbContext<NotificationsDbContext>(o => o.AddInterceptors(new FailingDelete(key))));
+            await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work =>
+            {
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(Hooks(key), Ct)).Kind);
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(new PutTarget(Tenant, key, "stale-target", "https://hooks.example.com/stale", null, true), Ct)).Kind);
+                Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(new PutRoute(Tenant, "stale-route", JsonSerializer.SerializeToElement(new { type = "host.*" }),
+                    ["stale-target"], true), Ct)).Kind);
+                return true;
+            }, Ct));
+            // A replica's leftover: the route no longer names the target, its route_targets row stays (what the delete releases first).
+            await using (var db = _database.Context())
+            {
+                await db.Database.ExecuteSqlAsync($"UPDATE notifications.routes SET targets = '{{}}' WHERE tenant_id = {Tenant} AND key = 'stale-route'", Ct);
+                Assert.Equal(1, await StaleRowsAsync(db));
+                Assert.Empty((await db.Routes.AsNoTracking().SingleAsync(r => r.TenantId == Tenant && r.Key == "stale-route", Ct)).Targets);
+            }
+
+            var outcome = await host.InHostScopeAsync(async (hostDb, scope) =>
+            {
+                var deleted = await scope.RunAsync(work => work.SendAsync(new DeleteIntegration(Tenant, key), Ct), Ct);
+                // The host's transaction is usable: its own row commits.
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "after the undo" });
+                await hostDb.SaveChangesAsync(Ct);
+                return deleted;
+            });
+            Assert.Equal((OutcomeKind.Conflict, ErrorCodes.ConcurrentChange), (outcome.Kind, outcome.Code));
+            await using var check = _database.Context();
+            Assert.True(await check.Integrations.AnyAsync(i => i.TenantId == Tenant && i.Key == key, Ct));
+            Assert.Equal(1, await StaleRowsAsync(check)); // the stale row the delete released is back
+            await using var hostCheck = host.HostContext();
+            Assert.True(await hostCheck.Things.AnyAsync(t => t.Name == "after the undo", Ct));
+        }
+
+        /// <summary>The stale route's route_targets rows.</summary>
+        private static Task<int> StaleRowsAsync(NotificationsDbContext db)
+            => (from rt in db.RouteTargets
+                join r in db.Routes on new { rt.TenantId, Id = rt.RouteId } equals new { r.TenantId, r.Id }
+                where rt.TenantId == Tenant && r.Key == "stale-route"
+                select rt).CountAsync(Ct);
+
+        /// <summary>
         /// An in-process caller's integration id (M46-2): a create takes it; another integration's is refused, and so is a different one for an
         /// existing integration, whose id never changes.
         /// </summary>
@@ -720,7 +816,7 @@ namespace Juice.Notifications.IntegrationTests
             };
 
             public static async Task<EmbeddedHost> StartAsync(string connectionString, bool runStages, Receiver? receiver = null,
-                string applicationName = "The host")
+                string applicationName = "The host", Action<IServiceCollection>? services = null, string? provisioning = null)
             {
                 var builder = Host.CreateApplicationBuilder();
                 var settings = new Dictionary<string, string?>
@@ -733,7 +829,13 @@ namespace Juice.Notifications.IntegrationTests
                     // The receiver is plain http on this machine's private address, allowlisted (as the local stack allows).
                     ["Notifications:Delivery:AllowHttpToAllowlisted"] = "true",
                 };
-                if (receiver is not null)
+                if (provisioning is not null)
+                {
+                    var path = Path.Combine(Path.GetTempPath(), $"embedded-provisioning-{Guid.NewGuid():N}.json");
+                    await File.WriteAllTextAsync(path, provisioning);
+                    settings["Notifications:Provisioning:Path"] = path;
+                }
+                else                 if (receiver is not null)
                 {
                     var path = Path.Combine(Path.GetTempPath(), $"embedded-provisioning-{Guid.NewGuid():N}.json");
                     await File.WriteAllTextAsync(path, $$"""
@@ -767,6 +869,7 @@ namespace Juice.Notifications.IntegrationTests
                 builder.Services.AddSingleton<RecordingSink>();
                 builder.Services.AddSingleton<INotificationsAuditSink>(sp => sp.GetRequiredService<RecordingSink>());
                 builder.Services.AddJuiceNotificationsEmbedded(builder.Configuration.GetSection("Notifications"), Configure(connectionString, applicationName));
+                services?.Invoke(builder.Services);
                 var host = builder.Build();
                 await host.StartAsync(Ct);
                 return new EmbeddedHost(host, connectionString);

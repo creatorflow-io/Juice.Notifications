@@ -11,7 +11,7 @@ namespace Juice.Notifications.History
     /// Dead-letter retry of one delivery (phase-1-plan M8): a failed delivery goes back to <c>Pending</c> under the same id, with the same stored
     /// content, so receivers that deduplicate on its id still can. Its attempts so far stay, numbered on from them, and it gets a fresh attempt budget.
     /// </summary>
-    public sealed record RetryDelivery(Guid NotificationTenantId, Guid DeliveryId) : MessageBase, IRequest<Outcome<RetriedView>>;
+    public sealed record RetryDelivery(Guid NotificationTenantId, Guid DeliveryId) : MessageBase, Configuration.ITenantCommand, IRequest<Outcome<RetriedView>>;
 
     internal sealed class RetryDeliveryHandler(NotificationsDbContext db, TimeProvider clock) : IRequestHandler<RetryDelivery, Outcome<RetriedView>>
     {
