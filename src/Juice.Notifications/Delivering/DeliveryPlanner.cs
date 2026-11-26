@@ -166,7 +166,8 @@ namespace Juice.Notifications.Delivering
                     DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0, Locale = template?.Locale ?? Types.TypeRules.DefaultLocale,
                     RendererVersion = TemplateRenderer.Version, Content = content, Priority = request.Priority, Mandatory = type.Mandatory, CreatedAt = context.Now,
                     // The recipient's own flag, fixed when it was created (M44-2c); the delivery keeps it (retries and replays too).
-                    DryRun = row.DryRun,
+                    // An escalation step's recipient from before M44-2c has none (null): the mode now, as M44-2b planned it.
+                    DryRun = row.DryRun ?? DryRun(context),
                     Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed, FailureCheckDue = problem is not null,
                     FailureCategory = problem is null ? null : category,
                     LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? context.Now : null, CompletedAt = problem is null ? null : context.Now,

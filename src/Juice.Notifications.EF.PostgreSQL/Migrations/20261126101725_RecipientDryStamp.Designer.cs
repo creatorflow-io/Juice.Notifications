@@ -1807,7 +1807,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("digest_id");
 
-                    b.Property<bool>("DryRun")
+                    b.Property<bool?>("DryRun")
                         .HasColumnType("boolean")
                         .HasColumnName("dry_run");
 

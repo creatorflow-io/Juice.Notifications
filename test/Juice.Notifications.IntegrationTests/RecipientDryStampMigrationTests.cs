@@ -11,8 +11,8 @@ using Juice.Notifications.Stages;
 namespace Juice.Notifications.IntegrationTests
 {
     /// <summary>
-    /// The <c>RecipientDryStamp</c> migration (M44-2c) over rows already there: the request's own recipients of a request accepted dry take its
-    /// flag, so they stay dry however late they are planned; those of a real request, and every escalation step's, are real.
+    /// The <c>RecipientDryStamp</c> migration (M44-2c) over rows already there: the request's own recipients take its flag, so a dry request's stay
+    /// dry however late they are planned; an escalation step's are left null and take the mode when they are planned (#16 review).
     /// </summary>
     public sealed class RecipientDryStampMigrationTests : IAsyncLifetime
     {
@@ -26,7 +26,7 @@ namespace Juice.Notifications.IntegrationTests
         public ValueTask DisposeAsync() => _database.DisposeAsync();
 
         [Fact]
-        public async Task Existing_own_recipients_of_a_dry_request_become_dry_and_the_rest_stay_real()
+        public async Task Existing_own_recipients_take_their_requests_flag_and_step_recipients_are_left_null()
         {
             LocalStack.RequireAvailable();
             var ids = new Dictionary<string, Guid>();
@@ -53,7 +53,7 @@ namespace Juice.Notifications.IntegrationTests
             {
                 await db.Database.MigrateAsync(Ct);
                 var flags = await db.Recipients.AsNoTracking().Where(r => r.TenantId == Tenant).ToDictionaryAsync(r => r.Id, r => r.DryRun, Ct);
-                Assert.Equal((true, false, false), (flags[ids["dry-own"]], flags[ids["dry-step"]], flags[ids["real-own"]]));
+                Assert.Equal((true, (bool?)null, false), (flags[ids["dry-own"]], flags[ids["dry-step"]], flags[ids["real-own"]]));
             }
         }
 
@@ -65,7 +65,13 @@ namespace Juice.Notifications.IntegrationTests
         /// own mode at start, both meet this).
         /// </summary>
         [Fact]
-        public async Task An_escalation_step_recipient_waiting_at_the_migration_is_planned_dry_by_a_host_in_dry_run()
+        public Task An_escalation_step_recipient_waiting_at_the_migration_is_planned_dry_by_a_host_in_dry_run() => PendingStepPlannedAsync(hostDry: true);
+
+        /// <summary>The twin: a host no longer in dry run (upgraded after the switch) sends that waiting step recipient for real, as M44-2b did.</summary>
+        [Fact]
+        public Task An_escalation_step_recipient_waiting_at_the_migration_is_sent_by_a_host_running_for_real() => PendingStepPlannedAsync(hostDry: false);
+
+        private async Task PendingStepPlannedAsync(bool hostDry)
         {
             LocalStack.RequireAvailable();
             Guid recipientId;
@@ -96,7 +102,7 @@ namespace Juice.Notifications.IntegrationTests
             services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
             services.AddSingleton(TimeProvider.System);
             services.AddPostgresClaimStore();
-            services.Configure<Providers.DeliveryOptions>(o => o.DryRun = true);
+            services.Configure<Providers.DeliveryOptions>(o => o.DryRun = hostDry);
             services.AddPlanning(stage, runWorkers: false);
             services.AddDeliveryPlanning(stage, runWorkers: false);
             await using var provider = services.BuildServiceProvider();
@@ -105,7 +111,7 @@ namespace Juice.Notifications.IntegrationTests
 
             await using var check = _database.Context();
             var delivery = await check.Deliveries.AsNoTracking().SingleAsync(d => check.DeliveryItems.Any(i => i.DeliveryId == d.Id && i.RecipientId == recipientId), Ct);
-            Assert.True(delivery.DryRun, "a step recipient waiting at the migration was planned for real by a host in dry run");
+            Assert.True(delivery.DryRun == hostDry, $"a step recipient waiting at the migration was planned {(delivery.DryRun ? "dry" : "for real")} by a host {(hostDry ? "in dry run" : "running for real")}");
         }
     }
 }

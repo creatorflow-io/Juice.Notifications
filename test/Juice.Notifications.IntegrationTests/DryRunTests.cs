@@ -166,7 +166,10 @@ namespace Juice.Notifications.IntegrationTests
             bool recipientDry;
             await using (var db = _database.Context())
             {
-                recipientDry = (await db.Recipients.AsNoTracking().SingleAsync(r => r.TenantId == scene.Tenant && r.NotificationId == scene.Notification.Id, Ct)).DryRun;
+                // Every recipient the planner creates is stamped (null is only a step recipient from before M44-2c).
+                var stamped = (await db.Recipients.AsNoTracking().SingleAsync(r => r.TenantId == scene.Tenant && r.NotificationId == scene.Notification.Id, Ct)).DryRun;
+                Assert.NotNull(stamped);
+                recipientDry = stamped.Value;
             }
             var pass = await Planner(deliveryDryNow ?? dryNow).GetRequiredService<StageRunner<NotificationRecipient, DeliveryPlannerStage>>()
                 .RunOnceAsync("delivery-planner", Options, Ct);
