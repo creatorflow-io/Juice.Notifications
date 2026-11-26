@@ -709,12 +709,36 @@ namespace Juice.Notifications.IntegrationTests
         // QA (M46-2): the host scope's edges.
 
         /// <summary>
-        /// Two host transactions creating integrations with the same id at once: the second waits on the first's insert; when the first commits,
-        /// the second's command fails in the database (it can't commit), its host row goes with it, and asking again in a new transaction answers
-        /// <c>id_in_use</c>. One integration has the id.
+        /// The fail-closed list is complete (round 2): every command on a tenant's setup (configuration, templates, a delivery's retry or replay)
+        /// is an <see cref="Configuration.ITenantCommand"/>, so the host scope runs it; every other command naming a tenant (people, requests) isn't,
+        /// so it is refused. A new setup command left off the list would fail here, not in the webhooks alias.
         /// </summary>
         [Fact]
-        public async Task Two_host_transactions_creating_the_same_id_keep_one_and_the_loser_rolls_back()
+        public void Every_tenant_setup_command_is_a_tenant_command_and_nothing_else_is()
+        {
+            var commands = typeof(Configuration.ITenantCommand).Assembly.GetTypes()
+                .Where(t => t is { IsAbstract: false, IsInterface: false } && t.GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(Juice.MediatR.IRequest<>)))
+                .Where(t => t.GetProperty("NotificationTenantId") is not null)
+                .ToList();
+            static bool Setup(Type t) => t.Namespace is "Juice.Notifications.Configuration" or "Juice.Notifications.History"
+                || t.Namespace == "Juice.Notifications.Types" && t.Name.Contains("Template", StringComparison.Ordinal);
+            Assert.Contains(commands, Setup);
+            Assert.All(commands, t => Assert.True(Setup(t) == typeof(Configuration.ITenantCommand).IsAssignableFrom(t),
+                $"{t.FullName}: setup {Setup(t)}, tenant command {typeof(Configuration.ITenantCommand).IsAssignableFrom(t)}"));
+            foreach (var expected in new[] { typeof(PutIntegration), typeof(PutTarget), typeof(PutRoute), typeof(PutAllowlistEntry), typeof(PutEscalationPolicy),
+                typeof(DeleteIntegration), typeof(DeleteTarget), typeof(DeleteRoute), typeof(DeleteAllowlistEntry), typeof(DeleteEscalationPolicy) })
+            {
+                Assert.True(typeof(Configuration.ITenantCommand).IsAssignableFrom(expected), expected.Name);
+            }
+        }
+
+        /// <summary>
+        /// Two host transactions creating integrations with the same id at once, each beside a row of the host's own: the second waits on the
+        /// first's insert; when the first commits, the second's command is undone to its savepoint and answered <c>id_in_use</c>, and its host
+        /// transaction, still usable, commits its own row (round 2). Asking again answers <c>id_in_use</c>. One integration has the id.
+        /// </summary>
+        [Fact]
+        public async Task Two_host_transactions_creating_the_same_id_keep_one_and_the_loser_goes_on()
         {
             LocalStack.RequireAvailable();
             await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
@@ -732,12 +756,12 @@ namespace Juice.Notifications.IntegrationTests
             {
                 hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "race-second" });
                 await hostDb.SaveChangesAsync(Ct);
-                return (await scope.RunAsync(work => work.SendAsync(Hooks("hooks-race-b", id), Ct), Ct)).Kind == OutcomeKind.Ok;
+                return await scope.RunAsync(work => work.SendAsync(Hooks("hooks-race-b", id), Ct), Ct);
             });
             await LockWaitAsync();
             await firstTransaction.CommitAsync(Ct);
-            var failed = await Assert.ThrowsAnyAsync<Exception>(() => second);
-            Assert.Equal(ConflictKind.Unique, DbConflicts.Classify(failed)?.Kind);
+            var lost = await second;
+            Assert.Equal((OutcomeKind.Conflict, ErrorCodes.IdInUse), (lost.Kind, lost.Code));
 
             var again = await host.InHostScopeAsync((_, scope) => scope.RunAsync(work => work.SendAsync(Hooks("hooks-race-b", id), Ct), Ct));
             Assert.Equal((OutcomeKind.Conflict, ErrorCodes.IdInUse), (again.Kind, again.Code));
@@ -745,7 +769,7 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(["hooks-race-a"], await db.Integrations.Where(i => i.Id == id).Select(i => i.Key).ToListAsync(Ct));
             Assert.False(await db.Integrations.AnyAsync(i => i.Key == "hooks-race-b", Ct));
             await using var check = host.HostContext();
-            Assert.Equal(["race-first"], await check.Things.Where(t => t.Name.StartsWith("race-")).Select(t => t.Name).ToListAsync(Ct));
+            Assert.Equal(["race-first", "race-second"], (await check.Things.Where(t => t.Name.StartsWith("race-")).Select(t => t.Name).ToListAsync(Ct)).Order());
         }
 
         /// <summary>
