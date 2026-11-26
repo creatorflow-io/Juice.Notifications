@@ -114,6 +114,18 @@ try {
     const buttons = await tess.locator('main button, na-tenant-shell button').evaluateAll(bs => bs.map(b => (b.textContent ?? '').trim()).filter(Boolean));
     const changes = buttons.filter(b => /^(New|Add|Save|Delete|Edit|Disable|Enable)/i.test(b));
     check(configure || changes.length === 0, `${who}: integrations offers no change (${changes.join(', ') || 'none'})`, problems);
+    // The integration itself: read-only with nothing to submit, unless the user configures.
+    await tess.goto(`${base}${t}/integrations/qa-hooks`);
+    await tess.getByTestId('integration-state').waitFor({ timeout: 15000 });
+    await tess.waitForLoadState('networkidle');
+    const readOnly = await tess.getByTestId('integration-read-only').count();
+    const save = await tess.getByRole('button', { name: /^Save/ }).count();
+    const editable = await tess.locator('na-integration-form input:not([disabled]), na-integration-form textarea:not([disabled]), na-integration-form mat-select:not([aria-disabled=true])').count();
+    check(configure ? readOnly === 0 && save >= 1 : readOnly === 1 && save === 0 && editable === 0,
+      `${who}: the integration is ${configure ? 'an edit form with Save' : 'read-only with no Save'} (read-only ${readOnly}, Save ${save}, editable fields ${editable})`, problems);
+    const onPage = await tess.locator('button').evaluateAll(bs => bs.map(b => (b.textContent ?? '').trim()).filter(Boolean));
+    const pageChanges = onPage.filter(b => /^(New|Add|Save|Delete|Edit|Disable|Enable|Register|Remove)/i.test(b));
+    check(configure || pageChanges.length === 0, `${who}: the integration page offers no change at all (${pageChanges.join(', ') || 'none'})`, problems);
     await close(tess);
   }
 
