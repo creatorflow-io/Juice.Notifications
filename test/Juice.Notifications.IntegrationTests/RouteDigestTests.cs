@@ -195,10 +195,6 @@ namespace Juice.Notifications.IntegrationTests
         // QA (M46-1).
 
         /// <summary>
-        /// A storm on a route with its own digest: the route's digest takes what reaches it, so there is one digest (the route's window), not a
-        /// storm digest beside it; the route without one takes the storm's digest as before.
-        /// </summary>
-        /// <summary>
         /// A notification matching a digest route and one that sends at once is counted towards a storm once, by the send step, on the route that
         /// sends at once only (review round 1: the planner counted it before deciding the route digest, and the send step again).
         /// </summary>
@@ -214,6 +210,10 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(0, minutes.GetValueOrDefault("grouped"));
         }
 
+        /// <summary>
+        /// A storm on a route with its own digest: the route's digest takes what reaches it, so there is one digest (the route's window), not a
+        /// storm digest beside it; the route without one takes the storm's digest as before.
+        /// </summary>
         [Fact]
         public async Task A_storm_on_a_digest_route_shares_the_routes_one_digest()
         {
