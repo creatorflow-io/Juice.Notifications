@@ -62,6 +62,20 @@ namespace Juice.Notifications.Workflows
                 await ExhaustAsync(context, row, steps.Count, ct);
                 return;
             }
+            if (correlation.HeldAt is not null)
+            {
+                // Held by its producer (p5-d3): the due step waits for the release, which makes it due again. Closed and acknowledged are
+                // decided first, so a held escalation of a closed correlation stops rather than waits. The correlation was read in this step,
+                // after the claim: a release committed since moved the row's version on, so this save is lost and the next pass runs the step.
+                row.HeldAt ??= now;
+                row.UpdatedAt = now;
+                logger.LogInformation("Escalation {Escalation} of correlation {Correlation} in tenant {Tenant}: step {Step} held ({Reason})",
+                    row.Id, correlation.Key, row.TenantId, row.NextStep + 1, correlation.HoldReason);
+                context.Done(row, null);
+                context.AfterCommit.Add(() => Telemetry.EscalationsHeld.Add(1));
+                return;
+            }
+            row.HeldAt = null;
             var notification = await db.Notifications.SingleAsync(n => n.TenantId == row.TenantId && n.Id == row.NotificationId, ct);
             if (notification.State is NotificationState.Planning or NotificationState.Running)
             {
@@ -100,6 +114,7 @@ namespace Juice.Notifications.Workflows
         private void Stop(StageContext context, Escalation row, string reason)
         {
             (row.State, row.StopReason, row.UpdatedAt) = (EscalationState.Stopped, reason, context.Now);
+            row.HeldAt = null;
             logger.LogInformation("Escalation {Escalation} in tenant {Tenant} stopped: {Reason}", row.Id, row.TenantId, reason);
             context.Done(row, null);
         }
@@ -108,6 +123,7 @@ namespace Juice.Notifications.Workflows
         private async Task ExhaustAsync(StageContext context, Escalation row, int steps, CancellationToken ct)
         {
             (row.State, row.UpdatedAt) = (EscalationState.Exhausted, context.Now);
+            row.HeldAt = null;
             logger.LogInformation("Escalation {Escalation} in tenant {Tenant} ran its last step", row.Id, row.TenantId);
             context.Done(row, null);
             if (events is { Enabled: true })

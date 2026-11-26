@@ -52,16 +52,57 @@ namespace Juice.Notifications.Embedded
             => CorrelationAsync((lifecycle, application) => lifecycle.CancelAsync(options.TenantId, application, correlationKey, by, cancellationToken),
                 cancellationToken);
 
-        // Holds (p5-d3) arrive with M44-1.
         public Task<CorrelationHold> HoldAsync(string correlationKey, string reason, string? by = null, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException("Correlation holds arrive with M44-1.");
+            => HoldChangeAsync((lifecycle, application) => lifecycle.HoldAsync(options.TenantId, application, correlationKey, reason, by, cancellationToken),
+                cancellationToken);
 
         public Task<CorrelationHold> ReleaseAsync(string correlationKey, string? by = null, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException("Correlation holds arrive with M44-1.");
+            => HoldChangeAsync((lifecycle, application) => lifecycle.ReleaseAsync(options.TenantId, application, correlationKey, by, cancellationToken),
+                cancellationToken);
 
         private Task<CorrelationState> CorrelationAsync(Func<CorrelationLifecycle, Guid, Task<Outcome<CorrelationView>>> change, CancellationToken cancellationToken)
-            => InHostTransactionAsync(async (services, _, application) =>
-                Value(await change(services.GetRequiredService<CorrelationLifecycle>(), application.Id)).State, cancellationToken);
+            => ConcurrentAsync(() => InHostTransactionAsync(async (services, _, application) =>
+                Value(await change(services.GetRequiredService<CorrelationLifecycle>(), application.Id)).State, cancellationToken));
+
+        /// <summary>
+        /// A hold or release in the host's transaction. A release that resumed parked escalations wakes the escalation stage, and counts them,
+        /// once the host commits (never before: the stage can't see them until then); a host that can't say when leaves them to the poll.
+        /// </summary>
+        private Task<CorrelationHold> HoldChangeAsync(Func<CorrelationLifecycle, Guid, Task<Outcome<CorrelationHoldResult>>> change,
+            CancellationToken cancellationToken)
+            => ConcurrentAsync(() => InHostTransactionAsync(async (services, _, application) =>
+            {
+                var result = Value(await change(services.GetRequiredService<CorrelationLifecycle>(), application.Id));
+                if (result.Resumed > 0)
+                {
+                    var (nudges, resumed) = (services.GetRequiredService<Stages.StageNudges>(), result.Resumed);
+                    transaction!.OnCommitted(() =>
+                    {
+                        Telemetry.EscalationsReleased.Add(resumed);
+                        nudges.Wake(Workflows.EscalationStage.StageName);
+                    });
+                }
+                var v = result.View;
+                return new CorrelationHold(v.State, v.HeldAt is not null, v.HeldAt, v.HoldReason, v.HeldBy, result.Changed, result.Resumed);
+            }, cancellationToken));
+
+        /// <summary>
+        /// A correlation call that met another change of the same correlation (a request, a resolve, a hold at the same moment) is refused as the
+        /// HTTP API refuses it (<c>concurrent_change</c>). The lost update doesn't abort the host's PostgreSQL transaction, so the host may call
+        /// again in it; a unique violation or a serialization failure does abort it, and goes up as it is (the host retries its transaction).
+        /// </summary>
+        private static async Task<T> ConcurrentAsync<T>(Func<Task<T>> call)
+        {
+            try
+            {
+                return await call();
+            }
+            catch (Exception ex) when (DbConflicts.Classify(ex) is { Kind: ConflictKind.RowGone })
+            {
+                throw new NotificationRefusedException(ErrorCodes.ConcurrentChange,
+                    "The correlation changed at the same moment (a request, a resolve or a hold); asking again answers on what it is now.");
+            }
+        }
 
         /// <summary>
         /// Runs <paramref name="work"/> on the host's connection, in its transaction, then saves what it changed and the outbox without

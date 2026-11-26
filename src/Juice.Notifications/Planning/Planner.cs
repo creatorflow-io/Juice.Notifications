@@ -386,7 +386,8 @@ namespace Juice.Notifications.Planning
                 if (!due.Any(r => r.Kind != RecipientKind.Name))
                 {
                     // Nobody new: the next step runs at once, not after its wait (design §7.1).
-                    await db.Escalations.Where(e => e.TenantId == row.TenantId && e.NotificationId == row.Id && e.State == EscalationState.Running)
+                    await db.Escalations.Where(e => e.TenantId == row.TenantId && e.NotificationId == row.Id && e.State == EscalationState.Running
+                            && e.HeldAt == null) // a step parked by a hold meanwhile stays parked (p5-d3)
                         .ExecuteUpdateAsync(s => s.SetProperty(e => e.NextAt, context.Now), ct);
                     logger.LogInformation("Escalation step {Step} of notification {Id} in tenant {Tenant} reached nobody new", row.EscalationStep, row.Id, row.TenantId);
                 }
