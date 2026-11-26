@@ -701,6 +701,9 @@ namespace Juice.Notifications.Data
             e.Property(x => x.Version).IsConcurrencyToken();
             e.Property(x => x.ClaimedBy).HasMaxLength(200);
             e.HasIndex(x => x.NextAt).HasFilter("next_at IS NOT NULL").HasDatabaseName($"ix_{e.Metadata.GetTableName()}_due");
+            // The rows backing off after a failed step and still to be retried, counted for the pipeline's health (phase-5 M49-0): few, so the
+            // count reads only them. A row stopped since (a resolve, an ack: next_at null) keeps its count but isn't failing any more.
+            e.HasIndex(x => x.StepFailures).HasFilter("step_failures > 0 AND next_at IS NOT NULL").HasDatabaseName($"ix_{e.Metadata.GetTableName()}_failing");
         }
 
         private static void Json(PropertyBuilder<Dictionary<string, string>> property)

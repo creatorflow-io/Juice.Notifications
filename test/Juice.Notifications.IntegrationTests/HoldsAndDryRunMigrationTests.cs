@@ -68,7 +68,8 @@ namespace Juice.Notifications.IntegrationTests
                 {
                     await db.Database.MigrateAsync(Ct);
                     Assert.Empty(await db.Database.GetPendingMigrationsAsync(Ct));
-                    Assert.Equal(Target, (await db.Database.GetAppliedMigrationsAsync(Ct)).Last());
+                    // Applied, whatever migrations came after it.
+                    Assert.Contains(Target, await db.Database.GetAppliedMigrationsAsync(Ct));
 
                     var correlations = await db.Correlations.AsNoTracking().Where(c => c.TenantId == Tenant).ToListAsync(Ct);
                     Assert.Equal(3, correlations.Count);
