@@ -706,6 +706,78 @@ namespace Juice.Notifications.IntegrationTests
             Assert.False(await db.Integrations.AnyAsync(i => i.Key == "hooks-other", Ct));
         }
 
+        // QA (M46-2): the host scope's edges.
+
+        /// <summary>
+        /// Two host transactions creating integrations with the same id at once: the second waits on the first's insert; when the first commits,
+        /// the second's command fails in the database (it can't commit), its host row goes with it, and asking again in a new transaction answers
+        /// <c>id_in_use</c>. One integration has the id.
+        /// </summary>
+        [Fact]
+        public async Task Two_host_transactions_creating_the_same_id_keep_one_and_the_loser_rolls_back()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var id = Guid.CreateVersion7();
+
+            await using var first = host.Services.CreateAsyncScope();
+            var firstDb = first.ServiceProvider.GetRequiredService<HostDbContext>();
+            await using var firstTransaction = await firstDb.Database.BeginTransactionAsync(Ct);
+            firstDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "race-first" });
+            await firstDb.SaveChangesAsync(Ct);
+            Assert.Equal(OutcomeKind.Ok, (await first.ServiceProvider.GetRequiredService<INotificationsHostScope>()
+                .RunAsync(work => work.SendAsync(Hooks("hooks-race-a", id), Ct), Ct)).Kind);
+
+            var second = host.InHostScopeAsync(async (hostDb, scope) =>
+            {
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "race-second" });
+                await hostDb.SaveChangesAsync(Ct);
+                return (await scope.RunAsync(work => work.SendAsync(Hooks("hooks-race-b", id), Ct), Ct)).Kind == OutcomeKind.Ok;
+            });
+            await LockWaitAsync();
+            await firstTransaction.CommitAsync(Ct);
+            var failed = await Assert.ThrowsAnyAsync<Exception>(() => second);
+            Assert.Equal(ConflictKind.Unique, DbConflicts.Classify(failed)?.Kind);
+
+            var again = await host.InHostScopeAsync((_, scope) => scope.RunAsync(work => work.SendAsync(Hooks("hooks-race-b", id), Ct), Ct));
+            Assert.Equal((OutcomeKind.Conflict, ErrorCodes.IdInUse), (again.Kind, again.Code));
+            await using var db = _database.Context();
+            Assert.Equal(["hooks-race-a"], await db.Integrations.Where(i => i.Id == id).Select(i => i.Key).ToListAsync(Ct));
+            Assert.False(await db.Integrations.AnyAsync(i => i.Key == "hooks-race-b", Ct));
+            await using var check = host.HostContext();
+            Assert.Equal(["race-first"], await check.Things.Where(t => t.Name.StartsWith("race-")).Select(t => t.Name).ToListAsync(Ct));
+        }
+
+        /// <summary>
+        /// A refused command in the middle of the host's work drops only its own changes: the commands before it, and the host's row, commit
+        /// with the host when the host goes on; a later PUT without an id keeps the integration's id.
+        /// </summary>
+        [Fact]
+        public async Task A_refused_command_drops_only_its_own_changes_and_a_later_put_keeps_the_id()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var id = Guid.CreateVersion7();
+            var outcomes = await host.InHostScopeAsync(async (hostDb, scope) =>
+            {
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "kept-with-refusal" });
+                await hostDb.SaveChangesAsync(Ct);
+                return await scope.RunAsync(async work => new[]
+                {
+                    await work.SendAsync(Hooks("hooks-before", id), Ct),
+                    await work.SendAsync(Hooks("hooks-refused-mid", secretRef: "env:OTHER_SECRET"), Ct),
+                    await work.SendAsync(Hooks("hooks-before") with { Enabled = false }, Ct), // no id: the one it has stays
+                }, Ct);
+            });
+            Assert.Equal([true, false, true], outcomes.Select(o => o.Kind is OutcomeKind.Ok or OutcomeKind.Created));
+            await using var db = _database.Context();
+            var kept = await db.Integrations.AsNoTracking().SingleAsync(i => i.Key == "hooks-before", Ct);
+            Assert.Equal((id, false), (kept.Id, kept.Enabled));
+            Assert.False(await db.Integrations.AnyAsync(i => i.Key == "hooks-refused-mid", Ct));
+            await using var check = host.HostContext();
+            Assert.True(await check.Things.AnyAsync(t => t.Name == "kept-with-refusal", Ct));
+        }
+
         [Fact]
         public void The_container_holds_nothing_of_the_service()
         {
