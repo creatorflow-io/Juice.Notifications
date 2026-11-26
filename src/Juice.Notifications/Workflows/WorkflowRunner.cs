@@ -235,13 +235,19 @@ namespace Juice.Notifications.Workflows
         }
 
         /// <summary>
-        /// When an escalation's first step is due (phase 5, M45-n): its wait from when the request's event happened (<c>occurredAt</c>; the
-        /// acceptance time when it didn't say), and never before now. A request sent late (held under a silence) gets the step at once if its
+        /// When an escalation's first step is due (phase 5, M45-n): its wait from when the request's event happened (<c>occurredAt</c>, which
+        /// intake always sets: the acceptance time when the producer didn't say), and never before now. A request from before it was kept has
+        /// none, and waits from now, as before. A request sent late (held under a silence) gets the step at once if its
         /// wait has passed, as legacy escalation does; later steps stay relative to the step before.
         /// </summary>
         internal static DateTimeOffset FirstStepAt(NotificationRequest request, double afterMinutes, DateTimeOffset now)
         {
-            var due = (request.OccurredAt ?? request.AcceptedAt) + TimeSpan.FromMinutes(afterMinutes);
+            var wait = TimeSpan.FromMinutes(afterMinutes);
+            if (request.OccurredAt is not { } occurred)
+            {
+                return now + wait;
+            }
+            var due = occurred + wait;
             return due > now ? due : now;
         }
 

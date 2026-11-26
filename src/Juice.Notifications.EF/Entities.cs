@@ -204,7 +204,8 @@ namespace Juice.Notifications.Data
         public DateTimeOffset AcceptedAt { get; init; }
         /// <summary>
         /// When what the request tells of happened, as the producer says (phase 5: an alert's firing time); the acceptance time when it didn't
-        /// say, and null on requests from before it was kept. Only an escalation's first step reads it.
+        /// say, and null on requests from before it was kept (their escalation waits from when it starts, as before). Only an escalation's first
+        /// step reads it.
         /// </summary>
         public DateTimeOffset? OccurredAt { get; init; }
         /// <summary>When the type's <c>redact</c> paths were masked in <see cref="Data"/> (after everything was rendered, phase-4-plan I46).</summary>

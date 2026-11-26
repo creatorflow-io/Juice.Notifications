@@ -12,7 +12,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             // When a request's event happened (phase 5, M45-n): an escalation's first step is due from it. Nullable: requests from before it was
-            // kept read their acceptance time; no backfill, no rewrite.
+            // kept have none (their escalation waits from when it starts, as before); no backfill, no rewrite.
             migrationBuilder.AddColumn<DateTimeOffset>(
                 name: "occurred_at",
                 schema: "notifications",
