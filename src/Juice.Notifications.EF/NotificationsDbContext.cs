@@ -659,6 +659,8 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.ProviderMessageId).HasMaxLength(500);
                 e.HasIndex(x => new { x.TenantId, x.Status, x.CreatedAt });
                 e.HasIndex(x => x.Id).HasFilter("failure_check_due").HasDatabaseName("ix_deliveries_failure_check");
+                // The oldest delivery still in flight, across tenants (pipeline health, M49-0b): the (tenant_id, status, created_at) index can't answer it.
+                e.HasIndex(x => x.CreatedAt).HasFilter("status IN ('Pending', 'Sending', 'Retrying')").HasDatabaseName("ix_deliveries_in_flight");
                 e.HasOne<Integration>().WithMany().HasForeignKey(x => new { x.TenantId, x.IntegrationId }).OnDelete(DeleteBehavior.Restrict);
             });
 
@@ -687,6 +689,8 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.ProviderMessageId).HasMaxLength(500);
                 // One attempt per number: two workers recording at once (one whose lease ended) can't both take it.
                 e.HasIndex(x => new { x.TenantId, x.DeliveryId, x.Number }).IsUnique().HasDatabaseName(Constraints.AttemptNumber);
+                // The attempts of the last minutes, across tenants (pipeline health, M49-0b).
+                e.HasIndex(x => x.At).HasDatabaseName("ix_delivery_attempts_at");
                 e.HasOne<Delivery>().WithMany().HasForeignKey(x => new { x.TenantId, x.DeliveryId }).OnDelete(DeleteBehavior.Cascade);
                 e.HasOne<Integration>().WithMany().HasForeignKey(x => new { x.TenantId, x.IntegrationId }).OnDelete(DeleteBehavior.Restrict);
             });

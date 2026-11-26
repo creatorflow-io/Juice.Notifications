@@ -322,6 +322,123 @@ namespace Juice.Notifications.IntegrationTests
             Assert.DoesNotContain("\"Sort\"", plan.RootElement.GetRawText());
         }
 
+        // ─── Sends (M49-0b: "not getting out") ───────────────────────────────
+
+        /// <summary>A delivery made <paramref name="age"/> ago, in <paramref name="status"/>, backing off (due later) when in flight.</summary>
+        private async Task<Delivery> SendingAsync(TimeSpan age, DeliveryStatus status = DeliveryStatus.Retrying, params (TimeSpan Ago, AttemptOutcome Outcome)[] attempts)
+        {
+            await using var db = _database.Context();
+            var d = Seed.Delivery(Tenant, _integration.Id);
+            var inFlight = status is DeliveryStatus.Pending or DeliveryStatus.Sending or DeliveryStatus.Retrying;
+            (d.Status, d.NextAt) = (status, inFlight ? _clock.GetUtcNow().AddMinutes(5) : null);
+            db.Deliveries.Add(d);
+            db.Entry(d).Property(x => x.CreatedAt).CurrentValue = _clock.GetUtcNow() - age;
+            for (var i = 0; i < attempts.Length; i++)
+            {
+                db.Attempts.Add(new DeliveryAttempt
+                {
+                    TenantId = Tenant, DeliveryId = d.Id, Number = i + 1, IntegrationId = _integration.Id, At = _clock.GetUtcNow() - attempts[i].Ago,
+                    Outcome = attempts[i].Outcome,
+                });
+            }
+            await db.SaveChangesAsync(Ct);
+            return d;
+        }
+
+        [Fact]
+        public async Task A_provider_refusing_every_send_shows_no_success_and_a_growing_oldest_undelivered_while_no_stage_fails()
+        {
+            LocalStack.RequireAvailable();
+            var failures = Enumerable.Range(1, 6).Select(i => (TimeSpan.FromMinutes(i), AttemptOutcome.RetryableFailure)).ToArray();
+            await SendingAsync(TimeSpan.FromMinutes(8), DeliveryStatus.Retrying, failures);
+            await SendingAsync(TimeSpan.FromMinutes(2), DeliveryStatus.Pending);
+
+            var health = await ReadAsync();
+            Assert.Equal((SendHealth.DefaultWindow, 0, 6, (TimeSpan?)TimeSpan.FromMinutes(8)),
+                (health.Sends.Window, health.Sends.Succeeded, health.Sends.Failed, health.Sends.OldestUndelivered));
+            // Backing off without failing a step: no stage shows it.
+            Assert.Equal((0, (TimeSpan?)null), (health.Stages["dispatcher"].Failing, health.Stages["dispatcher"].OldestDue));
+
+            _clock.Advance(TimeSpan.FromMinutes(20));
+            health = await ReadAsync();
+            Assert.Equal(TimeSpan.FromMinutes(28), health.Sends.OldestUndelivered);
+            // The failures have left the window.
+            Assert.Equal((0, 0), (health.Sends.Succeeded, health.Sends.Failed));
+        }
+
+        [Fact]
+        public async Task One_success_in_the_window_is_counted_and_every_failed_outcome_is()
+        {
+            LocalStack.RequireAvailable();
+            await SendingAsync(TimeSpan.FromMinutes(30), DeliveryStatus.Failed,
+                (TimeSpan.FromMinutes(3), AttemptOutcome.RetryableFailure), (TimeSpan.FromMinutes(2), AttemptOutcome.PermanentFailure),
+                (TimeSpan.FromMinutes(1), AttemptOutcome.Unknown));
+            await SendingAsync(TimeSpan.FromMinutes(5), DeliveryStatus.Accepted, (TimeSpan.FromMinutes(4), AttemptOutcome.Accepted));
+            await SendingAsync(TimeSpan.FromMinutes(5), DeliveryStatus.Delivered, (TimeSpan.FromMinutes(16), AttemptOutcome.Delivered));
+
+            var sends = (await ReadAsync()).Sends;
+            // The Delivered attempt is older than the window; nothing is in flight.
+            Assert.Equal((1, 3, (TimeSpan?)null), (sends.Succeeded, sends.Failed, sends.OldestUndelivered));
+        }
+
+        [Fact]
+        public async Task A_dry_runs_deliveries_count_in_neither_signal()
+        {
+            LocalStack.RequireAvailable();
+            await SendingAsync(TimeSpan.FromHours(1), DeliveryStatus.WouldSend);
+            var sends = (await ReadAsync()).Sends;
+            Assert.Equal((0, 0, (TimeSpan?)null), (sends.Succeeded, sends.Failed, sends.OldestUndelivered));
+        }
+
+        /// <summary>The send reads use their indexes (M49-0b migration) over a few thousand analysed rows, most of them finished and old.</summary>
+        [Fact]
+        public async Task The_send_reads_use_their_indexes()
+        {
+            LocalStack.RequireAvailable();
+            var now = _clock.GetUtcNow();
+            await using (var db = _database.Context())
+            {
+                for (var i = 0; i < 3000; i++)
+                {
+                    var d = Seed.Delivery(Tenant, _integration.Id);
+                    (d.Status, d.NextAt) = i % 100 == 0 ? (DeliveryStatus.Retrying, now.AddMinutes(1)) : (DeliveryStatus.Delivered, (DateTimeOffset?)null);
+                    db.Deliveries.Add(d);
+                    db.Attempts.Add(new DeliveryAttempt
+                    {
+                        TenantId = Tenant, DeliveryId = d.Id, Number = 1, IntegrationId = _integration.Id, At = now.AddHours(-1 - i), Outcome = AttemptOutcome.Delivered,
+                    });
+                }
+                await db.SaveChangesAsync(Ct);
+                await db.Database.ExecuteSqlRawAsync("ANALYZE notifications.deliveries; ANALYZE notifications.delivery_attempts", Ct);
+            }
+            var since = now - SendHealth.DefaultWindow;
+            Assert.Contains("\"Index Name\": \"ix_delivery_attempts_at\"",
+                await PlanAsync(db => db.Attempts.Where(a => a.At >= since && a.Outcome == AttemptOutcome.Delivered).Take(SendHealth.MaxCount), now, count: true));
+            DeliveryStatus[] inFlight = [DeliveryStatus.Pending, DeliveryStatus.Sending, DeliveryStatus.Retrying];
+            Assert.Contains("\"Index Name\": \"ix_deliveries_in_flight\"",
+                await PlanAsync(db => db.Deliveries.Where(d => inFlight.Contains(d.Status)).OrderBy(d => d.CreatedAt).Select(d => d.CreatedAt).Take(1), now, count: false));
+        }
+
+        private async Task<string> PlanAsync<T>(Func<NotificationsDbContext, IQueryable<T>> query, DateTimeOffset now, bool count)
+        {
+            await using var db = _database.Context();
+            var sql = query(db).ToQueryString();
+            var connection = (Npgsql.NpgsqlConnection)db.Database.GetDbConnection();
+            await connection.OpenAsync(Ct);
+            var lines = sql.Split('\n');
+            var body = string.Join('\n', lines.Where(l => !l.StartsWith("--", StringComparison.Ordinal)));
+            await using var explain = new Npgsql.NpgsqlCommand("EXPLAIN (FORMAT JSON) " + (count ? $"SELECT count(*) FROM ({body}) AS c" : body), connection);
+            foreach (var declared in lines.Where(l => l.StartsWith("-- @", StringComparison.Ordinal)))
+            {
+                var name = declared[4..declared.IndexOf('=')];
+                explain.Parameters.AddWithValue(name, declared.Contains("timestamp", StringComparison.Ordinal) || declared.Contains("DateTime", StringComparison.Ordinal)
+                    ? now - SendHealth.DefaultWindow
+                    : declared.Contains('{', StringComparison.Ordinal) ? new[] { "Pending", "Sending", "Retrying" }
+                    : (object)SendHealth.MaxCount);
+            }
+            return (string)(await explain.ExecuteScalarAsync(Ct))!;
+        }
+
         /// <summary>
         /// The failing count reads only the rows backing off, through the new partial index (M49-0 migration), with sequential scans allowed over a
         /// few thousand analysed rows of which a handful failed their last step.
