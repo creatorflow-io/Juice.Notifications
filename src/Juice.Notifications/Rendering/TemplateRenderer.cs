@@ -9,10 +9,19 @@ namespace Juice.Notifications.Rendering
     /// <summary>
     /// What a template sees (design §8.2), read-only: the request's <c>data</c>, <c>labels</c>, <c>links</c> and type. A digest's delivery (phase-3-plan I31) also sees
     /// <c>items</c>, one per notification it carries (the first <see cref="DigestItem"/>s, up to 100), and <c>more</c>, how many past those;
-    /// <c>data</c> and the rest are the first item's.
+    /// <c>data</c> and the rest are the first item's. <c>delivery.id</c> is the delivery's id (a signed webhook's <c>webhook-id</c>), and
+    /// <c>escalation.step</c> (from 1) and <c>escalation.policy</c> say which escalation step sends it; <c>escalation</c> is empty otherwise
+    /// (phase-5 M46-0: a template can render the legacy webhook payload).
     /// </summary>
     public sealed record RenderModel(string Type, int TypeVersion, string TypeName, NotificationPriority Priority, JsonElement Data,
-        IReadOnlyDictionary<string, string> Labels, IReadOnlyDictionary<string, string> Links, IReadOnlyList<DigestItem>? Items = null, int More = 0);
+        IReadOnlyDictionary<string, string> Labels, IReadOnlyDictionary<string, string> Links, IReadOnlyList<DigestItem>? Items = null, int More = 0,
+        RenderDelivery? Delivery = null, RenderEscalation? Escalation = null);
+
+    /// <summary>The delivery a render is for: its id, generated before rendering.</summary>
+    public sealed record RenderDelivery(Guid Id);
+
+    /// <summary>The escalation step a delivery is sent by: its number, from 1, and its policy's key.</summary>
+    public sealed record RenderEscalation(int Step, string Policy);
 
     /// <summary>One notification of a digest, as its template's <c>items</c> lists it.</summary>
     public sealed record DigestItem(JsonElement Data, IReadOnlyDictionary<string, string> Labels, IReadOnlyDictionary<string, string> Links,
@@ -187,7 +196,7 @@ namespace Juice.Notifications.Rendering
         private static readonly HashSet<string> Allowed = new([.. Functions, "empty", "blank"], StringComparer.Ordinal);
 
         /// <summary>What a template sees of the request (<see cref="Globals"/> fills them).</summary>
-        private static readonly string[] ModelNames = ["data", "labels", "links", "type", "type_version", "type_name", "priority"];
+        private static readonly string[] ModelNames = ["data", "labels", "links", "type", "type_version", "type_name", "priority", "delivery", "escalation"];
 
         /// <summary>Scriban's own built-ins that the sandbox leaves out: <c>include</c>, <c>date</c>, <c>object</c>, <c>regex</c>, <c>timespan</c>…</summary>
         private static readonly HashSet<string> Withheld = new TemplateContext().BuiltinObject.Keys.Where(k => !Allowed.Contains(k)).ToHashSet(StringComparer.Ordinal);
@@ -217,6 +226,74 @@ namespace Juice.Notifications.Rendering
             var own = new HashSet<string>(StringComparer.Ordinal);
             CollectOwnNames(template.Page, own);
             return FirstWithheld(template.Page, own);
+        }
+
+        /// <summary>
+        /// Whether each template body names <c>delivery</c>, as parsed once, keyed by the body's SHA-256 so the cache holds hashes rather than
+        /// bodies of up to 64 KB; emptied when it outgrows <see cref="MaxCachedUses"/>.
+        /// </summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> DeliveryUses = new(StringComparer.Ordinal);
+        private const int MaxCachedUses = 10_000;
+
+        /// <summary>
+        /// Whether a template reads <c>delivery</c> (phase-5 M46-0): its output then differs per delivery and is rendered for each one; otherwise
+        /// one render serves every destination of its channel. Read from the syntax tree, never by rendering, and remembered per body. A template
+        /// that doesn't parse, nests too deeply, or reaches the globals through <c>this</c> (<c>this.delivery</c>, <c>this["delivery"]</c>,
+        /// <c>for kv in this</c>) counts as reading it: the first renders fail on their own terms, and <c>this</c> can reach any global.
+        /// </summary>
+        public static bool UsesDelivery(string body)
+        {
+            var key = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(body)));
+            if (DeliveryUses.TryGetValue(key, out var uses))
+            {
+                return uses;
+            }
+            var template = Template.Parse(body);
+            uses = template.HasErrors || TooDeep(template.Page) || NamesGlobal(template.Page, "delivery");
+            if (DeliveryUses.Count >= MaxCachedUses)
+            {
+                DeliveryUses.Clear();
+            }
+            DeliveryUses[key] = uses;
+            return uses;
+        }
+
+        /// <summary>
+        /// Whether the tree reaches for the global <paramref name="name"/> anywhere, by name or through <c>this</c> (the global scope as an
+        /// object), walked without recursion.
+        /// </summary>
+        private static bool NamesGlobal(Scriban.Syntax.ScriptNode? root, string name)
+        {
+            if (root is null)
+            {
+                return false;
+            }
+            var pending = new Stack<Scriban.Syntax.ScriptNode>();
+            pending.Push(root);
+            while (pending.TryPop(out var node))
+            {
+                if (node is Scriban.Syntax.ScriptThisExpression || node is Scriban.Syntax.ScriptVariableGlobal { Name: { } global } && global == name)
+                {
+                    return true;
+                }
+                // A member's name (data.delivery) is the value's, not the global.
+                if (node is Scriban.Syntax.ScriptMemberExpression member)
+                {
+                    if (member.Target is not null)
+                    {
+                        pending.Push(member.Target);
+                    }
+                    continue;
+                }
+                foreach (var child in node.Children)
+                {
+                    if (child is not null)
+                    {
+                        pending.Push(child);
+                    }
+                }
+            }
+            return false;
         }
 
         public const int MaxTemplateChars = 64 * 1024;
@@ -704,6 +781,14 @@ namespace Juice.Notifications.Rendering
                     ["correlation_key"] = i.CorrelationKey,
                 }));
                 globals["more"] = model.More;
+            }
+            if (model.Delivery is { } delivery)
+            {
+                globals["delivery"] = new ScriptObject { ["id"] = delivery.Id.ToString() };
+            }
+            if (model.Escalation is { } escalation)
+            {
+                globals["escalation"] = new ScriptObject { ["step"] = escalation.Step, ["policy"] = escalation.Policy };
             }
             return globals;
         }

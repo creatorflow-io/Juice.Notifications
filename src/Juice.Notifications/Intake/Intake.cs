@@ -18,7 +18,7 @@ namespace Juice.Notifications.Intake
     {
         /// <summary>How the recipient reads in history (<c>group:sre</c>, <c>topic:billing</c>).</summary>
         [System.Text.Json.Serialization.JsonIgnore]
-        public string Name => Kind == RecipientKinds.Topic ? $"{Kind}:{Key}" : Id is null ? Kind ?? "" : $"{Kind}:{Id}";
+        public string Name => Kind == RecipientKinds.Topic || Kind == RecipientKinds.Route && Key is not null ? $"{Kind}:{Key}" : Id is null ? Kind ?? "" : $"{Kind}:{Id}";
     }
 
     /// <summary>Who caused it: <c>user</c>, <c>system</c> or <c>service</c>, and an id.</summary>
@@ -160,6 +160,10 @@ namespace Juice.Notifications.Intake
                 var r = sent[i];
                 switch (r?.Kind)
                 {
+                    case RecipientKinds.Route when r.Key is not null:
+                        // One route by its key is for escalation policy steps only (decision G5): a request reaches the routes it matches.
+                        invalid.Add(new FieldError(at + "/key", "A request's route recipient is { \"kind\": \"route\" }: the routes the notification matches."));
+                        break;
                     case RecipientKinds.Route:
                         if (!result.Any(x => x.Kind == RecipientKinds.Route))
                         {

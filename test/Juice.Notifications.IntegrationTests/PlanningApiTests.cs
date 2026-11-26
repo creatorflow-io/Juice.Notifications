@@ -4,6 +4,7 @@ using System.Text.Json;
 using Juice.Notifications.Api.Contracts;
 using Juice.Notifications.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Juice.Notifications.IntegrationTests
 {
@@ -209,6 +210,123 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.ManagedByConfiguration), (change.StatusCode, await CodeAsync(change)));
             var delete = await admin.DeleteAsync($"{Tenant}/routes/from-config", Ct);
             Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.ManagedByConfiguration), (delete.StatusCode, await CodeAsync(delete)));
+        }
+
+        /// <summary>Rows the webhooks alias owns (phase-5 decision G1) are its own until cutover: the API changes and deletes none of them.</summary>
+        [Fact]
+        public async Task Rows_the_webhooks_alias_owns_refuse_api_changes()
+        {
+            LocalStack.RequireAvailable();
+            var Tenant = $"/api/v1/tenants/{ProducerApp.OtherTenant}";
+            await using (var db = producer.App.Database.Context())
+            {
+                db.Routes.Add(new Route
+                {
+                    TenantId = ProducerApp.OtherTenant, Key = "from-alias", Match = "{}", Targets = [], ManagedBy = ManagedBy.WebhooksAlias, DefinitionHash = "h",
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                });
+                db.EscalationPolicies.Add(new EscalationPolicy
+                {
+                    TenantId = ProducerApp.OtherTenant, Key = "from-alias", Steps = """[{"afterMinutes":5,"recipients":[{"kind":"route","key":"from-alias"}]}]""",
+                    ManagedBy = ManagedBy.WebhooksAlias, DefinitionHash = "h", UpdatedAt = DateTimeOffset.UtcNow,
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+            using var admin = await AdminAsync();
+
+            foreach (var response in new[]
+            {
+                await admin.PutAsJsonAsync($"{Tenant}/routes/from-alias", new PutRouteBody(null, null, false), Ct),
+                await admin.DeleteAsync($"{Tenant}/routes/from-alias", Ct),
+                await admin.PutAsJsonAsync($"{Tenant}/escalation-policies/from-alias", new PutEscalationPolicyBody(null, false), Ct),
+                await admin.DeleteAsync($"{Tenant}/escalation-policies/from-alias", Ct),
+            })
+            {
+                Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.ManagedByAlias), (response.StatusCode, await CodeAsync(response)));
+            }
+        }
+
+        /// <summary>
+        /// QA (M46-0): the in-process owners keep to their own rows through the real handlers and transaction behavior: the alias refuses an API
+        /// row (<c>managed_by_api</c>) and a configuration row (<c>managed_by_configuration</c>), configuration refuses an alias row
+        /// (<c>managed_by_alias</c>) but takes over an API row, and each refused row keeps its owner and definition.
+        /// </summary>
+        [Fact]
+        public async Task In_process_owners_refuse_each_others_rows_and_configuration_takes_over_the_apis()
+        {
+            LocalStack.RequireAvailable();
+            var tenant = ProducerApp.OtherTenant;
+            var suffix = Guid.NewGuid().ToString("N")[..8];
+            var (api, config, alias, taken) = ($"own-api-{suffix}", $"own-cfg-{suffix}", $"own-alias-{suffix}", $"own-taken-{suffix}");
+            await using (var db = producer.App.Database.Context())
+            {
+                foreach (var (key, owner) in new[] { (api, ManagedBy.Api), (config, ManagedBy.Configuration), (alias, ManagedBy.WebhooksAlias), (taken, ManagedBy.Api) })
+                {
+                    db.Routes.Add(new Route { TenantId = tenant, Key = key, Match = "{}", Targets = [], ManagedBy = owner, DefinitionHash = "h", UpdatedAt = DateTimeOffset.UtcNow });
+                    db.EscalationPolicies.Add(new EscalationPolicy
+                    {
+                        TenantId = tenant, Key = key, Steps = """[{"afterMinutes":5,"recipients":[{"kind":"route"}]}]""", ManagedBy = owner, DefinitionHash = "h",
+                        UpdatedAt = DateTimeOffset.UtcNow,
+                    });
+                }
+                await db.SaveChangesAsync(Ct);
+            }
+            var match = JsonDocument.Parse("""{"type":"x.y"}""").RootElement;
+            var steps = JsonDocument.Parse("""[{"afterMinutes":7,"recipients":[{"kind":"route"}]}]""").RootElement;
+
+            async Task<string?> SendAsync<T>(Juice.MediatR.IRequest<Notifications.Outcome<T>> command)
+            {
+                await using var scope = producer.App.Services.CreateAsyncScope();
+                using var context = NotificationsMessageContext.Begin("test");
+                var outcome = await scope.ServiceProvider.GetRequiredService<Juice.MediatR.IMediator>().Send(command, Ct);
+                return outcome!.Kind == Notifications.OutcomeKind.Ok ? null : outcome.Code;
+            }
+            var alias_ = ManagedBy.WebhooksAlias;
+            var config_ = ManagedBy.Configuration;
+            Assert.Equal(ErrorCodes.ManagedByApi, await SendAsync(new Configuration.PutRoute(tenant, api, match, [], false) { ManagedBy = alias_ }));
+            Assert.Equal(ErrorCodes.ManagedByApi, await SendAsync(new Configuration.DeleteRoute(tenant, api) { ManagedBy = alias_ }));
+            Assert.Equal(ErrorCodes.ManagedByApi, await SendAsync(new Configuration.PutEscalationPolicy(tenant, api, steps, false) { ManagedBy = alias_ }));
+            Assert.Equal(ErrorCodes.ManagedByApi, await SendAsync(new Configuration.DeleteEscalationPolicy(tenant, api) { ManagedBy = alias_ }));
+            Assert.Equal(ErrorCodes.ManagedByConfiguration, await SendAsync(new Configuration.PutRoute(tenant, config, match, [], false) { ManagedBy = alias_ }));
+            Assert.Equal(ErrorCodes.ManagedByConfiguration, await SendAsync(new Configuration.DeleteEscalationPolicy(tenant, config) { ManagedBy = alias_ }));
+            Assert.Equal(ErrorCodes.ManagedByAlias, await SendAsync(new Configuration.PutRoute(tenant, alias, match, [], false) { ManagedBy = config_ }));
+            Assert.Equal(ErrorCodes.ManagedByAlias, await SendAsync(new Configuration.DeleteRoute(tenant, alias) { ManagedBy = config_ }));
+            Assert.Equal(ErrorCodes.ManagedByAlias, await SendAsync(new Configuration.PutEscalationPolicy(tenant, alias, steps, false) { ManagedBy = config_ }));
+            // The alias's own row is its to change; configuration takes over an API row, as the provisioning file always has.
+            Assert.Null(await SendAsync(new Configuration.PutRoute(tenant, alias, null, null, false) { ManagedBy = alias_ }));
+            Assert.Null(await SendAsync(new Configuration.PutRoute(tenant, taken, null, null, false) { ManagedBy = config_ }));
+
+            await using var check = producer.App.Database.Context();
+            var routes = (await check.Routes.AsNoTracking().Where(r => r.TenantId == tenant && r.Key.EndsWith(suffix)).ToListAsync(Ct)).ToDictionary(r => r.Key);
+            Assert.Equal((ManagedBy.Api, "{}"), (routes[api].ManagedBy, routes[api].Match));
+            Assert.Equal((ManagedBy.Configuration, "{}"), (routes[config].ManagedBy, routes[config].Match));
+            Assert.Equal((ManagedBy.WebhooksAlias, false), (routes[alias].ManagedBy, routes[alias].Enabled));
+            Assert.Equal((ManagedBy.Configuration, false), (routes[taken].ManagedBy, routes[taken].Enabled));
+            Assert.True(await check.EscalationPolicies.AnyAsync(p => p.TenantId == tenant && p.Key == api && p.ManagedBy == ManagedBy.Api, Ct));
+        }
+
+        /// <summary>A body can't name an owner: <c>managedBy</c> is no field of the API's, and what it writes is the API's.</summary>
+        [Fact]
+        public async Task A_body_naming_managed_by_changes_no_owner()
+        {
+            LocalStack.RequireAvailable();
+            var Tenant = $"/api/v1/tenants/{ProducerApp.OtherTenant}";
+            using var admin = await AdminAsync();
+
+            var put = await admin.PutAsync($"{Tenant}/routes/named-owner", new StringContent(
+                """{ "match": {}, "targets": [], "enabled": false, "managedBy": "webhooks-alias" }""", System.Text.Encoding.UTF8, "application/json"), Ct);
+
+            await using var db = producer.App.Database.Context();
+            var route = await db.Routes.AsNoTracking().SingleOrDefaultAsync(r => r.TenantId == ProducerApp.OtherTenant && r.Key == "named-owner", Ct);
+            if (put.IsSuccessStatusCode)
+            {
+                Assert.Equal(ManagedBy.Api, route!.ManagedBy);
+            }
+            else
+            {
+                Assert.Null(route);
+            }
+            Assert.False(await db.Routes.AnyAsync(r => r.TenantId == ProducerApp.OtherTenant && r.Key == "named-owner" && r.ManagedBy == ManagedBy.WebhooksAlias, Ct));
         }
 
         /// <summary>

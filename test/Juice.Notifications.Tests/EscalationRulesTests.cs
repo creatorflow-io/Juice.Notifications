@@ -65,5 +65,20 @@ namespace Juice.Notifications.Tests
             Assert.Equal("/workflow/1", Assert.Single(Workflow.Parse(JsonElement.Parse("""[{"step":"send"},{"step":"escalate","policy":"ops"}]"""),
                 CorrelationRules.None).Errors).Pointer);
         }
+
+        /// <summary>A step may name one route by its key (phase-5 decision G5); without a key it is every route the notification matches, as before.</summary>
+        [Fact]
+        public void A_step_names_a_route_by_its_key()
+        {
+            var (steps, errors) = EscalationRules.Parse(JsonElement.Parse("""
+                [ { "afterMinutes": 5, "recipients": [ { "kind": "route", "key": "ops" }, { "kind": "route" } ] } ]
+                """), []);
+            Assert.Empty(errors);
+            Assert.Equal([new Intake.RecipientSpec(RecipientKinds.Route, Key: "ops"), new Intake.RecipientSpec(RecipientKinds.Route)], steps![0].Recipients);
+            Assert.Equal(["route:ops", "route"], steps[0].Recipients.Select(r => r.Name));
+            Assert.Equal("/steps/0/recipients/0/key", Pointers("""[ { "afterMinutes": 5, "recipients": [ { "kind": "route", "key": "Not A Key" } ] } ]"""));
+            Assert.Equal("/steps/0/recipients/0/key", Pointers("""[ { "afterMinutes": 5, "recipients": [ { "kind": "route", "key": 7 } ] } ]"""));
+            Assert.Equal("/steps/0/recipients/0/id", Pointers("""[ { "afterMinutes": 5, "recipients": [ { "kind": "route", "id": "ops" } ] } ]"""));
+        }
     }
 }

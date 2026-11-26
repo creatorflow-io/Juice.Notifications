@@ -1,6 +1,7 @@
 using Juice.Notifications.Correlations;
 using Juice.Notifications.Data;
 using Juice.Notifications.Data.PostgreSQL;
+using Juice.Notifications.Delivering;
 using Juice.Notifications.Inbox;
 using Juice.Notifications.Planning;
 using Juice.Notifications.Stages;
@@ -63,6 +64,7 @@ namespace Juice.Notifications.IntegrationTests
             services.AddSingleton<TimeProvider>(_clock);
             services.AddPostgresClaimStore();
             services.AddPlanning(Options, runWorkers: false);
+            services.AddDeliveryPlanning(Options, runWorkers: false);
             services.AddSingleton<IRecipientResolver>(_staff);
             _services = services.BuildServiceProvider();
         }
@@ -204,6 +206,163 @@ namespace Juice.Notifications.IntegrationTests
             _clock.Advance(TimeSpan.FromMinutes(5));
             await DrainAsync<Escalation, EscalationStage>("escalation");
             Assert.Equal(2, (await PeopleAsync(id)).Count);
+        }
+
+        /// <summary>
+        /// A step naming a route by its key (phase-5 decision G5) reaches that route whatever its match, as a legacy webhook step reached its
+        /// endpoints whatever events they took; a disabled or deleted route reaches nobody, and the escalation goes on.
+        /// </summary>
+        [Fact]
+        public async Task A_step_naming_a_route_by_key_reaches_it_whatever_its_match()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                db.Routes.AddRange(
+                    new Route { TenantId = Tenant, Key = "pager", Match = """{"type":"some.other.type"}""", Targets = [], DefinitionHash = "h", UpdatedAt = Seed.Now },
+                    new Route { TenantId = Tenant, Key = "off", Match = "{}", Targets = [], Enabled = false, DefinitionHash = "h", UpdatedAt = Seed.Now });
+                db.EscalationPolicies.Add(new EscalationPolicy
+                {
+                    TenantId = Tenant, Key = "by-route", DefinitionHash = "h", UpdatedAt = Seed.Now,
+                    Steps = """[{"afterMinutes":5,"recipients":[{"kind":"route","key":"pager"},{"kind":"route","key":"off"},{"kind":"route","key":"gone"}]},{"afterMinutes":5,"recipients":[{"kind":"route","key":"gone"}]}]""",
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+            var (id, _) = await NotificationAsync("by-route");
+            await DrainAsync<Notification, PlannerStage>("planner");
+
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            await DrainAsync<Notification, PlannerStage>("planner");
+
+            await using (var db = _database.Context())
+            {
+                var routes = await db.Recipients.AsNoTracking().Where(r => r.NotificationId == id && r.Kind == RecipientKind.Route)
+                    .Select(r => new { r.NamedAs, r.EscalationStep }).ToListAsync(Ct);
+                Assert.Equal([("route:pager", 1)], routes.Select(r => (r.NamedAs, r.EscalationStep)));
+            }
+            // The second step reaches nobody (its route is gone); the escalation still runs it, and ends.
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            await DrainAsync<Notification, PlannerStage>("planner");
+            Assert.Equal(EscalationState.Exhausted, (await EscalationAsync(id)).State);
+            // The routes that reached nobody are recorded with the step that named them, as a name that resolved to no one is.
+            await using (var db = _database.Context())
+            {
+                var unreached = await db.Recipients.AsNoTracking().Where(r => r.NotificationId == id && r.Kind == RecipientKind.Name)
+                    .OrderBy(r => r.EscalationStep).ThenBy(r => r.NamedAs).Select(r => new { r.NamedAs, r.EscalationStep, r.Outcome }).ToListAsync(Ct);
+                Assert.Equal([("route:gone", 1, RecipientOutcome.Failed), ("route:off", 1, RecipientOutcome.Failed), ("route:gone", 2, RecipientOutcome.Failed)],
+                    unreached.Select(r => (r.NamedAs, r.EscalationStep, r.Outcome)));
+            }
+        }
+
+        /// <summary>
+        /// A route reached when the notification was sent, and named by key in every step, gets each step's send (review of #3, decision G5): as a
+        /// legacy step sent alert.escalated to every endpoint it named, whatever they had been sent. A step planned again adds nothing more.
+        /// </summary>
+        [Fact]
+        public async Task A_route_named_by_key_is_sent_each_step_even_when_reached_before()
+        {
+            LocalStack.RequireAvailable();
+            Guid integrationId;
+            await using (var db = _database.Context())
+            {
+                var integration = Seed.Integration(Tenant, "pager-hooks");
+                var target = new IntegrationTarget
+                {
+                    TenantId = Tenant, IntegrationId = integration.Id, Key = "pager-1", Address = "https://hooks.example.com/pager", DefinitionHash = "h", UpdatedAt = Seed.Now,
+                };
+                var route = new Route { TenantId = Tenant, Key = "pager", Match = "{}", Targets = ["pager-1"], DefinitionHash = "h", UpdatedAt = Seed.Now };
+                db.AddRange(integration, target, route, new RouteTarget { TenantId = Tenant, RouteId = route.Id, TargetId = target.Id, Position = 0 });
+                db.EscalationPolicies.Add(new EscalationPolicy
+                {
+                    TenantId = Tenant, Key = "re-page", DefinitionHash = "h", UpdatedAt = Seed.Now,
+                    Steps = """[{"afterMinutes":5,"recipients":[{"kind":"route","key":"pager"}]},{"afterMinutes":5,"recipients":[{"kind":"route","key":"pager"}]}]""",
+                });
+                await db.SaveChangesAsync(Ct);
+                integrationId = integration.Id;
+            }
+            var (id, _) = await NotificationAsync("re-page");
+            await using (var db = _database.Context())
+            {
+                // Sent to the routes it matches, as an alert's firing is.
+                await db.Requests.Where(r => r.Id == db.Notifications.Where(n => n.Id == id).Select(n => n.RequestId).Single())
+                    .ExecuteUpdateAsync(s => s.SetProperty(r => r.Recipients, """[{"kind":"route"}]"""), Ct);
+            }
+            async Task RunAsync()
+            {
+                await DrainAsync<Notification, PlannerStage>("planner");
+                await DrainAsync<NotificationRecipient, DeliveryPlannerStage>("delivery-planner");
+            }
+            async Task<List<(string NamedAs, int Step, int Deliveries)>> PagerAsync()
+            {
+                await using var db = _database.Context();
+                return (await db.Recipients.AsNoTracking().Where(r => r.NotificationId == id && r.NamedAs == "route:pager").OrderBy(r => r.EscalationStep)
+                    .Select(r => new { r.NamedAs, r.EscalationStep, Deliveries = db.DeliveryItems.Count(i => i.RecipientId == r.Id) }).ToListAsync(Ct))
+                    .Select(r => (r.NamedAs, r.EscalationStep, r.Deliveries)).ToList();
+            }
+
+            await RunAsync();
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            await RunAsync();
+            Assert.Equal([("route:pager", 0, 1), ("route:pager", 1, 1)], await PagerAsync());
+
+            // Step 1 planned again (a replanned step): nothing more.
+            await using (var db = _database.Context())
+            {
+                await db.Notifications.Where(n => n.Id == id).ExecuteUpdateAsync(s => s
+                    .SetProperty(n => n.State, NotificationState.Planning).SetProperty(n => n.NextAt, _clock.GetUtcNow()), Ct);
+            }
+            await RunAsync();
+            Assert.Equal([("route:pager", 0, 1), ("route:pager", 1, 1)], await PagerAsync());
+
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            await RunAsync();
+            Assert.Equal([("route:pager", 0, 1), ("route:pager", 1, 1), ("route:pager", 2, 1)], await PagerAsync());
+            await using (var check = _database.Context())
+            {
+                Assert.Equal(3, await check.Deliveries.CountAsync(d => d.IntegrationId == integrationId, Ct));
+            }
+        }
+
+        /// <summary>
+        /// QA (M46-0): a step that names a missing route by key, planned again (a replanned step), records the unreached route once and fails
+        /// nothing: the step's own record is the only one, as for a route it reaches.
+        /// </summary>
+        [Fact]
+        public async Task A_replanned_step_naming_a_missing_route_records_it_once()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                db.EscalationPolicies.Add(new EscalationPolicy
+                {
+                    TenantId = Tenant, Key = "to-gone", DefinitionHash = "h", UpdatedAt = Seed.Now,
+                    Steps = """[{"afterMinutes":5,"recipients":[{"kind":"route","key":"gone"},{"id":"lead","kind":"group","resolver":"staff"}]}]""",
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+            var (id, _) = await NotificationAsync("to-gone");
+            await DrainAsync<Notification, PlannerStage>("planner");
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            await DrainAsync<Notification, PlannerStage>("planner");
+
+            await using (var db = _database.Context())
+            {
+                await db.Notifications.Where(n => n.Id == id).ExecuteUpdateAsync(s => s
+                    .SetProperty(n => n.State, NotificationState.Planning).SetProperty(n => n.NextAt, _clock.GetUtcNow()), Ct);
+            }
+            await DrainAsync<Notification, PlannerStage>("planner");
+
+            await using var check = _database.Context();
+            var named = await check.Recipients.AsNoTracking().Where(r => r.NotificationId == id && r.EscalationStep == 1)
+                .Select(r => new { r.NamedAs, r.Outcome }).ToListAsync(Ct);
+            Assert.Single(named, r => r.NamedAs == "route:gone" && r.Outcome == RecipientOutcome.Failed);
+            Assert.Equal(named.Count, named.Select(r => r.NamedAs).Distinct().Count());
+            Assert.Contains(named, r => r.NamedAs.StartsWith("subscriber:"));
         }
     }
 }

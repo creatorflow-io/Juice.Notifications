@@ -16,10 +16,16 @@ namespace Juice.Notifications.Configuration
     public sealed record EscalationStepSpec(int AfterMinutes, IReadOnlyList<RecipientSpec> Recipients);
 
     public sealed record PutEscalationPolicy(Guid NotificationTenantId, string Key, JsonElement? Steps, bool? StopOnAcknowledge)
-        : MessageBase, IRequest<Outcome<EscalationPolicyView>>;
+        : MessageBase, IRequest<Outcome<EscalationPolicyView>>, IOwnedSetupWrite
+    {
+        public string? ManagedBy { get; init; }
+    }
 
     /// <summary>Deletes a policy; an escalation running it stops at its next step.</summary>
-    public sealed record DeleteEscalationPolicy(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>;
+    public sealed record DeleteEscalationPolicy(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
+    {
+        public string? ManagedBy { get; init; }
+    }
 
     public static class EscalationRules
     {
@@ -104,7 +110,8 @@ namespace Juice.Notifications.Configuration
             }
             var allowed = kind switch
             {
-                RecipientKinds.Route => new[] { "kind" },
+                // A step's route is every route the notification matches, or one route by its key (decision G5), whatever its match.
+                RecipientKinds.Route => new[] { "kind", "key" },
                 RecipientKinds.Topic => ["kind", "key", "resolver"],
                 _ => ["kind", "id", "resolver"],
             };
@@ -114,7 +121,16 @@ namespace Juice.Notifications.Configuration
             }
             if (kind == RecipientKinds.Route)
             {
-                return new RecipientSpec(kind);
+                if (!r.TryGetProperty("key", out var routeKey))
+                {
+                    return new RecipientSpec(kind);
+                }
+                if (routeKey.ValueKind != JsonValueKind.String || !ConfigurationRules.Key().IsMatch(routeKey.GetString()!))
+                {
+                    errors.Add(new FieldError(at + "/key", "A route's key: 1–63 lowercase letters, digits or hyphens, starting with a letter."));
+                    return null;
+                }
+                return new RecipientSpec(kind, Key: routeKey.GetString());
             }
             var resolver = Text("resolver");
             if (!ConfigurationRules.Key().IsMatch(resolver ?? ""))
@@ -162,9 +178,9 @@ namespace Juice.Notifications.Configuration
                 return Invalid<EscalationPolicyView>(new FieldError("/key", "A key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
             }
             var existing = await db.EscalationPolicies.SingleOrDefaultAsync(p => p.TenantId == r.NotificationTenantId && p.Key == r.Key, ct);
-            if (existing?.ManagedBy == ManagedBy.Configuration)
+            if (Owned<EscalationPolicyView>(existing?.ManagedBy, r.ManagedBy, "escalation policy " + r.Key) is { } owned)
             {
-                return ConfigManaged<EscalationPolicyView>("escalation policy " + r.Key);
+                return owned;
             }
             string steps;
             if (r.Steps is { } sent)
@@ -196,7 +212,7 @@ namespace Juice.Notifications.Configuration
             {
                 existing = new EscalationPolicy
                 {
-                    TenantId = r.NotificationTenantId, Key = r.Key, Steps = steps, StopOnAcknowledge = stop, DefinitionHash = hash, UpdatedAt = now,
+                    TenantId = r.NotificationTenantId, Key = r.Key, Steps = steps, StopOnAcknowledge = stop, DefinitionHash = hash, UpdatedAt = now, ManagedBy = Caller(r.ManagedBy),
                 };
                 db.EscalationPolicies.Add(existing);
             }
@@ -214,9 +230,9 @@ namespace Juice.Notifications.Configuration
             {
                 return Outcome<bool>.Ok(false);
             }
-            if (existing.ManagedBy == ManagedBy.Configuration)
+            if (Owned<bool>(existing.ManagedBy, r.ManagedBy, "escalation policy " + r.Key) is { } owned)
             {
-                return ConfigManaged<bool>("escalation policy " + r.Key);
+                return owned;
             }
             db.EscalationPolicies.Remove(existing);
             return Outcome<bool>.Ok(true);

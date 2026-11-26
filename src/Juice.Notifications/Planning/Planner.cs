@@ -106,6 +106,19 @@ namespace Juice.Notifications.Planning
         public async ValueTask<ResolveResult> ResolveAsync(RecipientSpec spec, ResolveContext context, CancellationToken ct)
         {
             var request = context.Request;
+            if (spec.Key is { } key)
+            {
+                // An escalation step naming a route by its key (phase-5 decision G5): that route's targets, whatever its match, as a legacy
+                // webhook step sent to its endpoints whatever events they took. Disabled or gone, it reaches nobody (the step says so).
+                var named = await context.Db.Routes.AsNoTracking().Where(r => r.TenantId == request.TenantId && r.Key == key && r.Enabled)
+                    .Select(r => new { r.Id, r.Key }).SingleOrDefaultAsync(ct);
+                if (named is null)
+                {
+                    logger.LogWarning("Route {Route} named by an escalation step in tenant {Tenant} is disabled or gone; it reaches nobody", key, request.TenantId);
+                    return new ResolveResult([]);
+                }
+                return new ResolveResult([new ResolvedDestination(RecipientKind.Route, "route:" + named.Key, named.Id, named.Key)]);
+            }
             var routes = await context.Db.Routes.AsNoTracking().Where(r => r.TenantId == request.TenantId && r.Enabled).OrderBy(r => r.Key).ToListAsync(ct);
             var matched = new List<ResolvedDestination>();
             foreach (var route in routes)
@@ -237,6 +250,10 @@ namespace Juice.Notifications.Planning
             // Names that couldn't be resolved now, and names that reached more people than the bound, each with its resolver.
             var unavailable = new Dictionary<string, string>(StringComparer.Ordinal);
             var truncated = new Dictionary<string, string>(StringComparer.Ordinal);
+            // Routes an escalation step named by key that reached nobody (disabled or gone).
+            var missingRoutes = new Dictionary<string, string>(StringComparer.Ordinal);
+            // Routes an escalation step named by key that it reaches: each step that names one sends to it again (decision G5).
+            var byKey = new HashSet<string>(StringComparer.Ordinal);
             // A person reached through several names is one recipient: the names, and the first resolver that reached them, by person.
             var people = new Dictionary<(string Source, string ExternalId), (ResolvedPerson Person, SortedSet<string> Via, string Resolver)>();
             foreach (var spec in specs)
@@ -271,6 +288,14 @@ namespace Juice.Notifications.Planning
                 foreach (var destination in result.Destinations)
                 {
                     planned.TryAdd(destination.NamedAs, (destination, resolverKey));
+                }
+                if (spec is { Kind: RecipientKinds.Route, Key: not null })
+                {
+                    byKey.UnionWith(result.Destinations.Select(d => d.NamedAs));
+                }
+                if (spec is { Kind: RecipientKinds.Route, Key: not null } && result.Destinations.Count == 0)
+                {
+                    missingRoutes.TryAdd(name, resolverKey);
                 }
                 // People who can't be subscribers are dropped before the bound, so they don't take the places of people who can.
                 var returnedPeople = new List<ResolvedPerson>(result.People.Count);
@@ -308,16 +333,24 @@ namespace Juice.Notifications.Planning
                     entry.Via.Add(name);
                 }
             }
+            // The names this step recorded as unreached already (the step planned again): each is recorded once per step (the RecipientNamed
+            // key), so a second record would fail the plan on every retry.
+            var recorded = unavailable.Count + truncated.Count + missingRoutes.Count == 0 ? [] : (await db.Recipients.AsNoTracking()
+                .Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.EscalationStep == row.EscalationStep && r.Kind == RecipientKind.Name)
+                .Select(r => r.NamedAs).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
             foreach (var (named, resolverKey) in unavailable)
             {
-                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.ResolverUnavailable, context.Now));
+                if (!recorded.Contains(named))
+                {
+                    db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.ResolverUnavailable, context.Now));
+                }
                 // One record per name: one named twice, through a resolver that failed and another that truncated, reads as unavailable.
                 truncated.Remove(named);
             }
-            if (unavailable.Count > 0)
+            if (unavailable.Keys.Any(n => !recorded.Contains(n)))
             {
-                // The producer hears who wasn't reached (design §5.4, phase-3-plan I37), saved with this plan.
-                var names = unavailable.Keys.Order(StringComparer.Ordinal).ToList();
+                // The producer hears who wasn't reached (design §5.4, phase-3-plan I37), saved with this plan: once per name and step.
+                var names = unavailable.Keys.Where(n => !recorded.Contains(n)).Order(StringComparer.Ordinal).ToList();
                 await events.RaiseAsync(db, row.TenantId, request.ApplicationId, app => new Events.NotificationEvent
                 {
                     Event = Events.ProducerEventNames.RecipientUnresolved, Application = app, NotificationTenantId = row.TenantId,
@@ -325,7 +358,13 @@ namespace Juice.Notifications.Planning
                     Resolver = string.Join(",", unavailable.Values.Distinct().Order(StringComparer.Ordinal)), OccurredAt = context.Now,
                 }, ct);
             }
-            foreach (var (named, resolverKey) in truncated)
+            // A route an escalation step named by its key that is disabled or gone (decision G5): recorded as reaching nobody, as a name that
+            // resolved to no one is, so history shows the step tried.
+            foreach (var (named, resolverKey) in missingRoutes.Where(m => !recorded.Contains(m.Key)))
+            {
+                db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Failed, context.Now));
+            }
+            foreach (var (named, resolverKey) in truncated.Where(t => !recorded.Contains(t.Key)))
             {
                 logger.LogWarning("{Name} reached more than {Max} people in tenant {Tenant}; notification {Id} keeps the first of them",
                     named, bounds.MaxRecipients, row.TenantId, row.Id);
@@ -379,10 +418,14 @@ namespace Juice.Notifications.Planning
             }
             if (escalating)
             {
-                // Nobody twice: anyone the notification reached already (the request's plan, an earlier step) isn't added again.
+                // Nobody twice: anyone the notification reached already (the request's plan, an earlier step) isn't added again. A route the step
+                // names by its key is the exception (decision G5): as a legacy step sent alert.escalated to every endpoint it named, whatever they
+                // had been sent, each step that names it reaches it once, the step's own record (named once per step) being the only one that counts.
                 var reached = (await db.Recipients.AsNoTracking().Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Kind != RecipientKind.Name)
-                    .Select(r => r.NamedAs).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
-                due.RemoveAll(r => reached.Contains(r.NamedAs));
+                    .Select(r => new { r.NamedAs, r.EscalationStep }).ToListAsync(ct));
+                var anyStep = reached.Select(r => r.NamedAs).ToHashSet(StringComparer.Ordinal);
+                var thisStep = reached.Where(r => r.EscalationStep == row.EscalationStep).Select(r => r.NamedAs).ToHashSet(StringComparer.Ordinal);
+                due.RemoveAll(r => byKey.Contains(r.NamedAs) ? thisStep.Contains(r.NamedAs) : anyStep.Contains(r.NamedAs));
                 if (!due.Any(r => r.Kind != RecipientKind.Name))
                 {
                     // Nobody new: the next step runs at once, not after its wait (design §7.1).
