@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Juice.Notifications.EF.PostgreSQL.Migrations
 {
     [DbContext(typeof(NotificationsDbContext))]
-    [Migration("20261126043105_RequestOccurredAt")]
+    [Migration("20261126074926_RequestOccurredAt")]
     partial class RequestOccurredAt
     {
         /// <inheritdoc />
@@ -177,6 +177,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("destination");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
@@ -673,6 +674,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_deliveries_due")
                         .HasFilter("next_at IS NOT NULL");
 
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_deliveries_failing")
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
+
                     b.HasIndex("Priority", "NextAt")
                         .IsDescending(true, false)
                         .HasDatabaseName("ix_deliveries_claim")
@@ -965,6 +970,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_digests_due")
                         .HasFilter("next_at IS NOT NULL");
 
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_digests_failing")
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
+
                     b.HasIndex("TenantId", "TypeKey", "By", "Key")
                         .IsUnique()
                         .HasDatabaseName("ix_digests_open")
@@ -1096,6 +1105,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_escalations_due")
                         .HasFilter("next_at IS NOT NULL");
 
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_escalations_failing")
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
+
                     b.HasIndex("TenantId", "CorrelationId")
                         .HasDatabaseName("ix_escalations_correlation");
 
@@ -1130,6 +1143,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("key");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
@@ -1306,6 +1320,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("kind");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
@@ -1383,6 +1398,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("key");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
@@ -1727,6 +1743,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_notifications_due")
                         .HasFilter("next_at IS NOT NULL");
 
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_notifications_failing")
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
+
                     b.HasIndex("TenantId", "RequestId")
                         .IsUnique()
                         .HasDatabaseName("ix_notifications_tenant_id_request_id");
@@ -1861,6 +1881,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasIndex("NextAt")
                         .HasDatabaseName("ix_notification_recipients_due")
                         .HasFilter("next_at IS NOT NULL");
+
+                    b.HasIndex("StepFailures")
+                        .HasDatabaseName("ix_notification_recipients_failing")
+                        .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
 
                     b.HasIndex("TenantId", "DigestId")
                         .HasDatabaseName("ix_notification_recipients_digest")
@@ -2360,6 +2384,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("key");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
