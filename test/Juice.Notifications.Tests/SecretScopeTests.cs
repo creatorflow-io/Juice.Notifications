@@ -47,6 +47,7 @@ namespace Juice.Notifications.Tests
         [InlineData("JUICE_", "JUICE_WEBHOOK_", null, null, true)]
         [InlineData("JUICE_WEBHOOK_OPS_", "JUICE_WEBHOOK_", null, null, true)]
         [InlineData("NOTIFICATIONS_SECRET_", "JUICE_WEBHOOK_", null, null, false)]
+        [InlineData("NOTIFICATIONS_SECRET_", "notifications_secret_alias_", null, null, true)]
         [InlineData("NOTIFICATIONS_SECRET_", null, null, null, false)]
         [InlineData("NOTIFICATIONS_SECRET_", "JUICE_WEBHOOK_", "/run/secrets/a", "/run/secrets/a/", true)]
         [InlineData("NOTIFICATIONS_SECRET_", "JUICE_WEBHOOK_", "/run/secrets/a", "/run/secrets/b", false)]

@@ -139,13 +139,13 @@ namespace Juice.Notifications.Providers
         }
 
         /// <summary>
-        /// Why the API's and the alias's secret limits overlap, or null when they don't (M46-3 review): one env prefix starting with the other, or
+        /// Why the API's and the alias's secret limits overlap, or null when they don't (M46-3 review): one env prefix starting with the other (ignoring case: Windows env names do), or
         /// the same folder, would let one writer name the other's secrets (an API admin, the alias's). The host fails to start on it.
         /// </summary>
         public static string? ScopeOverlap(DeliveryOptions options)
         {
             if (options.ApiSecretEnvPrefix is { Length: > 0 } api && options.AliasSecretEnvPrefix is { Length: > 0 } alias
-                && (api.StartsWith(alias, StringComparison.Ordinal) || alias.StartsWith(api, StringComparison.Ordinal)))
+                && (api.StartsWith(alias, StringComparison.OrdinalIgnoreCase) || alias.StartsWith(api, StringComparison.OrdinalIgnoreCase)))
             {
                 return $"Delivery:ApiSecretEnvPrefix ({api}) and Delivery:AliasSecretEnvPrefix ({alias}) overlap: one starts with the other, so one writer could name the other's secrets. Give them distinct prefixes.";
             }
