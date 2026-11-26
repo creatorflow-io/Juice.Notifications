@@ -208,6 +208,56 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
 
+        /// <summary>
+        /// QA (M46c, the policy fix): the same race for an escalation policy, 15 rounds. A takeover that answered Ok is what the policy holds at the
+        /// end (owner alias-config, its steps); otherwise the alias's, with its edit's steps if that answered Ok. After every round, the alias's
+        /// own PUT and DELETE and the admin API's get <c>managed_by_configuration</c> once the takeover has won.
+        /// </summary>
+        [Fact]
+        public async Task A_policy_takeover_racing_an_alias_edit_loses_no_update_and_then_refuses_both_apis()
+        {
+            LocalStack.RequireAvailable();
+            static JsonElement Steps(int minutes) => JsonElement.Parse($$"""[{"afterMinutes":{{minutes}},"recipients":[{"kind":"route"}]}]""");
+            static int Minutes(EscalationPolicy p) => JsonDocument.Parse(p.Steps).RootElement[0].GetProperty("afterMinutes").GetInt32();
+            using var admin = await AdminAsync();
+            for (var round = 0; round < 15; round++)
+            {
+                var key = $"race-policy-{round}";
+                Assert.Contains((await AsAsync(new PutEscalationPolicy(Tenant, key, Steps(1), false) { ManagedBy = ManagedBy.WebhooksAlias })).Kind,
+                    new[] { OutcomeKind.Ok, OutcomeKind.Created });
+                Task<Outcome<EscalationPolicyView>> Guarded(Func<Task<Outcome<EscalationPolicyView>>> call) => call().ContinueWith(t => t.IsFaulted && Data.DbConflicts.Classify(t.Exception!.InnerException!) is { }
+                    ? Outcome<EscalationPolicyView>.Conflict(ErrorCodes.ConcurrentChange, "raced") : t.Result, TaskScheduler.Default);
+                var edit = Guarded(() => AsAsync(new PutEscalationPolicy(Tenant, key, Steps(2), null) { ManagedBy = ManagedBy.WebhooksAlias }));
+                var takeover = Guarded(() => AsAsync(new PutEscalationPolicy(Tenant, key, Steps(3), null) { ManagedBy = ManagedBy.AliasConfig }));
+                var (edited, taken) = (await edit, await takeover);
+                Assert.True(edited.Kind is OutcomeKind.Ok || edited.Code is ErrorCodes.ConcurrentChange or ErrorCodes.ManagedByConfiguration, $"round {round} edit: {edited.Kind} {edited.Code}");
+                Assert.True(taken.Kind is OutcomeKind.Ok || taken.Code is ErrorCodes.ConcurrentChange, $"round {round} takeover: {taken.Kind} {taken.Code}");
+                await using (var db = _app.Database.Context())
+                {
+                    var row = await db.EscalationPolicies.AsNoTracking().SingleAsync(p => p.TenantId == Tenant && p.Key == key, Ct);
+                    if (taken.Kind == OutcomeKind.Ok)
+                    {
+                        Assert.Equal((ManagedBy.AliasConfig, 3), (row.ManagedBy, Minutes(row)));
+                    }
+                    else
+                    {
+                        Assert.Equal((ManagedBy.WebhooksAlias, edited.Kind == OutcomeKind.Ok ? 2 : 1), (row.ManagedBy, Minutes(row)));
+                        continue;
+                    }
+                }
+                Assert.Equal(ErrorCodes.ManagedByConfiguration, (await AsAsync(new PutEscalationPolicy(Tenant, key, Steps(4), null) { ManagedBy = ManagedBy.WebhooksAlias })).Code);
+                Assert.Equal(ErrorCodes.ManagedByConfiguration, (await AsAsync(new DeleteEscalationPolicy(Tenant, key) { ManagedBy = ManagedBy.WebhooksAlias })).Code);
+                using (var put = await admin.PutAsJsonAsync($"{Url}/escalation-policies/{key}", new PutEscalationPolicyBody(null, true), Ct))
+                {
+                    Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.ManagedByConfiguration), (put.StatusCode, await CodeAsync(put)));
+                }
+                using (var delete = await admin.DeleteAsync($"{Url}/escalation-policies/{key}", Ct))
+                {
+                    Assert.Equal((HttpStatusCode.Conflict, ErrorCodes.ManagedByConfiguration), (delete.StatusCode, await CodeAsync(delete)));
+                }
+            }
+        }
+
         private async Task<int> RouteTargetRowsAsync()
         {
             await using var db = _app.Database.Context();
