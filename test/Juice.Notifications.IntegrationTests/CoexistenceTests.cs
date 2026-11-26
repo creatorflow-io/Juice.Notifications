@@ -1,6 +1,7 @@
 using Juice.MediatR;
 using Juice.Messaging;
 using Juice.Messaging.Extensions;
+using Juice.Messaging.Outbox;
 using Juice.Messaging.Policies;
 using Juice.Notifications.Configuration;
 using Juice.Notifications.Data;
@@ -113,6 +114,61 @@ namespace Juice.Notifications.IntegrationTests
                 EventType = nameof(Events.NotificationEvent), Domain = typeof(Events.NotificationEvent).GetDomainName(),
             });
             Assert.Equal(["local"], pipeline.Select(r => r.PublisherKey));
+        }
+
+        /// <summary>
+        /// QA (U2): the same split through the real outbox save, where the routes are decided from each message's own domain: the pipeline's
+        /// event is written once, for <c>local</c>; the host's event, saved through the same outbox, gets only the host's route.
+        /// </summary>
+        [Fact]
+        public async Task Saved_through_the_outbox_the_pipelines_event_takes_local_and_the_hosts_only_its_own_route()
+        {
+            LocalStack.RequireAvailable();
+            using var context = NotificationsMessageContext.Begin("test");
+            var (pipelineEvent, hostEvent) = (new Events.NotificationEvent
+            {
+                Event = "interaction", Application = "host", NotificationTenantId = Tenant, Type = "host.thing", OccurredAt = DateTimeOffset.UtcNow,
+            }, new HostEvent());
+            await using (var scope = _services!.CreateAsyncScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
+                await using var transaction = await db.Database.BeginTransactionAsync(Ct);
+                var outbox = scope.ServiceProvider.GetRequiredService<IOutboxService<NotificationsDbContext>>();
+                await outbox.AddEventAsync(pipelineEvent);
+                await outbox.AddEventAsync(hostEvent);
+                await outbox.SaveEventsAsync(transaction.TransactionId, Ct);
+                await transaction.CommitAsync(Ct);
+            }
+            await using var check = _database.Context();
+            var routes = await check.Database.SqlQuery<string>($"""
+                SELECT e.event_type_name || '>' || d.publisher_key AS "Value"
+                FROM notifications.outbox_events e JOIN notifications.outbox_deliveries d ON d.event_id = e.event_id
+                WHERE e.event_id IN ({pipelineEvent.MessageId}, {hostEvent.MessageId})
+                """).ToListAsync(Ct);
+            Assert.Equal(["HostEvent>" + HostRoutes.Route, "NotificationEvent>local"], routes.Order(StringComparer.Ordinal));
+        }
+
+        /// <summary>
+        /// QA (U2): the transaction gate goes by assembly, so a command declared outside <see cref="Hosting.NotificationsPipeline.CommandAssemblies"/>
+        /// would silently lose its save. Every request type of a <c>Juice.Notifications*</c> assembly that has a handler in the container is owned.
+        /// </summary>
+        [Fact]
+        public void Every_pipeline_request_with_a_handler_is_one_the_transaction_owns()
+        {
+            LocalStack.RequireAvailable();
+            var commands = _services!.GetRequiredService<NotificationsCommands>();
+            // Loaded explicitly: a referenced assembly the run hasn't touched yet is still checked.
+            var handled = typeof(CoexistenceTests).Assembly.GetReferencedAssemblies()
+                .Where(n => n.Name is { } name && name.StartsWith("Juice.Notifications", StringComparison.Ordinal))
+                .Select(System.Reflection.Assembly.Load)
+                .SelectMany(a => a.GetTypes())
+                .Where(t => t is { IsAbstract: false, IsInterface: false })
+                .SelectMany(t => t.GetInterfaces().Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IRequestHandler<,>)))
+                .Select(i => i.GetGenericArguments()[0])
+                .Distinct()
+                .ToList();
+            Assert.NotEmpty(handled);
+            Assert.All(handled, request => Assert.True(commands.Owns(request), $"{request.FullName} ({request.Assembly.GetName().Name}) has a handler but no transaction"));
         }
     }
 }

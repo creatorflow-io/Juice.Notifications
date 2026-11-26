@@ -202,6 +202,12 @@ namespace Juice.Notifications.Data
         public Dictionary<string, string> Links { get; init; } = [];
         public DateTimeOffset? ExpiresAt { get; init; }
         public DateTimeOffset AcceptedAt { get; init; }
+        /// <summary>
+        /// When what the request tells of happened, as the producer says (phase 5: an alert's firing time); null when it didn't say (and on
+        /// requests from before it was kept). Only an escalation's first step reads it: due its wait after this, never before now, even when a
+        /// workflow delay ran first; null, the wait runs from when the escalation starts, as before.
+        /// </summary>
+        public DateTimeOffset? OccurredAt { get; init; }
         /// <summary>When the type's <c>redact</c> paths were masked in <see cref="Data"/> (after everything was rendered, phase-4-plan I46).</summary>
         public DateTimeOffset? RedactedAt { get; set; }
         /// <summary>The producer's W3C trace context, carried to every stage.</summary>

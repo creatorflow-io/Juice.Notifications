@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Juice.Notifications.Api.Contracts;
+using Microsoft.EntityFrameworkCore;
 
 namespace Juice.Notifications.IntegrationTests
 {
@@ -24,8 +25,8 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         private static SendNotificationBody Send(string type, string? priority = null, DateTimeOffset? expiresAt = null, string data = "{}",
-            Dictionary<string, string>? links = null, string? correlationKey = null)
-            => new(type, null, Guid.NewGuid().ToString("N"), correlationKey, null, null, priority, null, JsonElement.Parse(data), links, expiresAt);
+            Dictionary<string, string>? links = null, string? correlationKey = null, DateTimeOffset? occurredAt = null)
+            => new(type, null, Guid.NewGuid().ToString("N"), correlationKey, null, null, priority, null, JsonElement.Parse(data), links, expiresAt, occurredAt);
 
         private static async Task<(HttpStatusCode Status, string? Code, List<string> Pointers)> ProblemAsync(HttpResponseMessage response)
         {
@@ -45,6 +46,83 @@ namespace Juice.Notifications.IntegrationTests
             var (status, code, pointers) = await ProblemAsync(await client.PostAsJsonAsync(SendUrl, Send(type, priority: "urgent"), Ct));
             Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidRequest), (status, code));
             Assert.Equal(["/priority"], pointers);
+        }
+
+        /// <summary>
+        /// When its event happened (phase 5, M45-n, the architect's decision): any time is accepted (an escalation clamps what it takes from it);
+        /// absent, none is kept.
+        /// </summary>
+        [Fact]
+        public async Task Any_occurrence_is_accepted_and_kept_only_when_sent()
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            var type = await DeclareAsync(client);
+            var now = DateTimeOffset.UtcNow;
+            foreach (var taken in new DateTimeOffset?[] { null, now.AddMinutes(2), now.AddDays(-6.9), now.AddHours(-1), now.AddMinutes(30), now.AddDays(-30) })
+            {
+                Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(SendUrl, Send(type, occurredAt: taken), Ct)).StatusCode);
+            }
+
+            // Kept as sent.
+            var at = now.AddMinutes(-42);
+            var sent = await (await client.PostAsJsonAsync(SendUrl, Send(type, occurredAt: at), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
+            var plain = await (await client.PostAsJsonAsync(SendUrl, Send(type), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
+            await using var db = producer.App.Database.Context();
+            var stored = await db.Requests.AsNoTracking().SingleAsync(r => r.Id == sent!.Id, Ct);
+            Assert.Equal(at.ToUnixTimeMilliseconds(), stored.OccurredAt!.Value.ToUnixTimeMilliseconds());
+            // Absent: none kept (the escalation then times its first step from its own start).
+            Assert.Null((await db.Requests.AsNoTracking().SingleAsync(r => r.Id == plain!.Id, Ct)).OccurredAt);
+        }
+
+        /// <summary>
+        /// QA (M45-n): a time sent with an offset other than UTC (a producer that writes local time, ISO 8601 with <c>+07:00</c>) is the same
+        /// instant, accepted and kept as it, not a 500 (PostgreSQL's timestamptz takes only UTC from Npgsql). The text is sent as is, not
+        /// re-serialized from a UTC value; so is a bad one, which is refused at the field.
+        /// </summary>
+        [Fact]
+        public async Task An_occurrence_with_a_non_utc_offset_is_the_same_instant()
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            var type = await DeclareAsync(client);
+            var at = DateTimeOffset.UtcNow.AddMinutes(-10);
+            var local = at.ToOffset(TimeSpan.FromHours(7)).ToString("yyyy-MM-dd'T'HH:mm:ss.fffzzz");
+            var json = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(Send(type), new JsonSerializerOptions(JsonSerializerDefaults.Web)))!.AsObject();
+            json["occurredAt"] = local;
+            var body = json.ToJsonString();
+            var response = await client.PostAsync(SendUrl, new StringContent(body, System.Text.Encoding.UTF8, "application/json"), Ct);
+            Assert.True(response.StatusCode == HttpStatusCode.Accepted, $"{(int)response.StatusCode}: {await response.Content.ReadAsStringAsync(Ct)}");
+            var accepted = await response.Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
+            await using var db = producer.App.Database.Context();
+            Assert.Equal(at.ToUnixTimeMilliseconds(), (await db.Requests.AsNoTracking().SingleAsync(r => r.Id == accepted!.Id, Ct)).OccurredAt!.Value.ToUnixTimeMilliseconds());
+
+            // An expiry with the same offset: the same instant too.
+            var expires = DateTimeOffset.UtcNow.AddHours(2);
+            json["occurredAt"] = null;
+            json["idempotencyKey"] = Guid.NewGuid().ToString("N");
+            json["expiresAt"] = expires.ToOffset(TimeSpan.FromHours(7)).ToString("yyyy-MM-dd'T'HH:mm:ss.fffzzz");
+            response = await client.PostAsync(SendUrl, new StringContent(json.ToJsonString(), System.Text.Encoding.UTF8, "application/json"), Ct);
+            Assert.True(response.StatusCode == HttpStatusCode.Accepted, $"{(int)response.StatusCode}: {await response.Content.ReadAsStringAsync(Ct)}");
+            accepted = await response.Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
+            Assert.Equal(expires.ToUnixTimeMilliseconds(), (await db.Requests.AsNoTracking().SingleAsync(r => r.Id == accepted!.Id, Ct)).ExpiresAt!.Value.ToUnixTimeMilliseconds());
+        }
+
+        /// <summary>QA (M45-n, 26 Nov): out of range is accepted and kept as sent (an hour ahead, thirty days old); only the escalate step clamps it.</summary>
+        [Fact]
+        public async Task An_occurrence_out_of_range_is_accepted_and_kept_as_sent()
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            var type = await DeclareAsync(client);
+            var now = DateTimeOffset.UtcNow;
+            var ahead = await (await client.PostAsJsonAsync(SendUrl, Send(type, occurredAt: now.AddHours(1)), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
+            var old = await (await client.PostAsJsonAsync(SendUrl, Send(type, occurredAt: now.AddDays(-30)), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
+            await using var db = producer.App.Database.Context();
+            var future = await db.Requests.AsNoTracking().SingleAsync(r => r.Id == ahead!.Id, Ct);
+            Assert.Equal(now.AddHours(1).ToUnixTimeMilliseconds(), future.OccurredAt!.Value.ToUnixTimeMilliseconds()); // as sent: the escalate step clamps
+            var past = await db.Requests.AsNoTracking().SingleAsync(r => r.Id == old!.Id, Ct);
+            Assert.Equal(now.AddDays(-30).ToUnixTimeMilliseconds(), past.OccurredAt!.Value.ToUnixTimeMilliseconds());
         }
 
         [Fact]

@@ -67,6 +67,14 @@ namespace Juice.Notifications
         public JsonElement? Data { get; init; }
         public IReadOnlyDictionary<string, string>? Links { get; init; }
         public DateTimeOffset? ExpiresAt { get; init; }
+
+        /// <summary>
+        /// When what it tells of happened (phase 5: an alert's firing time). An escalation's first step is due its wait after this, and never
+        /// before now, even when a workflow delay runs before the escalate step: a request sent late (held under a silence) escalates as if it
+        /// had been sent then. Null (the default): the first step waits from when the escalation starts, as before. At most 5 minutes ahead
+        /// of the service's clock and 7 days old as the escalation takes it: further is clamped (any value is accepted and kept as sent).
+        /// </summary>
+        public DateTimeOffset? OccurredAt { get; init; }
     }
 
     /// <summary>A recipient (<see cref="RecipientKinds"/>): <c>route</c>, or an <c>address</c> on a channel.</summary>

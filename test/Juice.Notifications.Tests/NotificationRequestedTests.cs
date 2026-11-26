@@ -74,6 +74,14 @@ namespace Juice.Notifications.Tests
         }
 
         [Fact]
+        public void An_occurrence_time_is_read_with_its_offset()
+        {
+            var message = JsonConvert.DeserializeObject<NotificationRequested>("""{ "Type": "a.b", "occurredAt": "2026-11-26T08:00:00+07:00" }""", JuiceReadSettings)!;
+            Assert.Equal(new DateTimeOffset(2026, 11, 26, 8, 0, 0, TimeSpan.FromHours(7)), message.OccurredAt);
+            Assert.Null(Read("{}").OccurredAt);
+        }
+
+        [Fact]
         public void A_producer_using_the_record_writes_the_data_as_it_holds_it()
         {
             var sent = new NotificationRequested { Type = "a.b", Data = JsonDocument.Parse("""{"at":"2026-11-13T08:00:00Z","ratio":1.5}""").RootElement };

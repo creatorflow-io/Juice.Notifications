@@ -51,7 +51,7 @@ namespace Juice.Notifications.Messaging
             var submission = new NotificationSubmission(message.Type, message.TypeVersion, message.IdempotencyKey, message.CorrelationKey,
                 message.Recipients?.Select(r => new RecipientSpec(r?.Kind, r?.Channel, r?.Address, r?.Id, r?.Key, r?.Resolver)).ToList(),
                 message.Actor is null ? null : new ActorSpec(message.Actor.Kind, message.Actor.Id),
-                message.Priority, message.Labels, message.Data, message.Links, message.ExpiresAt);
+                message.Priority, message.Labels, message.Data, message.Links, message.ExpiresAt, message.OccurredAt);
             // The consumer's span continues the producer's trace (the message's traceparent), so the stages carry it on as for HTTP.
             var traceParent = Activity.Current is { IdFormat: ActivityIdFormat.W3C } activity ? activity.Id : null;
             var command = new AcceptNotification(message.NotificationTenantId, app.Id, app.Key, submission, traceParent, app.Enabled);

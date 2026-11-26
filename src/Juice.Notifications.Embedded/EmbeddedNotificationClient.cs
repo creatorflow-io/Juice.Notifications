@@ -21,12 +21,14 @@ namespace Juice.Notifications.Embedded
         public Task<NotificationAccepted> SendAsync(NotificationToSend notification, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(notification);
-            return InHostTransactionAsync(async (services, db, application) =>
+            // A request on a correlation touches it (its row version): a hold, acknowledge or resolve committed at the same moment in another
+            // transaction makes this save lose, refused as concurrent_change like the correlation calls (deferred #53).
+            return ConcurrentAsync(() => InHostTransactionAsync(async (services, db, application) =>
             {
                 var submission = new NotificationSubmission(notification.Type, notification.TypeVersion, notification.IdempotencyKey, notification.CorrelationKey,
                     notification.Recipients?.Select(r => new RecipientSpec(r.Kind, r.Channel, r.Address, r.Id, r.Key, r.Resolver)).ToList(),
                     notification.Actor is { } actor ? new ActorSpec(actor.Kind, actor.Id) : null, notification.Priority, notification.Labels,
-                    notification.Data, notification.Links, notification.ExpiresAt);
+                    notification.Data, notification.Links, notification.ExpiresAt, notification.OccurredAt);
                 var outcome = await services.GetRequiredService<IMediator>().Send(new AcceptNotification(options.TenantId, application.Id, application.Key,
                     submission, Activity.Current?.Id, application.Enabled), cancellationToken);
                 var accepted = Value(outcome);
@@ -37,7 +39,7 @@ namespace Juice.Notifications.Embedded
                     transaction!.OnCommitted(() => nudges.Wake(Planning.PlannerStage.StageName));
                 }
                 return new NotificationAccepted(accepted.Id, accepted.Type, accepted.TypeVersion, accepted.AcceptedAt, accepted.Duplicate);
-            }, cancellationToken);
+            }, cancellationToken));
         }
 
         public Task<CorrelationState> AcknowledgeAsync(string correlationKey, string? by = null, CancellationToken cancellationToken = default)

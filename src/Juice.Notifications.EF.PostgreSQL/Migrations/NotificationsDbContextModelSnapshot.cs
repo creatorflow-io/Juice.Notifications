@@ -174,6 +174,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("destination");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
@@ -1139,6 +1140,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("key");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
@@ -1315,6 +1317,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("kind");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
@@ -1392,6 +1395,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("key");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
@@ -1950,6 +1954,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("links");
 
+                    b.Property<DateTimeOffset?>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
                     b.Property<string>("Priority")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -2373,6 +2381,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnName("key");
 
                     b.Property<string>("ManagedBy")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")

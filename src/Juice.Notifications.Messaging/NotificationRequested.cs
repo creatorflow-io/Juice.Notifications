@@ -48,6 +48,8 @@ namespace Juice.Notifications.Messaging
         [JsonProperty(ItemConverterType = typeof(StrictStringConverter))]
         public Dictionary<string, string>? Links { get; init; }
         public DateTimeOffset? ExpiresAt { get; init; }
+        /// <summary>When what it tells of happened: an escalation's first step is due its wait after it (absent: from when the escalation starts).</summary>
+        public DateTimeOffset? OccurredAt { get; init; }
     }
 
     /// <summary>
@@ -148,7 +150,7 @@ namespace Juice.Notifications.Messaging
         /// <summary>The fields a path can name, as the HTTP API spells them; Newtonsoft binds them in any case (<c>LABELS</c>).</summary>
         private static readonly Dictionary<string, string> FieldNames = new[]
         {
-            "type", "typeVersion", "idempotencyKey", "correlationKey", "recipients", "actor", "priority", "labels", "data", "links", "expiresAt",
+            "type", "typeVersion", "idempotencyKey", "correlationKey", "recipients", "actor", "priority", "labels", "data", "links", "expiresAt", "occurredAt",
             "kind", "channel", "address", "id", "key", "resolver",
         }.ToDictionary(n => n, StringComparer.OrdinalIgnoreCase);
 

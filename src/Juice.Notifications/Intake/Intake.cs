@@ -28,7 +28,7 @@ namespace Juice.Notifications.Intake
     public sealed record NotificationSubmission(
         string? Type, int? TypeVersion, string? IdempotencyKey, string? CorrelationKey, IReadOnlyList<RecipientSpec>? Recipients, ActorSpec? Actor,
         string? Priority, IReadOnlyDictionary<string, string>? Labels, JsonElement? Data, IReadOnlyDictionary<string, string>? Links,
-        DateTimeOffset? ExpiresAt);
+        DateTimeOffset? ExpiresAt, DateTimeOffset? OccurredAt = null);
 
     /// <summary>
     /// Accepts a notification for a tenant from an application: the request and its notification (<c>Planning</c>, due now) are stored in one
@@ -51,6 +51,10 @@ namespace Juice.Notifications.Intake
         public const int MaxRecipients = 100;
         public const int MaxLabels = 50;
         public const int MaxLinks = 20;
+        /// <summary>How far ahead of the service's clock an escalation takes a request's <c>occurredAt</c> (the producer's clock skew); later is clamped.</summary>
+        public static readonly TimeSpan OccurredSkew = TimeSpan.FromMinutes(5);
+        /// <summary>How old an escalation takes a request's <c>occurredAt</c>; older is clamped.</summary>
+        public static readonly TimeSpan MaxOccurredAge = TimeSpan.FromDays(7);
 
         /// <summary>Recipient kinds of later work, refused with a clear message rather than as unknown.</summary>
         private static readonly string[] LaterKinds = ["schedule"];
@@ -332,7 +336,8 @@ namespace Juice.Notifications.Intake
     {
         public async ValueTask<Outcome<AcceptedView>> Handle(AcceptNotification request, CancellationToken cancellationToken)
         {
-            var s = request.Submission;
+            // Times as instants (UTC): PostgreSQL's timestamptz takes no other offset, so a producer's +07:00 is the same moment, kept in UTC.
+            var s = request.Submission with { ExpiresAt = request.Submission.ExpiresAt?.ToUniversalTime(), OccurredAt = request.Submission.OccurredAt?.ToUniversalTime() };
             var tenant = request.NotificationTenantId;
             if (!RequestRules.IsKey(s.IdempotencyKey))
             {
@@ -464,7 +469,7 @@ namespace Juice.Notifications.Intake
                 TypeVersion = type.Version, SchemaHash = type.SchemaHash, CorrelationKey = s.CorrelationKey, Priority = priority,
                 Labels = s.Labels is null ? [] : new Dictionary<string, string>(s.Labels), Data = data.GetRawText(),
                 Recipients = JsonSerializer.Serialize(recipients, IntakeQueries.Json), Actor = actor,
-                Links = s.Links is null ? [] : new Dictionary<string, string>(s.Links), ExpiresAt = s.ExpiresAt, AcceptedAt = now,
+                Links = s.Links is null ? [] : new Dictionary<string, string>(s.Links), ExpiresAt = s.ExpiresAt, AcceptedAt = now, OccurredAt = s.OccurredAt,
                 TraceParent = request.TraceParent is { Length: <= 55 } trace ? trace : null,
             };
             db.Requests.Add(stored);
