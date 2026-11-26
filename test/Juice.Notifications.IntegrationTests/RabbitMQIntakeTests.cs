@@ -245,6 +245,29 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Contains(intake.Receiver!.Requests, r => r.Body.Contains("2026-11-13T08:00:00Z") && r.Body.Contains(request.Id.ToString()));
         }
 
+        /// <summary>
+        /// QA (M44-2c): a broker request asking <c>dryRun: true</c> on a real service goes all the way as dry: its delivery ends would-send with no
+        /// attempt, and the receiver the same route reaches hears nothing of it (a real request published beside it is delivered there).
+        /// </summary>
+        [Fact]
+        public async Task A_dry_request_over_the_broker_ends_would_send_and_reaches_no_receiver()
+        {
+            LocalStack.RequireAvailable();
+            var (dry, real) = ("dry-" + Short(), "real-" + Short());
+            await PublishAsync(intake.Producer, intake.Producer, Message(dry).Replace("\"Labels\":", "\"dryRun\": true,\n  \"Labels\":"));
+            await PublishAsync(intake.Producer, intake.Producer, Message(real));
+            var dryRequest = await AcceptedAsync(dry);
+            var realRequest = await AcceptedAsync(real);
+            Assert.True(dryRequest.DryRun);
+
+            using var producer = intake.App.Client(await LocalStack.ProducerTokenAsync());
+            var dryDetail = await DeliveredAsync(producer, dryRequest.Id);
+            Assert.Equal((DeliveryStatus.WouldSend, 0), (Assert.Single(dryDetail.Deliveries).Status, dryDetail.Deliveries[0].Attempts));
+            await DeliveredAsync(producer, realRequest.Id);
+            Assert.Contains(intake.Receiver!.Requests, r => r.Body.Contains(realRequest.Id.ToString()));
+            Assert.DoesNotContain(intake.Receiver!.Requests, r => r.Body.Contains(dryRequest.Id.ToString()));
+        }
+
         [Fact]
         public async Task Readiness_includes_the_broker_and_is_healthy_when_connected()
         {
