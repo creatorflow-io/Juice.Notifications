@@ -208,6 +208,12 @@ namespace Juice.Notifications.Data
         /// workflow delay ran first; null, the wait runs from when the escalation starts, as before.
         /// </summary>
         public DateTimeOffset? OccurredAt { get; init; }
+        /// <summary>
+        /// Accepted in dry run (phase-5 M44-2b, <c>Delivery:DryRun</c> at acceptance): the deliveries to its own recipients are dry whatever the
+        /// mode is when they are planned, so work accepted in shadow and planned after the switch (a delay, a digest) never goes out beside
+        /// legacy's. An escalation step's recipients take the mode when the step is planned instead.
+        /// </summary>
+        public bool DryRun { get; init; }
         /// <summary>When the type's <c>redact</c> paths were masked in <see cref="Data"/> (after everything was rendered, phase-4-plan I46).</summary>
         public DateTimeOffset? RedactedAt { get; set; }
         /// <summary>The producer's W3C trace context, carried to every stage.</summary>
@@ -706,6 +712,11 @@ namespace Juice.Notifications.Data
         public DateTimeOffset? ClosedAt { get; set; }
         /// <summary>The members it planned when it closed.</summary>
         public int Members { get; set; }
+        /// <summary>
+        /// Dry (phase-5 M44-2b): it takes only dry members, and its deliveries are dry. Part of the open digest's key, so dry and real members
+        /// never share one: a digest open at the switch closes dry, and members after it open a real one.
+        /// </summary>
+        public bool DryRun { get; init; }
     }
 
     /// <summary>

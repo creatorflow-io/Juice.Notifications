@@ -101,8 +101,8 @@ namespace Juice.Notifications.IntegrationTests
             await DrainAsync<NotificationRecipient, DeliveryPlannerStage>("delivery-planner");
         }
 
-        /// <summary>A notification of the type to the routes it matches, due now.</summary>
-        private async Task NotificationAsync(NotificationType type, int n)
+        /// <summary>A notification of the type to the routes it matches, due now; accepted dry when <paramref name="dry"/> (M44-2b).</summary>
+        private async Task NotificationAsync(NotificationType type, int n, bool dry = false)
         {
             await using var db = _database.Context();
             var request = Seed.Request(Tenant, _app, type.Id, $"{type.Key}-{n}-{Guid.NewGuid():N}");
@@ -110,6 +110,7 @@ namespace Juice.Notifications.IntegrationTests
             db.Entry(request).Property(r => r.Data).CurrentValue = $$"""{ "n": {{n}} }""";
             db.Entry(request).Property(r => r.AcceptedAt).CurrentValue = _clock.GetUtcNow().AddSeconds(n);
             db.Entry(request).Property(r => r.Recipients).CurrentValue = """[{"kind":"route"}]""";
+            db.Entry(request).Property(r => r.DryRun).CurrentValue = dry;
             var notification = Seed.Notification(Tenant, request.Id);
             notification.NextAt = _clock.GetUtcNow();
             db.AddRange(request, notification);
@@ -121,6 +122,41 @@ namespace Juice.Notifications.IntegrationTests
             await using var db = _database.Context();
             var key = DestinationKeys.Target(_targets[target]);
             return await db.Deliveries.AsNoTracking().Where(d => d.DestinationKey == key).OrderBy(d => d.CreatedAt).ToListAsync(Ct);
+        }
+
+        /// <summary>
+        /// Across the switch (M44-2b): a route's digest of requests accepted in dry run stays dry and closes dry, though the option is off now; a
+        /// request accepted after the switch doesn't join it but opens a real digest for the route, so legacy's send isn't repeated and the new
+        /// one isn't lost.
+        /// </summary>
+        [Fact]
+        public async Task A_route_digest_open_at_the_switch_closes_dry_and_a_member_after_it_opens_a_real_one()
+        {
+            LocalStack.RequireAvailable();
+            await NotificationAsync(_plain, 1, dry: true);
+            await NotificationAsync(_plain, 2, dry: true);
+            await PlanAsync();
+            Assert.All(await DeliveriesAsync("at-once"), d => Assert.True(d.DryRun));
+            _clock.Advance(TimeSpan.FromSeconds(30));
+            await NotificationAsync(_plain, 3);
+            await PlanAsync();
+            await using (var db = _database.Context())
+            {
+                Assert.Equal([true, false], (await db.Digests.AsNoTracking().Where(d => d.State == DigestState.Open).OrderBy(d => d.OpensAt)
+                    .ToListAsync(Ct)).Select(d => d.DryRun));
+            }
+
+            _clock.Advance(TimeSpan.FromSeconds(60));
+            await DrainAsync<Digest, DigestStage>("digest");
+            var grouped = await DeliveriesAsync("grouped");
+            Assert.Equal([true, false], grouped.Select(d => d.DryRun));
+            await using var check = _database.Context();
+            var items = new List<int>();
+            foreach (var delivery in grouped)
+            {
+                items.Add(await check.DeliveryItems.CountAsync(i => i.DeliveryId == delivery.Id, Ct));
+            }
+            Assert.Equal([2, 1], items);
         }
 
         [Fact]

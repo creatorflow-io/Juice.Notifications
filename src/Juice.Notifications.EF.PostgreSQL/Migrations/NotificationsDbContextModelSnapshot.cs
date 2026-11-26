@@ -924,6 +924,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("closes_at");
 
+                    b.Property<bool>("DryRun")
+                        .HasColumnType("boolean")
+                        .HasColumnName("dry_run");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -978,7 +982,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasDatabaseName("ix_digests_failing")
                         .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
 
-                    b.HasIndex("TenantId", "TypeKey", "By", "Key")
+                    b.HasIndex("TenantId", "TypeKey", "By", "Key", "DryRun")
                         .IsUnique()
                         .HasDatabaseName("ix_digests_open")
                         .HasFilter("state = 'Open'");
@@ -1940,6 +1944,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .IsRequired()
                         .HasColumnType("jsonb")
                         .HasColumnName("data");
+
+                    b.Property<bool>("DryRun")
+                        .HasColumnType("boolean")
+                        .HasColumnName("dry_run");
 
                     b.Property<DateTimeOffset?>("ExpiresAt")
                         .HasColumnType("timestamp with time zone")

@@ -331,7 +331,7 @@ namespace Juice.Notifications.Intake
     }
 
     internal sealed class IntakeHandler(NotificationsDbContext db, IChannelRegistry channels, DataSchemas schemas, TimeProvider clock,
-        IEnumerable<Planning.IRecipientResolver> installed)
+        IEnumerable<Planning.IRecipientResolver> installed, Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions> delivery)
         : IRequestHandler<AcceptNotification, Outcome<AcceptedView>>
     {
         public async ValueTask<Outcome<AcceptedView>> Handle(AcceptNotification request, CancellationToken cancellationToken)
@@ -471,6 +471,8 @@ namespace Juice.Notifications.Intake
                 Recipients = JsonSerializer.Serialize(recipients, IntakeQueries.Json), Actor = actor,
                 Links = s.Links is null ? [] : new Dictionary<string, string>(s.Links), ExpiresAt = s.ExpiresAt, AcceptedAt = now, OccurredAt = s.OccurredAt,
                 TraceParent = request.TraceParent is { Length: <= 55 } trace ? trace : null,
+                // The mode it is accepted in (M44-2b): its own recipients' deliveries keep it, however late they are planned.
+                DryRun = delivery.Value.DryRun,
             };
             db.Requests.Add(stored);
             db.Notifications.Add(new Notification

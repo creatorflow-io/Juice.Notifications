@@ -40,7 +40,7 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
         private readonly Dictionary<bool, ServiceProvider> _dispatchers = [];
-        private ServiceProvider? _planner;
+        private readonly Dictionary<bool, ServiceProvider> _planners = [];
 
         public async ValueTask InitializeAsync()
         {
@@ -52,14 +52,6 @@ namespace Juice.Notifications.IntegrationTests
             await using (await _database.MigratedAsync())
             {
             }
-            // The delivery planner in dry run.
-            var services = new ServiceCollection().AddLogging(l => l.AddProvider(new ErrorLogProvider()));
-            services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
-            services.AddSingleton<TimeProvider>(_clock);
-            services.AddPostgresClaimStore();
-            services.Configure<DeliveryOptions>(o => o.DryRun = true);
-            services.AddDeliveryPlanning(Options, runWorkers: false);
-            _planner = services.BuildServiceProvider();
         }
 
         public async ValueTask DisposeAsync()
@@ -68,11 +60,27 @@ namespace Juice.Notifications.IntegrationTests
             {
                 await dispatcher.DisposeAsync();
             }
-            if (_planner is not null)
+            foreach (var planner in _planners.Values)
             {
-                await _planner.DisposeAsync();
+                await planner.DisposeAsync();
             }
             await _database.DisposeAsync();
+        }
+
+        /// <summary>The delivery planner with <c>Delivery:DryRun</c> as <paramref name="dryRun"/>: the mode when it plans.</summary>
+        private ServiceProvider Planner(bool dryRun)
+        {
+            if (!_planners.TryGetValue(dryRun, out var provider))
+            {
+                var services = new ServiceCollection().AddLogging(l => l.AddProvider(new ErrorLogProvider()));
+                services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
+                services.AddSingleton<TimeProvider>(_clock);
+                services.AddPostgresClaimStore();
+                services.Configure<DeliveryOptions>(o => o.DryRun = dryRun);
+                services.AddDeliveryPlanning(Options, runWorkers: false);
+                _planners[dryRun] = provider = services.BuildServiceProvider();
+            }
+            return provider;
         }
 
         /// <summary>A dispatcher whose own <c>Delivery:DryRun</c> is <paramref name="dryRun"/>: it decides nothing, the delivery's mark does.</summary>
@@ -103,8 +111,11 @@ namespace Juice.Notifications.IntegrationTests
 
         private sealed record Scene(Guid Tenant, Guid App, NotificationType Type, NotificationRequest Request, Notification Notification, Integration Integration);
 
-        /// <summary>A tenant of its own: a type with an email template, a request and its notification, and a fake email integration.</summary>
-        private async Task<Scene> SceneAsync(DateTimeOffset? expiresAt = null, bool enabled = true, string? secretRef = null)
+        /// <summary>
+        /// A tenant of its own: a type with an email template, a request (accepted dry unless <paramref name="acceptedDry"/> is false) and its
+        /// notification, and a fake email integration.
+        /// </summary>
+        private async Task<Scene> SceneAsync(DateTimeOffset? expiresAt = null, bool enabled = true, string? secretRef = null, bool acceptedDry = true)
         {
             await using var db = _database.Context();
             var tenant = Guid.CreateVersion7();
@@ -114,6 +125,7 @@ namespace Juice.Notifications.IntegrationTests
             db.Entry(request).Property(r => r.TypeKey).CurrentValue = type.Key;
             db.Entry(request).Property(r => r.Data).CurrentValue = """{ "host": "db-1" }""";
             db.Entry(request).Property(r => r.ExpiresAt).CurrentValue = expiresAt;
+            db.Entry(request).Property(r => r.DryRun).CurrentValue = acceptedDry;
             var notification = Seed.Notification(tenant, request.Id);
             (notification.State, notification.NextAt) = (NotificationState.Planned, null);
             var integration = new Integration
@@ -131,8 +143,11 @@ namespace Juice.Notifications.IntegrationTests
             return new Scene(tenant, app.Id, type, request, notification, integration);
         }
 
-        /// <summary>Plans an address recipient through the dry-run delivery planner; the delivery it made.</summary>
-        private async Task<Delivery> PlannedAsync(Scene scene)
+        /// <summary>
+        /// Plans an address recipient (of <paramref name="escalationStep"/>, 0 for the request's own) through the delivery planner, with
+        /// <c>Delivery:DryRun</c> as <paramref name="dryNow"/>; the delivery it made.
+        /// </summary>
+        private async Task<Delivery> PlannedAsync(Scene scene, bool dryNow = true, int escalationStep = 0)
         {
             await using (var db = _database.Context())
             {
@@ -140,11 +155,11 @@ namespace Juice.Notifications.IntegrationTests
                 {
                     TenantId = scene.Tenant, NotificationId = scene.Notification.Id, Kind = RecipientKind.External, Channel = Channels.Email,
                     Address = "ops@example.com", Resolver = "address", NamedAs = "address:email:ops@example.com", Outcome = RecipientOutcome.Planned,
-                    NextAt = _clock.GetUtcNow(), CreatedAt = Seed.Now,
+                    NextAt = _clock.GetUtcNow(), CreatedAt = Seed.Now, EscalationStep = escalationStep,
                 });
                 await db.SaveChangesAsync(Ct);
             }
-            var pass = await _planner!.GetRequiredService<StageRunner<NotificationRecipient, DeliveryPlannerStage>>().RunOnceAsync("delivery-planner", Options, Ct);
+            var pass = await Planner(dryNow).GetRequiredService<StageRunner<NotificationRecipient, DeliveryPlannerStage>>().RunOnceAsync("delivery-planner", Options, Ct);
             Assert.Equal(1, pass.Completed);
             await using var read = _database.Context();
             return await read.Deliveries.AsNoTracking().SingleAsync(d => d.TenantId == scene.Tenant, Ct);
@@ -214,6 +229,54 @@ namespace Juice.Notifications.IntegrationTests
             var (row, attempts) = await ReadAsync(delivery);
             Assert.Equal((DeliveryStatus.Delivered, 1), (row.Status, attempts));
             Assert.Equal(sends + 1, _email.Sends);
+        }
+
+        /// <summary>
+        /// The dry stamp (M44-2b): a request accepted in dry run whose recipients are planned after the switch (its workflow's 1 h delay ran past
+        /// it) is still dry: legacy sent it already, so the new path records would-send, whatever the mode is now.
+        /// </summary>
+        [Fact]
+        public async Task A_request_accepted_dry_and_planned_after_the_switch_is_would_send()
+        {
+            LocalStack.RequireAvailable();
+            var scene = await SceneAsync(acceptedDry: true);
+            _clock.Advance(TimeSpan.FromHours(1));
+            var planned = await PlannedAsync(scene, dryNow: false);
+            Assert.True(planned.DryRun);
+            var sends = _email.Sends;
+            Assert.Equal(1, (await DispatchAsync(dryRunOption: false)).Completed);
+            Assert.Equal((DeliveryStatus.WouldSend, 0), ((await ReadAsync(planned)).Row.Status, (await ReadAsync(planned)).Attempts));
+            Assert.Equal(sends, _email.Sends);
+        }
+
+        /// <summary>
+        /// An escalation step's recipients take the mode when the step is planned (M44-2b): legacy's escalation stops at the switch, so a step of a
+        /// request accepted dry, planned after it, pages for real; one planned while the option is on is dry, even for a request accepted for real.
+        /// </summary>
+        [Theory]
+        [InlineData(true, false, false)]
+        [InlineData(false, true, true)]
+        [InlineData(true, true, true)]
+        public async Task An_escalation_step_is_dry_as_the_mode_is_when_it_is_planned(bool acceptedDry, bool dryNow, bool expectedDry)
+        {
+            LocalStack.RequireAvailable();
+            var scene = await SceneAsync(acceptedDry: acceptedDry);
+            var planned = await PlannedAsync(scene, dryNow, escalationStep: 1);
+            Assert.Equal(expectedDry, planned.DryRun);
+            _email.Then(SendResult.Delivered());
+            var sends = _email.Sends;
+            Assert.Equal(1, (await DispatchAsync(dryRunOption: dryNow)).Completed);
+            var (row, attempts) = await ReadAsync(planned);
+            Assert.Equal(expectedDry ? (DeliveryStatus.WouldSend, 0, sends) : (DeliveryStatus.Delivered, 1, sends + 1), (row.Status, attempts, _email.Sends));
+        }
+
+        /// <summary>A request accepted for real, its own recipients planned while the option is on (a switch back to shadow), stays real.</summary>
+        [Fact]
+        public async Task A_request_accepted_for_real_keeps_its_own_recipients_real()
+        {
+            LocalStack.RequireAvailable();
+            var scene = await SceneAsync(acceptedDry: false);
+            Assert.False((await PlannedAsync(scene, dryNow: true)).DryRun);
         }
 
         [Fact]
