@@ -75,6 +75,67 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
 
+        /// <summary>The hold columns (phase-5 M44): one hold per correlation, its start and its reason set together; dry run off by default.</summary>
+        [Fact]
+        public async Task A_hold_has_both_its_start_and_its_reason_and_a_delivery_is_not_dry_unless_planned_so()
+        {
+            LocalStack.RequireAvailable();
+            var ct = TestContext.Current.CancellationToken;
+            await using var db = fixture.Database.Context();
+            var correlation = new Correlation
+            {
+                TenantId = TwoTenantDatabase.TenantA, ApplicationId = fixture.A.Application, Key = "schema-hold-" + Guid.NewGuid().ToString("N"),
+                CreatedAt = Seed.Now, LastRequestAt = Seed.Now, UpdatedAt = Seed.Now, HeldAt = Seed.Now,
+            };
+            db.Add(correlation);
+            var error = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync(ct));
+            var refused = Assert.IsType<PostgresException>(error.InnerException);
+            Assert.Equal((PostgresErrorCodes.CheckViolation, "ck_correlations_hold"), (refused.SqlState, refused.ConstraintName));
+
+            correlation.HoldReason = "silence:7";
+            await db.SaveChangesAsync(ct);
+            var dry = await db.Database.SqlQuery<bool>($"SELECT dry_run AS \"Value\" FROM notifications.deliveries WHERE id = {fixture.A.Delivery}").SingleAsync(ct);
+            Assert.False(dry);
+        }
+
+        /// <summary>The webhooks alias's rows (ManagedBy.WebhooksAlias, phase 5 M46) fit every table that records who owns a row (six: the five widened to 20, and escalation policies).</summary>
+        [Fact]
+        public async Task A_row_owned_by_the_webhooks_alias_is_stored_and_read_in_every_owned_table()
+        {
+            LocalStack.RequireAvailable();
+            var ct = TestContext.Current.CancellationToken;
+            var (tenant, suffix) = (TwoTenantDatabase.TenantA, Guid.NewGuid().ToString("N")[..8]);
+            var alias = ManagedBy.WebhooksAlias;
+            var integration = Seed.Integration(tenant, "alias-" + suffix);
+            integration.ManagedBy = alias;
+            await using (var db = fixture.Database.Context())
+            {
+                db.AddRange(integration,
+                    new IntegrationTarget
+                    {
+                        TenantId = tenant, IntegrationId = integration.Id, Key = "alias-" + suffix, Address = "https://example.com/alias", ManagedBy = alias,
+                        DefinitionHash = "d", UpdatedAt = Seed.Now,
+                    },
+                    new Route { TenantId = tenant, Key = "alias-" + suffix, Match = "{}", ManagedBy = alias, DefinitionHash = "d", UpdatedAt = Seed.Now },
+                    new AllowlistEntry { TenantId = tenant, Destination = $"alias-{suffix}.example.com", ManagedBy = alias, UpdatedAt = Seed.Now },
+                    new EscalationPolicy { TenantId = tenant, Key = "alias-" + suffix, Steps = "[]", ManagedBy = alias, DefinitionHash = "d", UpdatedAt = Seed.Now },
+                    new RecipientResolverConfig
+                    {
+                        TenantId = tenant, Key = "alias-" + suffix, Kind = "fake", Handles = ["group"], Settings = "{}", ManagedBy = alias, DefinitionHash = "d",
+                        UpdatedAt = Seed.Now,
+                    });
+                await db.SaveChangesAsync(ct);
+            }
+            await using var read = fixture.Database.Context();
+            var key = "alias-" + suffix;
+            Assert.Equal(alias, (await read.Integrations.AsNoTracking().SingleAsync(i => i.TenantId == tenant && i.Key == key, ct)).ManagedBy);
+            Assert.Equal(alias, (await read.IntegrationTargets.AsNoTracking().SingleAsync(t => t.TenantId == tenant && t.Key == key, ct)).ManagedBy);
+            Assert.Equal(alias, (await read.Routes.AsNoTracking().SingleAsync(r => r.TenantId == tenant && r.Key == key, ct)).ManagedBy);
+            Assert.Equal(alias, (await read.Allowlist.AsNoTracking().SingleAsync(a => a.TenantId == tenant && a.Destination == key + ".example.com", ct)).ManagedBy);
+            Assert.Equal(alias, (await read.EscalationPolicies.AsNoTracking().SingleAsync(p => p.TenantId == tenant && p.Key == key, ct)).ManagedBy);
+            Assert.Equal(alias, (await read.Resolvers.AsNoTracking().SingleAsync(r => r.TenantId == tenant && r.Key == key, ct)).ManagedBy);
+        }
+
         [Fact]
         public async Task A_plain_text_actor_is_stored()
         {

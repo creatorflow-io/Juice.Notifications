@@ -21,7 +21,8 @@ namespace Juice.Notifications.History
         int Limit = Investigation.DefaultLimit);
 
     public sealed record CorrelationListRow(Guid Id, string Application, string Key, CorrelationState State, string? AcknowledgedBy,
-        DateTimeOffset? AcknowledgedAt, DateTimeOffset? ResolvedAt, string? Outcome, DateTimeOffset CreatedAt, DateTimeOffset LastRequestAt);
+        DateTimeOffset? AcknowledgedAt, DateTimeOffset? ResolvedAt, string? Outcome, DateTimeOffset CreatedAt, DateTimeOffset LastRequestAt,
+        DateTimeOffset? HeldAt);
 
     public sealed record Page<T>(IReadOnlyList<T> Items, Guid? Next);
 
@@ -162,7 +163,8 @@ namespace Juice.Notifications.History
             }
             var found = await rows.OrderByDescending(r => r.correlation.Id).Take(limit + 1)
                 .Select(r => new CorrelationListRow(r.correlation.Id, r.Application, r.correlation.Key, r.correlation.State, r.correlation.AcknowledgedBy,
-                    r.correlation.AcknowledgedAt, r.correlation.ResolvedAt, r.correlation.Outcome, r.correlation.CreatedAt, r.correlation.LastRequestAt))
+                    r.correlation.AcknowledgedAt, r.correlation.ResolvedAt, r.correlation.Outcome, r.correlation.CreatedAt, r.correlation.LastRequestAt,
+                    r.correlation.HeldAt))
                 .ToListAsync(ct);
             var page = found.Take(limit).ToList();
             return new Page<CorrelationListRow>(page, found.Count > limit ? page[^1].Id : null);

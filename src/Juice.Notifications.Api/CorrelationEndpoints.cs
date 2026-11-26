@@ -107,6 +107,7 @@ namespace Juice.Notifications.Api
 
         internal static CorrelationResponse ToResponse(CorrelationView v)
             => new(v.Key, v.State, v.AcknowledgedBy, v.AcknowledgedAt, v.ResolvedAt, v.ResolvedBy, v.Outcome, v.ReopenedAt, v.CreatedAt, v.LastRequestAt,
-                v.Notifications.Select(n => new CorrelationNotificationResponse(n.Id, n.RequestId, n.Type, n.State, n.CreatedAt)).ToList(), v.Recipients, v.Deliveries);
+                v.Notifications.Select(n => new CorrelationNotificationResponse(n.Id, n.RequestId, n.Type, n.State, n.CreatedAt)).ToList(), v.Recipients, v.Deliveries,
+                v.HeldAt, v.HoldReason, v.HeldBy);
     }
 }

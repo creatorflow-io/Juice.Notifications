@@ -175,8 +175,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.PrimitiveCollection<int[]>("Ports")
@@ -434,6 +434,20 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<DateTimeOffset?>("HeldAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("held_at");
+
+                    b.Property<string>("HeldBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("held_by");
+
+                    b.Property<string>("HoldReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("hold_reason");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -488,7 +502,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_correlations_key");
 
-                    b.ToTable("correlations", "notifications");
+                    b.ToTable("correlations", "notifications", t =>
+                        {
+                            t.HasCheckConstraint("ck_correlations_hold", "(held_at IS NULL) = (hold_reason IS NULL)");
+                        });
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.Delivery", b =>
@@ -551,6 +568,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.Property<Guid?>("DigestId")
                         .HasColumnType("uuid")
                         .HasColumnName("digest_id");
+
+                    b.Property<bool>("DryRun")
+                        .HasColumnType("boolean")
+                        .HasColumnName("dry_run");
 
                     b.Property<int>("Failovers")
                         .HasColumnType("integer")
@@ -1017,6 +1038,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<DateTimeOffset?>("HeldAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("held_at");
+
                     b.Property<DateTimeOffset?>("LeaseUntil")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("lease_until");
@@ -1279,8 +1304,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.Property<int>("Priority")
@@ -1356,8 +1381,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
@@ -2266,8 +2291,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.Property<string>("SecretRef")
@@ -2329,8 +2354,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.Property<string>("Match")

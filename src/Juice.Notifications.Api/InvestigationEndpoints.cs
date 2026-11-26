@@ -74,7 +74,7 @@ namespace Juice.Notifications.Api
             }
             var page = await reader.CorrelationsAsync(tenantId, new CorrelationFilter(application, key, parsed, before, limit ?? Investigation.DefaultLimit), ct);
             return Results.Ok(new CorrelationPageResponse(page.Items.Select(c => new CorrelationListItemResponse(c.Id, c.Application, c.Key, c.State,
-                c.AcknowledgedBy, c.AcknowledgedAt, c.ResolvedAt, c.Outcome, c.CreatedAt, c.LastRequestAt)).ToList(), page.Next));
+                c.AcknowledgedBy, c.AcknowledgedAt, c.ResolvedAt, c.Outcome, c.CreatedAt, c.LastRequestAt, c.HeldAt)).ToList(), page.Next));
         }
 
         private static async Task<IResult> OverviewAsync(Guid tenantId, Investigation reader, IMemoryCache cache, CancellationToken ct)
