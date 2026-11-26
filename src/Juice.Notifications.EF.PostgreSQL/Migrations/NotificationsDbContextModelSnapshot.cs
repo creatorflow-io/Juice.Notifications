@@ -1950,6 +1950,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("links");
 
+                    b.Property<DateTimeOffset?>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
                     b.Property<string>("Priority")
                         .IsRequired()
                         .HasMaxLength(20)

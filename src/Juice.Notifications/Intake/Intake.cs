@@ -28,7 +28,7 @@ namespace Juice.Notifications.Intake
     public sealed record NotificationSubmission(
         string? Type, int? TypeVersion, string? IdempotencyKey, string? CorrelationKey, IReadOnlyList<RecipientSpec>? Recipients, ActorSpec? Actor,
         string? Priority, IReadOnlyDictionary<string, string>? Labels, JsonElement? Data, IReadOnlyDictionary<string, string>? Links,
-        DateTimeOffset? ExpiresAt);
+        DateTimeOffset? ExpiresAt, DateTimeOffset? OccurredAt = null);
 
     /// <summary>
     /// Accepts a notification for a tenant from an application: the request and its notification (<c>Planning</c>, due now) are stored in one
@@ -51,6 +51,10 @@ namespace Juice.Notifications.Intake
         public const int MaxRecipients = 100;
         public const int MaxLabels = 50;
         public const int MaxLinks = 20;
+        /// <summary>How far ahead of the service's clock a request's <c>occurredAt</c> may be (the producer's clock skew).</summary>
+        public static readonly TimeSpan OccurredSkew = TimeSpan.FromMinutes(5);
+        /// <summary>How old a request's <c>occurredAt</c> may be.</summary>
+        public static readonly TimeSpan MaxOccurredAge = TimeSpan.FromDays(7);
 
         /// <summary>Recipient kinds of later work, refused with a clear message rather than as unknown.</summary>
         private static readonly string[] LaterKinds = ["schedule"];
@@ -402,6 +406,12 @@ namespace Juice.Notifications.Intake
             {
                 invalid.Add(new FieldError("/expiresAt", "The request expires in the past."));
             }
+            if (s.OccurredAt is { } occurred && (occurred > now + RequestRules.OccurredSkew || occurred < now - RequestRules.MaxOccurredAge))
+            {
+                invalid.Add(new FieldError("/occurredAt", occurred > now
+                    ? $"It happened in the future: at most {RequestRules.OccurredSkew.TotalMinutes:0} minutes ahead of the service's clock."
+                    : $"It happened more than {RequestRules.MaxOccurredAge.TotalDays:0} days ago."));
+            }
             RequestRules.Labels(s.Labels, invalid);
             RequestRules.Links(s.Links, invalid);
             var actor = RequestRules.Actor(s.Actor, invalid);
@@ -464,7 +474,7 @@ namespace Juice.Notifications.Intake
                 TypeVersion = type.Version, SchemaHash = type.SchemaHash, CorrelationKey = s.CorrelationKey, Priority = priority,
                 Labels = s.Labels is null ? [] : new Dictionary<string, string>(s.Labels), Data = data.GetRawText(),
                 Recipients = JsonSerializer.Serialize(recipients, IntakeQueries.Json), Actor = actor,
-                Links = s.Links is null ? [] : new Dictionary<string, string>(s.Links), ExpiresAt = s.ExpiresAt, AcceptedAt = now,
+                Links = s.Links is null ? [] : new Dictionary<string, string>(s.Links), ExpiresAt = s.ExpiresAt, AcceptedAt = now, OccurredAt = s.OccurredAt ?? now,
                 TraceParent = request.TraceParent is { Length: <= 55 } trace ? trace : null,
             };
             db.Requests.Add(stored);

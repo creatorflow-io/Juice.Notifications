@@ -67,6 +67,13 @@ namespace Juice.Notifications
         public JsonElement? Data { get; init; }
         public IReadOnlyDictionary<string, string>? Links { get; init; }
         public DateTimeOffset? ExpiresAt { get; init; }
+
+        /// <summary>
+        /// When what it tells of happened (phase 5: an alert's firing time); the acceptance time when null. An escalation's first step is due
+        /// from it, so a request sent late (held under a silence) escalates as if it had been sent then. At most a few minutes ahead of the
+        /// service's clock and 7 days old.
+        /// </summary>
+        public DateTimeOffset? OccurredAt { get; init; }
     }
 
     /// <summary>A recipient (<see cref="RecipientKinds"/>): <c>route</c>, or an <c>address</c> on a channel.</summary>

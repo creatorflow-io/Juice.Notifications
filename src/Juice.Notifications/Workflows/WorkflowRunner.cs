@@ -230,8 +230,19 @@ namespace Juice.Notifications.Workflows
             db.Escalations.Add(new Escalation
             {
                 TenantId = row.TenantId, NotificationId = row.Id, CorrelationId = correlation, PolicyId = policy.Id, NextStep = 0, State = EscalationState.Running,
-                NextAt = now + TimeSpan.FromMinutes(steps[0].AfterMinutes), CreatedAt = now, UpdatedAt = now,
+                NextAt = FirstStepAt(request, steps[0].AfterMinutes, now), CreatedAt = now, UpdatedAt = now,
             });
+        }
+
+        /// <summary>
+        /// When an escalation's first step is due (phase 5, M45-n): its wait from when the request's event happened (<c>occurredAt</c>; the
+        /// acceptance time when it didn't say), and never before now. A request sent late (held under a silence) gets the step at once if its
+        /// wait has passed, as legacy escalation does; later steps stay relative to the step before.
+        /// </summary>
+        internal static DateTimeOffset FirstStepAt(NotificationRequest request, double afterMinutes, DateTimeOffset now)
+        {
+            var due = (request.OccurredAt ?? request.AcceptedAt) + TimeSpan.FromMinutes(afterMinutes);
+            return due > now ? due : now;
         }
 
         /// <summary>Advisory locks of digests: joining one and closing it take the same lock per tenant, type, grouping and key.</summary>

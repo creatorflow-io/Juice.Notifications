@@ -91,7 +91,7 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>A notification to the crew on a new correlation, escalating by the policy named; its id and correlation key.</summary>
-        private async Task<(Guid Notification, string Key)> NotificationAsync(string policy)
+        private async Task<(Guid Notification, string Key)> NotificationAsync(string policy, DateTimeOffset? occurredAt = null)
         {
             await using var db = _database.Context();
             var key = "incident:" + Guid.NewGuid().ToString("N");
@@ -104,6 +104,8 @@ namespace Juice.Notifications.IntegrationTests
             db.Entry(request).Property(r => r.CorrelationId).CurrentValue = correlation.Id;
             db.Entry(request).Property(r => r.Labels).CurrentValue = new Dictionary<string, string> { ["policy"] = policy };
             db.Entry(request).Property(r => r.Recipients).CurrentValue = """[{"kind":"group","id":"crew","resolver":"staff"}]""";
+            db.Entry(request).Property(r => r.OccurredAt).CurrentValue = occurredAt;
+            db.Entry(request).Property(r => r.AcceptedAt).CurrentValue = now;
             var notification = Seed.Notification(Tenant, request.Id);
             notification.NextAt = now;
             db.AddRange(request, notification);
@@ -188,6 +190,29 @@ namespace Juice.Notifications.IntegrationTests
             var claims = await scope.ServiceProvider.GetRequiredService<IClaimStore>()
                 .ClaimAsync<Escalation>("anyone", 10, TimeSpan.FromSeconds(30), _clock.GetUtcNow().AddDays(30), Ct);
             Assert.Empty(claims);
+        }
+
+        /// <summary>
+        /// The first step is due its wait after the request's event (phase 5, M45-n), never before now: a request sent late (held under a
+        /// silence past the wait) gets the step at once; a recent one waits out what is left; later steps stay relative to the step before.
+        /// </summary>
+        [Theory]
+        [InlineData(-60, 0)]
+        [InlineData(-2, 3)]
+        [InlineData(null, 5)]
+        public async Task The_first_step_is_due_its_wait_after_the_event_and_never_before_now(int? occurredMinutesAgo, int dueInMinutes)
+        {
+            LocalStack.RequireAvailable();
+            var now = _clock.GetUtcNow();
+            var (id, _) = await NotificationAsync("keeps", occurredMinutesAgo is { } ago ? now.AddMinutes(ago) : null);
+            await DrainAsync<Notification, PlannerStage>("planner");
+            Assert.Equal(now.AddMinutes(dueInMinutes), (await EscalationAsync(id)).NextAt!.Value);
+            if (dueInMinutes == 0)
+            {
+                await DrainAsync<Escalation, EscalationStage>("escalation");
+                await DrainAsync<Notification, PlannerStage>("planner");
+                Assert.Contains(("lee", 1, RecipientOutcome.Planned), await PeopleAsync(id));
+            }
         }
 
         [Fact]

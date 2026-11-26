@@ -29,7 +29,8 @@ namespace Juice.Notifications.Api.Contracts
     /// <summary><c>POST /api/v1/tenants/{tenantId}/notifications</c> (design §5.2).</summary>
     public sealed record SendNotificationBody(
         string? Type, int? TypeVersion, string? IdempotencyKey, string? CorrelationKey, List<RecipientBody>? Recipients, ActorBody? Actor,
-        string? Priority, Dictionary<string, string>? Labels, JsonElement? Data, Dictionary<string, string>? Links, DateTimeOffset? ExpiresAt);
+        string? Priority, Dictionary<string, string>? Labels, JsonElement? Data, Dictionary<string, string>? Links, DateTimeOffset? ExpiresAt,
+        DateTimeOffset? OccurredAt = null);
 
     /// <summary><c>202</c> for a new request; <c>200</c> with the original for a repeated idempotency key.</summary>
     public sealed record AcceptedResponse(Guid Id, string Status, string Type, int TypeVersion, DateTimeOffset AcceptedAt);

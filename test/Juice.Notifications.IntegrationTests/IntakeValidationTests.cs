@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Juice.Notifications.Api.Contracts;
+using Microsoft.EntityFrameworkCore;
 
 namespace Juice.Notifications.IntegrationTests
 {
@@ -24,8 +25,8 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         private static SendNotificationBody Send(string type, string? priority = null, DateTimeOffset? expiresAt = null, string data = "{}",
-            Dictionary<string, string>? links = null, string? correlationKey = null)
-            => new(type, null, Guid.NewGuid().ToString("N"), correlationKey, null, null, priority, null, JsonElement.Parse(data), links, expiresAt);
+            Dictionary<string, string>? links = null, string? correlationKey = null, DateTimeOffset? occurredAt = null)
+            => new(type, null, Guid.NewGuid().ToString("N"), correlationKey, null, null, priority, null, JsonElement.Parse(data), links, expiresAt, occurredAt);
 
         private static async Task<(HttpStatusCode Status, string? Code, List<string> Pointers)> ProblemAsync(HttpResponseMessage response)
         {
@@ -45,6 +46,39 @@ namespace Juice.Notifications.IntegrationTests
             var (status, code, pointers) = await ProblemAsync(await client.PostAsJsonAsync(SendUrl, Send(type, priority: "urgent"), Ct));
             Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidRequest), (status, code));
             Assert.Equal(["/priority"], pointers);
+        }
+
+        /// <summary>
+        /// When its event happened (phase 5, M45-n): absent, it is the acceptance time; a few minutes ahead of the service's clock (skew) or up to
+        /// 7 days old is taken; further ahead, or older, is refused at the field.
+        /// </summary>
+        [Fact]
+        public async Task An_occurrence_is_at_most_a_little_ahead_and_7_days_old_and_defaults_to_acceptance()
+        {
+            LocalStack.RequireAvailable();
+            using var client = await producer.ProducerAsync();
+            var type = await DeclareAsync(client);
+            var now = DateTimeOffset.UtcNow;
+            foreach (var taken in new DateTimeOffset?[] { null, now.AddMinutes(2), now.AddDays(-6.9), now.AddHours(-1) })
+            {
+                Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsJsonAsync(SendUrl, Send(type, occurredAt: taken), Ct)).StatusCode);
+            }
+            foreach (var refused in new[] { now.AddMinutes(30), now.AddDays(-7.1) })
+            {
+                var (status, code, pointers) = await ProblemAsync(await client.PostAsJsonAsync(SendUrl, Send(type, occurredAt: refused), Ct));
+                Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidRequest), (status, code));
+                Assert.Equal(["/occurredAt"], pointers);
+            }
+
+            // Kept as sent; absent, the acceptance time.
+            var at = now.AddMinutes(-42);
+            var sent = await (await client.PostAsJsonAsync(SendUrl, Send(type, occurredAt: at), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
+            var plain = await (await client.PostAsJsonAsync(SendUrl, Send(type), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
+            await using var db = producer.App.Database.Context();
+            var stored = await db.Requests.AsNoTracking().SingleAsync(r => r.Id == sent!.Id, Ct);
+            Assert.Equal(at.ToUnixTimeMilliseconds(), stored.OccurredAt!.Value.ToUnixTimeMilliseconds());
+            var defaulted = await db.Requests.AsNoTracking().SingleAsync(r => r.Id == plain!.Id, Ct);
+            Assert.Equal(defaulted.AcceptedAt, defaulted.OccurredAt);
         }
 
         [Fact]
