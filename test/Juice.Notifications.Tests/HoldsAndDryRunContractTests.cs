@@ -32,24 +32,36 @@ namespace Juice.Notifications.Tests
             Assert.Equal(8, (int)DeliveryStatus.Cancelled);
         }
 
+        /// <summary>M44-2: the guard is gone: dry run in the settings is read as set, and the host warns of it at start.</summary>
         [Fact]
-        public void Dry_run_in_the_settings_fails_at_registration_until_it_is_built()
+        public async Task Dry_run_in_the_settings_is_honoured_and_warned_of_at_start()
         {
             var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Delivery:DryRun"] = "true" }).Build();
-            var refused = Assert.Throws<InvalidOperationException>(() => new ServiceCollection().AddNotificationsPipeline(configuration, (_, _) => { }));
-            Assert.Contains("M44-2", refused.Message);
+            var services = new ServiceCollection().AddLogging().AddNotificationsPipeline(configuration, (_, _) => { });
+            using var provider = services.BuildServiceProvider();
+            Assert.True(provider.GetRequiredService<IOptions<DeliveryOptions>>().Value.DryRun);
+            Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(DryRunNotice));
+            var logged = new Logged();
+            await new DryRunNotice(provider.GetRequiredService<IOptions<DeliveryOptions>>(), logged).StartAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("Dispatcher in dry run: deliveries are recorded as would-send and not sent", Assert.Single(logged.Warnings));
         }
 
-        [Fact]
-        public async Task Dry_run_set_in_code_fails_the_host_at_start_until_it_is_built()
+        private sealed class Logged : Microsoft.Extensions.Logging.ILogger<DryRunNotice>
         {
-            var builder = Host.CreateApplicationBuilder();
-            builder.Services.AddNotificationsPipeline(new ConfigurationBuilder().Build(), (_, _) => { });
-            builder.Services.Configure<DeliveryOptions>(o => o.DryRun = true);
-            using var host = builder.Build();
-            // Before any hosted service (the migrator, the stages) starts: the options are checked as the host starts, not when first read.
-            var refused = await Assert.ThrowsAsync<OptionsValidationException>(() => host.StartAsync(TestContext.Current.CancellationToken));
-            Assert.Contains("M44-2", refused.Message);
+            public List<string> Warnings { get; } = [];
+
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+            public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning)
+                {
+                    Warnings.Add(formatter(state, exception));
+                }
+            }
         }
 
         [Fact]

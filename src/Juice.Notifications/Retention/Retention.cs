@@ -223,7 +223,7 @@ namespace Juice.Notifications.Retention
                 var keep = now.AddDays(-(own?.RequestRetentionDays ?? options.Value.RequestDays));
                 var content = now.AddDays(-(own?.ContentRetentionDays ?? options.Value.ContentDays));
                 var finished = new[] { DeliveryStatus.Delivered, DeliveryStatus.Accepted, DeliveryStatus.Failed, DeliveryStatus.Bounced, DeliveryStatus.Expired,
-                    DeliveryStatus.Cancelled };
+                    DeliveryStatus.Cancelled, DeliveryStatus.WouldSend };
                 deliveries += await InBatchesAsync(() => db.Deliveries.Where(d => d.TenantId == tenant && d.CreatedAt < keep && finished.Contains(d.Status))
                     .OrderBy(d => d.Id).Take(batch).ExecuteDeleteAsync(ct));
                 // A request goes once nothing of it is left to do: its notification isn't still working, and none of its deliveries is unfinished.
