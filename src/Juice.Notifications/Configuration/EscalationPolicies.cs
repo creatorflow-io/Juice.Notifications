@@ -208,17 +208,20 @@ namespace Juice.Notifications.Configuration
             var stop = r.StopOnAcknowledge ?? existing?.StopOnAcknowledge ?? true;
             var hash = ConfigurationRules.EscalationPolicyHash(steps, stop);
             var now = clock.GetUtcNow();
+            var managedBy = Caller(r.ManagedBy);
             if (existing is null)
             {
                 existing = new EscalationPolicy
                 {
-                    TenantId = r.NotificationTenantId, Key = r.Key, Steps = steps, StopOnAcknowledge = stop, DefinitionHash = hash, UpdatedAt = now, ManagedBy = Caller(r.ManagedBy),
+                    TenantId = r.NotificationTenantId, Key = r.Key, Steps = steps, StopOnAcknowledge = stop, DefinitionHash = hash, UpdatedAt = now, ManagedBy = managedBy,
                 };
                 db.EscalationPolicies.Add(existing);
             }
-            else if (existing.DefinitionHash != hash)
+            // A change of owner is a change too (a takeover: alias-config over webhooks-alias, configuration over api), as for the other kinds.
+            else if ((existing.DefinitionHash, existing.ManagedBy) != (hash, managedBy))
             {
                 (existing.Steps, existing.StopOnAcknowledge, existing.DefinitionHash, existing.UpdatedAt) = (steps, stop, hash, now);
+                existing.ManagedBy = managedBy;
             }
             return Outcome<EscalationPolicyView>.Ok(ConfigurationQueries.EscalationPolicy(existing));
         }

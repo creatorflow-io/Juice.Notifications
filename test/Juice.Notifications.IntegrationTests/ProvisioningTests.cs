@@ -604,5 +604,124 @@ namespace Juice.Notifications.IntegrationTests
             var route = Assert.Single((await admin.GetFromJsonAsync<List<RouteResponse>>($"{Url}/routes", Ct))!);
             Assert.Equal((ManagedBy.Api, false), (route.ManagedBy, route.Enabled));
         }
+
+        // ─── Takeovers (M46c, #18): a new owner is a change, also when the definition is the same ────────
+
+        private async Task<Outcome<T>> AsOwnerAsync<T>(Juice.MediatR.IRequest<Outcome<T>> command)
+        {
+            await using var scope = _app.Services.CreateAsyncScope();
+            using var context = NotificationsMessageContext.Begin("test");
+            return (await scope.ServiceProvider.GetRequiredService<Juice.MediatR.IMediator>().Send(command, Ct))!;
+        }
+
+        /// <summary>The command in an audit scope of its own, as a writer outside a request (the provisioner, the alias's tool) records it.</summary>
+        private async Task<Outcome<T>> AuditedAsync<T>(Juice.MediatR.IRequest<Outcome<T>> command)
+        {
+            await using var scope = _app.Services.CreateAsyncScope();
+            using var context = NotificationsMessageContext.Begin("test");
+            Outcome<T>? outcome = null;
+            await scope.ServiceProvider.GetRequiredService<Juice.Audit.Api.Scopes.AuditScopeRunner>().RunAsync(
+                new Juice.Audit.Api.Scopes.AuditScopeRequest("Takeover", Juice.Audit.Api.Scopes.AuditScopeMethods.Request, "takeover-test", Tenant.ToString()),
+                async () =>
+                {
+                    outcome = await scope.ServiceProvider.GetRequiredService<Juice.MediatR.IMediator>().Send(command, Ct);
+                    return true;
+                },
+                _ => Juice.Audit.Api.Scopes.AuditScopeOutcome.Ok,
+                audit => audit.SetUser("takeover-test"));
+            return outcome!;
+        }
+
+        /// <summary>The update recorded on <paramref name="table"/> (one per test: each has its own host), waiting briefly for the record.</summary>
+        private async Task<string> ChangeAsync(string table)
+        {
+            for (var i = 0; i < 50; i++)
+            {
+                var change = _app.Audit.All.SelectMany(s => s.Changes)
+                    .LastOrDefault(c => c.Tbl == table && c.Action == "Modified");
+                if (change is not null) return change.Changes;
+                await Task.Delay(100, Ct);
+            }
+            Assert.Fail($"no change recorded on {table}: {string.Join("; ", _app.Audit.All.SelectMany(s => s.Changes).Select(c => $"{c.Tbl} {c.Action}"))}");
+            return "";
+        }
+
+        private static readonly JsonElement PolicySteps = JsonSerializer.SerializeToElement(new[]
+        {
+            new { afterMinutes = 5, recipients = new[] { new { kind = "route", key = "ops" } } },
+        });
+
+        [Fact]
+        public async Task An_integration_the_alias_made_is_taken_over_by_alias_config_in_place_and_recorded()
+        {
+            LocalStack.RequireAvailable();
+            var settings = JsonElement.Parse("""{ "server": "local", "from": "alias@juice.local" }""");
+            var made = await AsOwnerAsync(new PutIntegration(Tenant, "taken", "email", "smtp", settings, null, 0, true) { ManagedBy = ManagedBy.WebhooksAlias });
+            Assert.True(made.Kind is OutcomeKind.Ok or OutcomeKind.Created, $"{made.Kind} {made.Code} {made.Message}");
+            Guid id;
+            await using (var db = _app.Database.Context())
+            {
+                id = (await db.Integrations.SingleAsync(i => i.TenantId == Tenant && i.Key == "taken", Ct)).Id;
+            }
+
+            // The same definition, declared in the producer's configuration now.
+            var taken = await AuditedAsync(new PutIntegration(Tenant, "taken", "email", "smtp", settings, null, 0, true) { ManagedBy = ManagedBy.AliasConfig });
+
+            Assert.Equal(OutcomeKind.Ok, taken.Kind);
+            await using (var db = _app.Database.Context())
+            {
+                var row = await db.Integrations.AsNoTracking().SingleAsync(i => i.TenantId == Tenant && i.Key == "taken", Ct);
+                Assert.Equal((id, ManagedBy.AliasConfig), (row.Id, row.ManagedBy));
+            }
+            var integrationChange = await ChangeAsync("integrations");
+            Assert.Contains("ManagedBy", integrationChange);
+            Assert.Contains(ManagedBy.AliasConfig, integrationChange);
+            Assert.Equal(ErrorCodes.ManagedByConfiguration,
+                (await AsOwnerAsync(new PutIntegration(Tenant, "taken", null, null, null, null, null, false) { ManagedBy = ManagedBy.WebhooksAlias })).Code);
+        }
+
+        [Fact]
+        public async Task A_policy_the_alias_made_is_taken_over_by_alias_config_in_place_and_recorded()
+        {
+            LocalStack.RequireAvailable();
+            var made = await AsOwnerAsync(new PutEscalationPolicy(Tenant, "taken-policy", PolicySteps, true) { ManagedBy = ManagedBy.WebhooksAlias });
+            Assert.True(made.Kind is OutcomeKind.Ok or OutcomeKind.Created, $"{made.Kind} {made.Code} {made.Message}");
+            Guid id;
+            await using (var db = _app.Database.Context())
+            {
+                id = (await db.EscalationPolicies.SingleAsync(p => p.TenantId == Tenant && p.Key == "taken-policy", Ct)).Id;
+            }
+
+            var taken = await AuditedAsync(new PutEscalationPolicy(Tenant, "taken-policy", PolicySteps, true) { ManagedBy = ManagedBy.AliasConfig });
+
+            Assert.Equal(OutcomeKind.Ok, taken.Kind);
+            await using (var db = _app.Database.Context())
+            {
+                var row = await db.EscalationPolicies.AsNoTracking().SingleAsync(p => p.TenantId == Tenant && p.Key == "taken-policy", Ct);
+                Assert.Equal((id, ManagedBy.AliasConfig), (row.Id, row.ManagedBy));
+            }
+            var policyChange = await ChangeAsync("escalation_policies");
+            Assert.Contains("ManagedBy", policyChange);
+            Assert.Contains(ManagedBy.AliasConfig, policyChange);
+            Assert.Equal(ErrorCodes.ManagedByConfiguration,
+                (await AsOwnerAsync(new PutEscalationPolicy(Tenant, "taken-policy", null, false) { ManagedBy = ManagedBy.WebhooksAlias })).Code);
+        }
+
+        [Fact]
+        public async Task A_policy_the_api_made_is_taken_over_by_the_configuration()
+        {
+            LocalStack.RequireAvailable();
+            var made = await AsOwnerAsync(new PutEscalationPolicy(Tenant, "api-policy", PolicySteps, true));
+            Assert.True(made.Kind is OutcomeKind.Ok or OutcomeKind.Created, $"{made.Kind} {made.Code} {made.Message}");
+
+            var taken = await AsOwnerAsync(new PutEscalationPolicy(Tenant, "api-policy", PolicySteps, true) { ManagedBy = ManagedBy.Configuration });
+
+            Assert.Equal(OutcomeKind.Ok, taken.Kind);
+            await using (var db = _app.Database.Context())
+            {
+                Assert.Equal(ManagedBy.Configuration, (await db.EscalationPolicies.AsNoTracking().SingleAsync(p => p.TenantId == Tenant && p.Key == "api-policy", Ct)).ManagedBy);
+            }
+            Assert.Equal(ErrorCodes.ManagedByConfiguration, (await AsOwnerAsync(new PutEscalationPolicy(Tenant, "api-policy", null, false))).Code);
+        }
     }
 }
