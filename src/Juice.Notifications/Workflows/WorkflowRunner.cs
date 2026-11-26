@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace Juice.Notifications.Workflows
 {
     /// <summary>
-    /// Runs a notification's workflow (design Â§7.1, phase-3-plan I27âI30) inside the planner's step: from <see cref="Notification.WorkflowStep"/>,
+    /// Runs a notification's workflow (design §7.1, phase-3-plan I27–I30) inside the planner's step: from <see cref="Notification.WorkflowStep"/>,
     /// step after step, until one waits (the notification is due again when it may go on) or the workflow ends (<c>Planned</c>). The planner
     /// stage claims notifications in both <c>Planning</c> and <c>Running</c>, so there is one claimed hop per wait, crash-safe like every other.
     /// </summary>
@@ -84,7 +84,7 @@ namespace Juice.Notifications.Workflows
             context.Done(row, null);
         }
 
-        /// <summary>The correlation's state as conditions read it (<c>open</c> â¦), now; none for a request without a key.</summary>
+        /// <summary>The correlation's state as conditions read it (<c>open</c> …), now; none for a request without a key.</summary>
         private static async Task<string?> CorrelationStateAsync(NotificationsDbContext db, NotificationRequest request, CancellationToken ct)
             => request.CorrelationId is { } id
                 ? Correlations.CorrelationLimits.Name(await db.Correlations.AsNoTracking().Where(c => c.TenantId == request.TenantId && c.Id == id)
@@ -93,7 +93,7 @@ namespace Juice.Notifications.Workflows
 
         /// <summary>
         /// The waiting recipients become due for the delivery planner, past the tenant's mutes and the people's preferences as at planning
-        /// (design Â§6.4): those can have changed while the workflow waited.
+        /// (design §6.4): those can have changed while the workflow waited.
         /// </summary>
         private async Task SendAsync(StageContext context, Notification row, NotificationRequest request, NotificationType type, CancellationToken ct)
         {
@@ -247,8 +247,9 @@ namespace Juice.Notifications.Workflows
         /// <summary>
         /// When an escalation's first step is due (phase 5, M45-n): its wait from when the request's event happened (<c>occurredAt</c>, when the
         /// producer said, taken within 7 days back and 5 minutes ahead: further is clamped, logged and counted), and never before now, even after a
-        /// workflow delay; without one (the producer didn't say, or a request from before it was kept), its wait from now, as before. A request sent late (held under a silence) gets the step at once if its
-        /// wait has passed, as legacy escalation does; later steps stay relative to the step before.
+        /// workflow delay; without one (the producer didn't say, or a request from before it was kept), its wait from now, as before. A request
+        /// sent late (held under a silence) gets the step at once if its wait has passed, as legacy escalation does; later steps stay relative to
+        /// the step before.
         /// </summary>
         internal static (DateTimeOffset At, Clamped? Clamped) FirstStepAt(DateTimeOffset? occurredAt, double afterMinutes, DateTimeOffset now)
         {

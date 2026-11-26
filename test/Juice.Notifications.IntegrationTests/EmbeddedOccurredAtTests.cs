@@ -80,13 +80,49 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(Ms(expires), Ms(stored["expires-local"].ExpiresAt));
         }
 
-        /// <summary>Clamped events time the first step (5 minutes): 30 days old is due at once; an hour ahead is due 5 + 5 minutes on.</summary>
+        /// <summary>
+        /// Clamped events time the first step (5 minutes): 30 days old is due at once; an hour ahead is due 5 + 5 minutes on; 2 minutes old is
+        /// in range (due in 3). Each clamp is counted once, by direction, on <c>notifications.requests_occurred_at_clamped</c>, after the step
+        /// commits; the in-range one isn't, and a second pass over the same notification counts nothing more. Only this test's measurements are
+        /// read (an async-local mark), since the meter is process-wide and other classes clamp beside it.
+        /// </summary>
         [Theory]
-        [InlineData(-30 * 24 * 60, 0)]
-        [InlineData(60, 10)]
-        public async Task A_clamped_occurrence_times_the_first_step_from_its_clamp(int occurredInMinutes, int dueInMinutes)
+        [InlineData(-30 * 24 * 60, 0, "past")]
+        [InlineData(60, 10, "future")]
+        [InlineData(-2, 3, null)]
+        public async Task A_clamped_occurrence_times_the_first_step_from_its_clamp_and_is_counted_once(int occurredInMinutes, int dueInMinutes, string? direction)
         {
             LocalStack.RequireAvailable();
+            var counted = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            using var listener = new System.Diagnostics.Metrics.MeterListener
+            {
+                InstrumentPublished = (instrument, l) =>
+                {
+                    if (instrument.Meter.Name == Telemetry.Name && instrument.Name == "notifications.requests_occurred_at_clamped")
+                    {
+                        l.EnableMeasurementEvents(instrument);
+                    }
+                },
+            };
+            listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                if (Mine.Value)
+                {
+                    foreach (var tag in tags)
+                    {
+                        if (tag.Key == "direction")
+                        {
+                            for (var i = 0; i < value; i++)
+                            {
+                                counted.Enqueue((string)tag.Value!);
+                            }
+                        }
+                    }
+                }
+            });
+            listener.Start();
+            Mine.Value = true;
+
             await using var host = await HostAsync();
             await AlertSetupAsync();
             var key = $"alert:clamped{occurredInMinutes}";
@@ -95,7 +131,14 @@ namespace Juice.Notifications.IntegrationTests
                 (await client.SendAsync(Send(key, now.AddMinutes(occurredInMinutes), Alert, key, new Dictionary<string, string> { ["policy"] = "page" }), Ct)).Id);
             await DrainAsync<Notification, PlannerStage>(host, "planner");
             Assert.Equal(now.AddMinutes(dueInMinutes), (await EscalationAsync(key)).NextAt);
+            await DrainAsync<Notification, PlannerStage>(host, "planner");
+            Assert.Equal(direction is null ? [] : [direction], counted.ToArray());
+            // Kept as sent: only the timing is clamped.
+            await using var db = _database.Context();
+            Assert.Equal(now.AddMinutes(occurredInMinutes), (await db.Requests.AsNoTracking().SingleAsync(r => r.IdempotencyKey == key, Ct)).OccurredAt);
         }
+
+        private static readonly AsyncLocal<bool> Mine = new();
 
         /// <summary>
         /// Observability's flow: an alert fires, its correlation is held (a silence) at once, its first step's wait (5 minutes from the firing)
