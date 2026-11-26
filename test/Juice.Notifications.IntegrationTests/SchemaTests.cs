@@ -98,7 +98,7 @@ namespace Juice.Notifications.IntegrationTests
             Assert.False(dry);
         }
 
-        /// <summary>The webhooks alias's rows (ManagedBy.WebhooksAlias, phase 5 M46) fit every table that records who owns a row.</summary>
+        /// <summary>The webhooks alias's rows (ManagedBy.WebhooksAlias, phase 5 M46) fit every table that records who owns a row (six: the five widened to 20, and escalation policies).</summary>
         [Fact]
         public async Task A_row_owned_by_the_webhooks_alias_is_stored_and_read_in_every_owned_table()
         {
@@ -118,7 +118,12 @@ namespace Juice.Notifications.IntegrationTests
                     },
                     new Route { TenantId = tenant, Key = "alias-" + suffix, Match = "{}", ManagedBy = alias, DefinitionHash = "d", UpdatedAt = Seed.Now },
                     new AllowlistEntry { TenantId = tenant, Destination = $"alias-{suffix}.example.com", ManagedBy = alias, UpdatedAt = Seed.Now },
-                    new EscalationPolicy { TenantId = tenant, Key = "alias-" + suffix, Steps = "[]", ManagedBy = alias, DefinitionHash = "d", UpdatedAt = Seed.Now });
+                    new EscalationPolicy { TenantId = tenant, Key = "alias-" + suffix, Steps = "[]", ManagedBy = alias, DefinitionHash = "d", UpdatedAt = Seed.Now },
+                    new RecipientResolverConfig
+                    {
+                        TenantId = tenant, Key = "alias-" + suffix, Kind = "fake", Handles = ["group"], Settings = "{}", ManagedBy = alias, DefinitionHash = "d",
+                        UpdatedAt = Seed.Now,
+                    });
                 await db.SaveChangesAsync(ct);
             }
             await using var read = fixture.Database.Context();
@@ -128,6 +133,7 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(alias, (await read.Routes.AsNoTracking().SingleAsync(r => r.TenantId == tenant && r.Key == key, ct)).ManagedBy);
             Assert.Equal(alias, (await read.Allowlist.AsNoTracking().SingleAsync(a => a.TenantId == tenant && a.Destination == key + ".example.com", ct)).ManagedBy);
             Assert.Equal(alias, (await read.EscalationPolicies.AsNoTracking().SingleAsync(p => p.TenantId == tenant && p.Key == key, ct)).ManagedBy);
+            Assert.Equal(alias, (await read.Resolvers.AsNoTracking().SingleAsync(r => r.TenantId == tenant && r.Key == key, ct)).ManagedBy);
         }
 
         [Fact]

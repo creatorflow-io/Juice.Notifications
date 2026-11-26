@@ -240,7 +240,7 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.Kind).HasMaxLength(40);
                 e.Property(x => x.Settings).HasColumnType("jsonb");
                 e.Property(x => x.SecretRef).HasMaxLength(500);
-                e.Property(x => x.ManagedBy).HasMaxLength(10);
+                e.Property(x => x.ManagedBy).HasMaxLength(20);
                 e.Property(x => x.DefinitionHash).HasMaxLength(64).IsConcurrencyToken();
                 e.HasIndex(x => new { x.TenantId, x.Key }).IsUnique();
             });

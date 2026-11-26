@@ -2291,8 +2291,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.Property<string>("ManagedBy")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
                         .HasColumnName("managed_by");
 
                     b.Property<string>("SecretRef")

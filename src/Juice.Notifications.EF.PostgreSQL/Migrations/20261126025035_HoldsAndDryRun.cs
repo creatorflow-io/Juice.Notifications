@@ -13,12 +13,23 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
         {
             // Correlation holds (phase-5-plan p5-d3) and dry run (I67). Every new column is nullable or has a constant default: no table rewrite
             // and no backfill. One hold per correlation: its start and its reason are set together (ck_correlations_hold). managed_by widens to 20
-            // for the webhooks alias's rows (ManagedBy.WebhooksAlias, 14 characters), as escalation_policies already is: a varchar widening
-            // changes the catalog only.
+            // on the five tables that had 10 (integrations, targets, routes, allowlist, resolvers), as escalation_policies already is, for the
+            // webhooks alias's rows (ManagedBy.WebhooksAlias, 14 characters): a varchar widening changes the catalog only.
             migrationBuilder.AlterColumn<string>(
                 name: "managed_by",
                 schema: "notifications",
                 table: "routes",
+                type: "character varying(20)",
+                maxLength: 20,
+                nullable: false,
+                oldClrType: typeof(string),
+                oldType: "character varying(10)",
+                oldMaxLength: 10);
+
+            migrationBuilder.AlterColumn<string>(
+                name: "managed_by",
+                schema: "notifications",
+                table: "recipient_resolvers",
                 type: "character varying(20)",
                 maxLength: 20,
                 nullable: false,
@@ -141,6 +152,17 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                 name: "managed_by",
                 schema: "notifications",
                 table: "routes",
+                type: "character varying(10)",
+                maxLength: 10,
+                nullable: false,
+                oldClrType: typeof(string),
+                oldType: "character varying(20)",
+                oldMaxLength: 20);
+
+            migrationBuilder.AlterColumn<string>(
+                name: "managed_by",
+                schema: "notifications",
+                table: "recipient_resolvers",
                 type: "character varying(10)",
                 maxLength: 10,
                 nullable: false,
