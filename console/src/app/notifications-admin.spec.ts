@@ -1,3 +1,4 @@
+import { KEY_PATTERN } from '../../projects/juice-js/notifications-admin/src/lib/shared/forms';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRouteSnapshot, Router, RouterStateSnapshot, UrlTree, provideRouter } from '@angular/router';
 import {
@@ -74,5 +75,11 @@ describe('notifications admin, per hosting mode', () => {
     expect([platform.configure(), platform.operate()]).toEqual([true, true]);
     const unread = read(undefined, 't1');
     expect([unread.configure(), unread.operate()]).toEqual([false, false]);
+  });
+
+  it('gives inputs key patterns a browser compiles (the v flag: a bare - in a class is a syntax error and the pattern is dropped)', () => {
+    expect(() => new RegExp(`^(?:${KEY_PATTERN})$`, 'v')).not.toThrow();
+    expect(['a', 'e2e-hooks'].every(k => new RegExp(`^(?:${KEY_PATTERN})$`, 'v').test(k))).toBe(true);
+    expect(['E2e', '2x', 'a_b'].some(k => new RegExp(`^(?:${KEY_PATTERN})$`, 'v').test(k))).toBe(false);
   });
 });
