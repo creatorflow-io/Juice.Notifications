@@ -352,6 +352,36 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Single(await db.Types.Where(t => t.Key == Type).ToListAsync(Ct));
         }
 
+        /// <summary>
+        /// The host's dead-man check reads the pipeline's health (phase-5 M49-0): with the stages running, the dispatcher's passes show; without
+        /// them, it says so and has no pass.
+        /// </summary>
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task The_host_reads_the_pipelines_health(bool runStages)
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages);
+            PipelineHealth health;
+            var until = DateTimeOffset.UtcNow.AddSeconds(15);
+            do
+            {
+                await using var scope = host.Services.CreateAsyncScope();
+                health = await scope.ServiceProvider.GetRequiredService<INotificationsPipelineHealth>().ReadAsync(Ct);
+                if (!runStages || health.DispatcherLastPassAt is not null)
+                {
+                    break;
+                }
+                await Task.Delay(200, Ct);
+            }
+            while (DateTimeOffset.UtcNow < until);
+
+            Assert.Equal(runStages, health.Running);
+            Assert.Equal(runStages, health.DispatcherLastPassAt is not null);
+            Assert.Null(health.OldestDueDelivery);
+        }
+
         [Fact]
         public void The_container_holds_nothing_of_the_service()
         {

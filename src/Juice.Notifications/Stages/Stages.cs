@@ -131,7 +131,7 @@ namespace Juice.Notifications.Stages
     /// </list>
     /// </summary>
     public sealed class StageRunner<T, TStage>(IServiceScopeFactory scopes, StageNudges nudges, TimeProvider clock, ILogger<StageRunner<T, TStage>> logger,
-        IStageFaults? faults = null)
+        IStageFaults? faults = null, StagePasses? passes = null)
         where T : Claimable, ITenantOwned
         where TStage : IStage<T>
     {
@@ -165,6 +165,7 @@ namespace Juice.Notifications.Stages
                     default: failed++; break;
                 }
             }
+            passes?.Record(stageName, clock.UtcNow());
             return new PassResult(claims.Count, completed, lost, failed);
         }
 

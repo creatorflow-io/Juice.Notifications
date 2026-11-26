@@ -104,6 +104,10 @@ namespace Juice.Notifications.Hosting
 
             // The pipeline stages (design §4.1). Their workers run unless Stages:Run is false (a host that only takes requests).
             var runStages = configuration.GetValue("Stages:Run", true);
+            // How the pipeline keeps up (phase-5 M49-0), for a host's dead-man check: the stages' passes here and the oldest due rows.
+            services.TryAddSingleton<Stages.StagePasses>();
+            services.AddSingleton(new Stages.StagesRunning(runStages));
+            services.TryAddScoped<INotificationsPipelineHealth, Stages.NotificationsPipelineHealth>();
             services.AddPlanning(configuration.GetSection("Stages:Planner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages, options.People);
             services.Configure<ResolverOptions>(configuration.GetSection(ResolverOptions.Section));
             if (options.People)

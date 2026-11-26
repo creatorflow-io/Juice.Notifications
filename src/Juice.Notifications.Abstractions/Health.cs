@@ -1,8 +1,8 @@
 namespace Juice.Notifications
 {
     /// <summary>
-    /// How the pipeline is keeping up (phase 5, M49): a host's dead-man check reads it to tell a stalled pipeline from a quiet one. Contract only
-    /// until M49-0 registers the implementation.
+    /// How the pipeline is keeping up (phase 5, M49): a host's dead-man check reads it to tell a stalled pipeline from a quiet one. Registered
+    /// by <c>AddNotificationsPipeline</c> (M49-0), in the service and in an embedded host alike.
     /// </summary>
     public interface INotificationsPipelineHealth
     {
