@@ -360,6 +360,62 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Single(await check.Things.Where(t => t.Name == "kept").ToListAsync(Ct));
         }
 
+        /// <summary>
+        /// Commits a change of the correlation, from another connection, just before the request's save touches it: the race of a hold,
+        /// acknowledge or resolve committed between the request reading its correlation and saving (once).
+        /// </summary>
+        private sealed class CorrelationRace(string connectionString, string key) : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+        {
+            private int _armed;
+
+            /// <summary>The next save touching the correlation races (once).</summary>
+            public void Arm() => _armed = 1;
+
+            public override async ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+                Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData, Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+                CancellationToken cancellationToken = default)
+            {
+                if (eventData.Context is NotificationsDbContext db && db.ChangeTracker.Entries<Correlation>().Any(e => e.Entity.Key == key)
+                    && Interlocked.Exchange(ref _armed, 0) == 1)
+                {
+                    await using var other = new Npgsql.NpgsqlConnection(connectionString);
+                    await other.OpenAsync(cancellationToken);
+                    await using var touch = new Npgsql.NpgsqlCommand("UPDATE notifications.correlations SET updated_at = now() WHERE key = @key", other);
+                    touch.Parameters.AddWithValue("key", key);
+                    await touch.ExecuteNonQueryAsync(cancellationToken);
+                }
+                return result;
+            }
+        }
+
+        /// <summary>
+        /// A request that meets another change of its correlation (a hold, acknowledge or resolve committed between its read and its save) is
+        /// refused as <c>concurrent_change</c>, as the correlation calls are (deferred #53), and the host's transaction goes on: sending again in
+        /// it is accepted.
+        /// </summary>
+        [Fact]
+        public async Task A_request_racing_a_change_of_its_correlation_is_refused_as_a_concurrent_change_and_the_host_transaction_goes_on()
+        {
+            LocalStack.RequireAvailable();
+            const string key = "alert:send-race";
+            var race = new CorrelationRace(_database.ConnectionString, key);
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false,
+                services: s => s.ConfigureDbContext<NotificationsDbContext>(o => o.AddInterceptors(race)));
+            // The correlation exists (a first request made it), so the next request touches it.
+            await host.InTransactionAsync(async (_, client) => await client.SendAsync(Notification("race-1") with { CorrelationKey = key }, Ct));
+            race.Arm();
+
+            var accepted = await host.InTransactionAsync(async (_, client) =>
+            {
+                var refused = await Assert.ThrowsAsync<NotificationRefusedException>(() => client.SendAsync(Notification("race-2") with { CorrelationKey = key }, Ct));
+                Assert.Equal(ErrorCodes.ConcurrentChange, refused.Code);
+                return await client.SendAsync(Notification("race-2") with { CorrelationKey = key }, Ct);
+            });
+            Assert.False(accepted.Duplicate);
+            await using var db = _database.Context();
+            Assert.Equal(2, await db.Requests.CountAsync(r => r.CorrelationKey == key, Ct));
+        }
+
         /// <summary>Waits until a statement of this database waits on a row lock.</summary>
         private async Task LockWaitAsync()
         {
@@ -548,7 +604,7 @@ namespace Juice.Notifications.IntegrationTests
             };
 
             public static async Task<EmbeddedHost> StartAsync(string connectionString, bool runStages, Receiver? receiver = null,
-                string applicationName = "The host")
+                string applicationName = "The host", Action<IServiceCollection>? services = null, string? provisioning = null)
             {
                 var builder = Host.CreateApplicationBuilder();
                 var settings = new Dictionary<string, string?>
@@ -561,7 +617,13 @@ namespace Juice.Notifications.IntegrationTests
                     // The receiver is plain http on this machine's private address, allowlisted (as the local stack allows).
                     ["Notifications:Delivery:AllowHttpToAllowlisted"] = "true",
                 };
-                if (receiver is not null)
+                if (provisioning is not null)
+                {
+                    var path = Path.Combine(Path.GetTempPath(), $"embedded-provisioning-{Guid.NewGuid():N}.json");
+                    await File.WriteAllTextAsync(path, provisioning);
+                    settings["Notifications:Provisioning:Path"] = path;
+                }
+                else                 if (receiver is not null)
                 {
                     var path = Path.Combine(Path.GetTempPath(), $"embedded-provisioning-{Guid.NewGuid():N}.json");
                     await File.WriteAllTextAsync(path, $$"""
@@ -595,6 +657,7 @@ namespace Juice.Notifications.IntegrationTests
                 builder.Services.AddSingleton<RecordingSink>();
                 builder.Services.AddSingleton<INotificationsAuditSink>(sp => sp.GetRequiredService<RecordingSink>());
                 builder.Services.AddJuiceNotificationsEmbedded(builder.Configuration.GetSection("Notifications"), Configure(connectionString, applicationName));
+                services?.Invoke(builder.Services);
                 var host = builder.Build();
                 await host.StartAsync(Ct);
                 return new EmbeddedHost(host, connectionString);

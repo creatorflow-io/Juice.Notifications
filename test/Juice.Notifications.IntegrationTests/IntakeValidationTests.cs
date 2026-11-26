@@ -49,11 +49,11 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
-        /// When its event happened (phase 5, M45-n): absent, it is the acceptance time; a few minutes ahead of the service's clock (skew) or up to
+        /// When its event happened (phase 5, M45-n): absent, none is kept; up to 5 minutes ahead of the service's clock (skew) or up to
         /// 7 days old is taken; further ahead, or older, is refused at the field.
         /// </summary>
         [Fact]
-        public async Task An_occurrence_is_at_most_a_little_ahead_and_7_days_old_and_defaults_to_acceptance()
+        public async Task An_occurrence_is_at_most_5_minutes_ahead_and_7_days_old_and_kept_only_when_sent()
         {
             LocalStack.RequireAvailable();
             using var client = await producer.ProducerAsync();
@@ -70,15 +70,15 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.Equal(["/occurredAt"], pointers);
             }
 
-            // Kept as sent; absent, the acceptance time.
+            // Kept as sent.
             var at = now.AddMinutes(-42);
             var sent = await (await client.PostAsJsonAsync(SendUrl, Send(type, occurredAt: at), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
             var plain = await (await client.PostAsJsonAsync(SendUrl, Send(type), Ct)).Content.ReadFromJsonAsync<AcceptedResponse>(Ct);
             await using var db = producer.App.Database.Context();
             var stored = await db.Requests.AsNoTracking().SingleAsync(r => r.Id == sent!.Id, Ct);
             Assert.Equal(at.ToUnixTimeMilliseconds(), stored.OccurredAt!.Value.ToUnixTimeMilliseconds());
-            var defaulted = await db.Requests.AsNoTracking().SingleAsync(r => r.Id == plain!.Id, Ct);
-            Assert.Equal(defaulted.AcceptedAt, defaulted.OccurredAt);
+            // Absent: none kept (the escalation then times its first step from its own start).
+            Assert.Null((await db.Requests.AsNoTracking().SingleAsync(r => r.Id == plain!.Id, Ct)).OccurredAt);
         }
 
         [Fact]

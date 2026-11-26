@@ -48,7 +48,7 @@ namespace Juice.Notifications.Messaging
         [JsonProperty(ItemConverterType = typeof(StrictStringConverter))]
         public Dictionary<string, string>? Links { get; init; }
         public DateTimeOffset? ExpiresAt { get; init; }
-        /// <summary>When what it tells of happened (an escalation's first step is due from it); the acceptance time when absent.</summary>
+        /// <summary>When what it tells of happened: an escalation's first step is due its wait after it (absent: from when the escalation starts).</summary>
         public DateTimeOffset? OccurredAt { get; init; }
     }
 

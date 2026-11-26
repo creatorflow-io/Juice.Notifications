@@ -56,6 +56,23 @@ namespace Juice.Notifications.Intake
         /// <summary>How old a request's <c>occurredAt</c> may be.</summary>
         public static readonly TimeSpan MaxOccurredAge = TimeSpan.FromDays(7);
 
+        /// <summary>A request's <c>occurredAt</c>, when it has one: at most <see cref="OccurredSkew"/> ahead of now, and at most <see cref="MaxOccurredAge"/> old.</summary>
+        public static void Occurred(DateTimeOffset? occurredAt, DateTimeOffset now, List<FieldError> invalid)
+        {
+            if (occurredAt is not { } occurred)
+            {
+                return;
+            }
+            if (occurred > now + OccurredSkew)
+            {
+                invalid.Add(new FieldError("/occurredAt", $"It happened in the future: at most {OccurredSkew.TotalMinutes:0} minutes ahead of the service's clock."));
+            }
+            else if (occurred < now - MaxOccurredAge)
+            {
+                invalid.Add(new FieldError("/occurredAt", $"It happened more than {MaxOccurredAge.TotalDays:0} days ago."));
+            }
+        }
+
         /// <summary>Recipient kinds of later work, refused with a clear message rather than as unknown.</summary>
         private static readonly string[] LaterKinds = ["schedule"];
 
@@ -406,12 +423,7 @@ namespace Juice.Notifications.Intake
             {
                 invalid.Add(new FieldError("/expiresAt", "The request expires in the past."));
             }
-            if (s.OccurredAt is { } occurred && (occurred > now + RequestRules.OccurredSkew || occurred < now - RequestRules.MaxOccurredAge))
-            {
-                invalid.Add(new FieldError("/occurredAt", occurred > now
-                    ? $"It happened in the future: at most {RequestRules.OccurredSkew.TotalMinutes:0} minutes ahead of the service's clock."
-                    : $"It happened more than {RequestRules.MaxOccurredAge.TotalDays:0} days ago."));
-            }
+            RequestRules.Occurred(s.OccurredAt, now, invalid);
             RequestRules.Labels(s.Labels, invalid);
             RequestRules.Links(s.Links, invalid);
             var actor = RequestRules.Actor(s.Actor, invalid);
@@ -474,7 +486,7 @@ namespace Juice.Notifications.Intake
                 TypeVersion = type.Version, SchemaHash = type.SchemaHash, CorrelationKey = s.CorrelationKey, Priority = priority,
                 Labels = s.Labels is null ? [] : new Dictionary<string, string>(s.Labels), Data = data.GetRawText(),
                 Recipients = JsonSerializer.Serialize(recipients, IntakeQueries.Json), Actor = actor,
-                Links = s.Links is null ? [] : new Dictionary<string, string>(s.Links), ExpiresAt = s.ExpiresAt, AcceptedAt = now, OccurredAt = s.OccurredAt ?? now,
+                Links = s.Links is null ? [] : new Dictionary<string, string>(s.Links), ExpiresAt = s.ExpiresAt, AcceptedAt = now, OccurredAt = s.OccurredAt,
                 TraceParent = request.TraceParent is { Length: <= 55 } trace ? trace : null,
             };
             db.Requests.Add(stored);
