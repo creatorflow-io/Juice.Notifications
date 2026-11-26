@@ -84,6 +84,130 @@ namespace Juice.Notifications.IntegrationTests
         private async Task<Dictionary<string, IntegrationResponse>> IntegrationsAsync(HttpClient admin)
             => (await admin.GetFromJsonAsync<List<IntegrationResponse>>($"{Url}/integrations", Ct))!.ToDictionary(i => i.Key);
 
+        private async Task<Outcome<T>> AsAsync<T>(Juice.MediatR.IRequest<Outcome<T>> command)
+        {
+            await using var scope = _app.Services.CreateAsyncScope();
+            using var context = NotificationsMessageContext.Begin("qa");
+            return (await scope.ServiceProvider.GetRequiredService<Juice.MediatR.IMediator>().Send(command, Ct))!;
+        }
+
+        /// <summary>
+        /// QA (M46c): every kind of setup row written as <c>alias-config</c> (integration, target, route, allowlist entry, escalation policy) is
+        /// refused to the admin API (a change, a disable-only change, a delete) and to the alias's own API alike, with
+        /// <c>managed_by_configuration</c>; a file that doesn't list them, and one with no tenants at all (which hands its own rows back), leave
+        /// every one of them as it was.
+        /// </summary>
+        [Fact]
+        public async Task Alias_config_rows_of_every_kind_are_refused_to_both_apis_and_survive_every_file()
+        {
+            LocalStack.RequireAvailable();
+            const string AC = ManagedBy.AliasConfig;
+            var settings = JsonElement.Parse("""{ "server": "local", "from": "ac@juice.local" }""");
+            var steps = JsonElement.Parse("""[{"afterMinutes":5,"recipients":[{"kind":"route","key":"ac-route"}]}]""");
+            foreach (var made in new Func<Task<OutcomeKind>>[]
+            {
+                async () => (await AsAsync(new PutIntegration(Tenant, "ac-mail", "email", "smtp", settings, null, 0, true) { ManagedBy = AC })).Kind,
+                async () => (await AsAsync(new PutTarget(Tenant, "ac-mail", "ac-target", "ac@example.com", null, true) { ManagedBy = AC })).Kind,
+                async () => (await AsAsync(new PutRoute(Tenant, "ac-route", JsonElement.Parse("""{"type":"x.*"}"""), ["ac-target"], true) { ManagedBy = AC })).Kind,
+                async () => (await AsAsync(new PutAllowlistEntry(Tenant, "10.99.0.0/16", [8443]) { ManagedBy = AC })).Kind,
+                async () => (await AsAsync(new PutEscalationPolicy(Tenant, "ac-policy", steps, false) { ManagedBy = AC })).Kind,
+            })
+            {
+                Assert.Contains(await made(), new[] { OutcomeKind.Ok, OutcomeKind.Created });
+            }
+
+            using var admin = await AdminAsync();
+            var refusals = new List<(string What, HttpResponseMessage Response)>
+            {
+                ("integration put", await admin.PutAsJsonAsync($"{Url}/integrations/ac-mail", new PutIntegrationBody("email", "smtp", settings, null, 1, true), Ct)),
+                ("integration disable", await admin.PutAsJsonAsync($"{Url}/integrations/ac-mail", new PutIntegrationBody(null, null, null, null, null, false), Ct)),
+                ("integration delete", await admin.DeleteAsync($"{Url}/integrations/ac-mail", Ct)),
+                ("target put", await admin.PutAsJsonAsync($"{Url}/integrations/ac-mail/targets/ac-target", new PutTargetBody("other@example.com", null, null), Ct)),
+                ("target disable", await admin.PutAsJsonAsync($"{Url}/integrations/ac-mail/targets/ac-target", new PutTargetBody(null, null, false), Ct)),
+                ("target delete", await admin.DeleteAsync($"{Url}/integrations/ac-mail/targets/ac-target", Ct)),
+                ("route put", await admin.PutAsJsonAsync($"{Url}/routes/ac-route", new PutRouteBody(JsonElement.Parse("""{"type":"y.*"}"""), ["ac-target"], true), Ct)),
+                ("route disable", await admin.PutAsJsonAsync($"{Url}/routes/ac-route", new PutRouteBody(null, null, false), Ct)),
+                ("route delete", await admin.DeleteAsync($"{Url}/routes/ac-route", Ct)),
+                ("allowlist put", await admin.PutAsJsonAsync($"{Url}/allowlist", new PutAllowlistBody("10.99.0.0/16", [443]), Ct)),
+                ("allowlist delete", await admin.DeleteAsync($"{Url}/allowlist?destination=10.99.0.0/16", Ct)),
+                ("policy put", await admin.PutAsJsonAsync($"{Url}/escalation-policies/ac-policy", new PutEscalationPolicyBody(null, true), Ct)),
+                ("policy delete", await admin.DeleteAsync($"{Url}/escalation-policies/ac-policy", Ct)),
+            };
+            foreach (var (what, response) in refusals)
+            {
+                Assert.True((response.StatusCode, await CodeAsync(response)) == (HttpStatusCode.Conflict, ErrorCodes.ManagedByConfiguration), $"admin {what}: {(int)response.StatusCode}");
+                response.Dispose();
+            }
+            const string Alias = ManagedBy.WebhooksAlias;
+            foreach (var (what, code) in new (string, string?)[]
+            {
+                ("integration put", (await AsAsync(new PutIntegration(Tenant, "ac-mail", null, null, null, null, null, false) { ManagedBy = Alias })).Code),
+                ("integration delete", (await AsAsync(new DeleteIntegration(Tenant, "ac-mail") { ManagedBy = Alias })).Code),
+                ("target put", (await AsAsync(new PutTarget(Tenant, "ac-mail", "ac-target", null, null, false) { ManagedBy = Alias })).Code),
+                ("target delete", (await AsAsync(new DeleteTarget(Tenant, "ac-mail", "ac-target") { ManagedBy = Alias })).Code),
+                ("route put", (await AsAsync(new PutRoute(Tenant, "ac-route", null, null, false) { ManagedBy = Alias })).Code),
+                ("route delete", (await AsAsync(new DeleteRoute(Tenant, "ac-route") { ManagedBy = Alias })).Code),
+                ("allowlist put", (await AsAsync(new PutAllowlistEntry(Tenant, "10.99.0.0/16", [443]) { ManagedBy = Alias })).Code),
+                ("allowlist delete", (await AsAsync(new DeleteAllowlistEntry(Tenant, "10.99.0.0/16") { ManagedBy = Alias })).Code),
+                ("policy put", (await AsAsync(new PutEscalationPolicy(Tenant, "ac-policy", null, true) { ManagedBy = Alias })).Code),
+                ("policy delete", (await AsAsync(new DeleteEscalationPolicy(Tenant, "ac-policy") { ManagedBy = Alias })).Code),
+            })
+            {
+                Assert.True(code == ErrorCodes.ManagedByConfiguration, $"alias {what}: {code}");
+            }
+
+            await ProvisionAsync(Initial);
+            await ProvisionAsync("""{ "tenants": {} }""");
+
+            await using var db = _app.Database.Context();
+            var integration = await db.Integrations.AsNoTracking().SingleAsync(i => i.TenantId == Tenant && i.Key == "ac-mail", Ct);
+            Assert.Equal((AC, true, 0), (integration.ManagedBy, integration.Enabled, integration.Priority));
+            var target = await db.IntegrationTargets.AsNoTracking().SingleAsync(t => t.TenantId == Tenant && t.Key == "ac-target", Ct);
+            Assert.Equal((AC, true, "ac@example.com"), (target.ManagedBy, target.Enabled, target.Address));
+            var route = await db.Routes.AsNoTracking().SingleAsync(r => r.TenantId == Tenant && r.Key == "ac-route", Ct);
+            Assert.Equal((AC, true), (route.ManagedBy, route.Enabled));
+            Assert.Equal(AC, (await db.Allowlist.AsNoTracking().SingleAsync(a => a.TenantId == Tenant && a.Destination == "10.99.0.0/16", Ct)).ManagedBy);
+            var policy = await db.EscalationPolicies.AsNoTracking().SingleAsync(p => p.TenantId == Tenant && p.Key == "ac-policy", Ct);
+            Assert.Equal((AC, false), (policy.ManagedBy, policy.StopOnAcknowledge));
+        }
+
+        /// <summary>
+        /// QA (M46c): the alias's configuration taking over a row the alias made through its producer's API, while the alias's API edits that
+        /// row at the same moment, 15 times over: no call fails with anything but <c>concurrent_change</c> (or, after a takeover, the alias's
+        /// edit <c>managed_by_configuration</c>), and no update is lost: a takeover that answered Ok is what the row holds at the end.
+        /// </summary>
+        [Fact]
+        public async Task A_takeover_racing_an_alias_edit_loses_no_update()
+        {
+            LocalStack.RequireAvailable();
+            await AsAsync(new PutIntegration(Tenant, "race-mail", "email", "smtp", JsonElement.Parse("""{ "server": "local", "from": "r@juice.local" }"""), null, 0, true));
+            await AsAsync(new PutTarget(Tenant, "race-mail", "race-target", "r@example.com", null, true));
+            for (var round = 0; round < 15; round++)
+            {
+                var key = $"race-{round}";
+                Assert.Contains((await AsAsync(new PutRoute(Tenant, key, JsonElement.Parse("""{"type":"a.*"}"""), ["race-target"], true) { ManagedBy = ManagedBy.WebhooksAlias })).Kind,
+                    new[] { OutcomeKind.Ok, OutcomeKind.Created });
+                Task<Outcome<RouteView>> Guarded(Func<Task<Outcome<RouteView>>> call) => call().ContinueWith(t => t.IsFaulted && Data.DbConflicts.Classify(t.Exception!.InnerException!) is { }
+                    ? Outcome<RouteView>.Conflict(ErrorCodes.ConcurrentChange, "raced") : t.Result, TaskScheduler.Default);
+                var edit = Guarded(() => AsAsync(new PutRoute(Tenant, key, JsonElement.Parse("""{"type":"edit.*"}"""), null, null) { ManagedBy = ManagedBy.WebhooksAlias }));
+                var takeover = Guarded(() => AsAsync(new PutRoute(Tenant, key, JsonElement.Parse("""{"type":"config.*"}"""), null, null) { ManagedBy = ManagedBy.AliasConfig }));
+                var (edited, taken) = (await edit, await takeover);
+                Assert.True(edited.Kind is OutcomeKind.Ok || edited.Code is ErrorCodes.ConcurrentChange or ErrorCodes.ManagedByConfiguration, $"round {round} edit: {edited.Kind} {edited.Code}");
+                Assert.True(taken.Kind is OutcomeKind.Ok || taken.Code is ErrorCodes.ConcurrentChange, $"round {round} takeover: {taken.Kind} {taken.Code}");
+                await using var db = _app.Database.Context();
+                var row = await db.Routes.AsNoTracking().SingleAsync(r => r.TenantId == Tenant && r.Key == key, Ct);
+                if (taken.Kind == OutcomeKind.Ok)
+                {
+                    Assert.Equal((ManagedBy.AliasConfig, """{"type":"config.*"}"""), (row.ManagedBy, row.Match.Replace(" ", "")));
+                }
+                else
+                {
+                    Assert.Equal(ManagedBy.WebhooksAlias, row.ManagedBy);
+                    Assert.Equal(edited.Kind == OutcomeKind.Ok ? """{"type":"edit.*"}""" : """{"type":"a.*"}""", row.Match.Replace(" ", ""));
+                }
+            }
+        }
+
         private async Task<int> RouteTargetRowsAsync()
         {
             await using var db = _app.Database.Context();
