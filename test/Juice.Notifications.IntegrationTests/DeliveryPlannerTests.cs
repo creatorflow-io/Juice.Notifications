@@ -21,6 +21,7 @@ namespace Juice.Notifications.IntegrationTests
         private readonly ScratchDatabase _database = new();
         private readonly ManualClock _clock = new(new DateTimeOffset(2026, 11, 13, 9, 0, 0, TimeSpan.Zero));
         private ServiceProvider? _services;
+        private readonly RenderCounter _renders = new();
 
         public async ValueTask InitializeAsync()
         {
@@ -36,6 +37,7 @@ namespace Juice.Notifications.IntegrationTests
             services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
             services.AddSingleton<TimeProvider>(_clock);
             services.AddPostgresClaimStore();
+            services.AddSingleton(_renders);
             services.AddDeliveryPlanning(Options, runWorkers: false);
             _services = services.BuildServiceProvider();
         }
@@ -275,6 +277,41 @@ namespace Juice.Notifications.IntegrationTests
             var (afterMuted, mutedDeliveries) = await AfterAsync(muted);
             Assert.Empty(mutedDeliveries);
             Assert.Equal((RecipientOutcome.Muted, (DateTimeOffset?)null), (afterMuted.Outcome, afterMuted.NextAt));
+        }
+
+        /// <summary>
+        /// Content is rendered once for every destination of a channel (phase-5 M46-0), unless its template reads <c>delivery</c>: then once per
+        /// delivery, each with its own id.
+        /// </summary>
+        [Theory]
+        [InlineData("Subject: hi\nHello {{ data.host }} [{{ escalation.step }}]", 1)]
+        [InlineData("Subject: hi\nid={{ delivery.id }}", 3)]
+        public async Task A_channel_is_rendered_once_unless_its_template_reads_the_delivery(string body, int renders)
+        {
+            LocalStack.RequireAvailable();
+            var scene = await SceneAsync();
+            var mail = await IntegrationAsync(scene, "mail");
+            foreach (var key in new[] { "a", "b", "c" })
+            {
+                await TargetAsync(mail, key, $"{key}@example.com");
+            }
+            var route = await RouteAsync(scene, "a", "b", "c");
+            await TemplateAsync(scene, Channels.Email, body);
+            var recipient = await RecipientAsync(scene, route);
+
+            await RunAsync();
+
+            var (_, deliveries) = await AfterAsync(recipient);
+            Assert.Equal(3, deliveries.Count);
+            Assert.Equal(renders, _renders.Count);
+            if (renders > 1)
+            {
+                Assert.All(deliveries, d => Assert.Contains($"id={d.Id}", d.Content));
+            }
+            else
+            {
+                Assert.All(deliveries, d => Assert.Contains("Hello db-1 []", d.Content));
+            }
         }
 
         [Fact]

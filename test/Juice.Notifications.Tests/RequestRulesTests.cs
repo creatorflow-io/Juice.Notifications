@@ -230,5 +230,13 @@ namespace Juice.Notifications.Tests
                 Assert.Equal("/actor/id", Assert.Single(invalid).Pointer);
             }
         }
+
+        /// <summary>One route by its key is for escalation policy steps only (phase-5 decision G5): a request reaches the routes it matches.</summary>
+        [Fact]
+        public void A_request_cant_name_a_route_by_key()
+        {
+            var (_, invalid, _) = Recipients([new RecipientSpec(RecipientKinds.Route, Key: "ops")]);
+            Assert.Equal("/recipients/0/key", Assert.Single(invalid).Pointer);
+        }
     }
 }

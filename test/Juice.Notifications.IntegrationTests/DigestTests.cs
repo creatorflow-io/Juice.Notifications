@@ -25,6 +25,7 @@ namespace Juice.Notifications.IntegrationTests
         private readonly ScratchDatabase _database = new();
         private readonly ManualClock _clock = new(new DateTimeOffset(2026, 11, 17, 9, 0, 0, TimeSpan.Zero));
         private ServiceProvider? _services;
+        private readonly RenderCounter _renders = new();
         private (Guid App, NotificationType Type) _seed;
 
         public async ValueTask InitializeAsync()
@@ -51,6 +52,7 @@ namespace Juice.Notifications.IntegrationTests
             services.AddSingleton<TimeProvider>(_clock);
             services.AddPostgresClaimStore();
             services.AddPlanning(Options, runWorkers: false);
+            services.AddSingleton(_renders);
             services.AddDeliveryPlanning(Options, runWorkers: false);
             _services = services.BuildServiceProvider();
         }
@@ -267,6 +269,43 @@ namespace Juice.Notifications.IntegrationTests
             await using var after = _database.Context();
             Assert.Equal(DigestState.Closed, (await after.Digests.AsNoTracking().SingleAsync(Ct)).State);
             Assert.All(await after.Recipients.AsNoTracking().ToListAsync(Ct), r => Assert.Equal(RecipientOutcome.Planned, r.Outcome));
+        }
+
+        /// <summary>
+        /// A digest's content is rendered once for its destinations carrying the same notifications (phase-5 M46-0), unless the template reads
+        /// <c>delivery</c>: then once per delivery, each with its own id.
+        /// </summary>
+        [Theory]
+        [InlineData("{\"n\": {{ items | array.size }}}", 1)]
+        [InlineData("{\"id\": {{ delivery.id | json.encode }}}", 2)]
+        public async Task A_digest_is_rendered_once_unless_its_template_reads_the_delivery(string body, int renders)
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                db.Templates.Add(new Template
+                {
+                    TypeId = _seed.Type.Id, Channel = Channels.Webhook, Locale = "en", Version = 1, Engine = "scriban", Body = body, CreatedAt = Seed.Now,
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+            await NotificationAsync(1);
+            await NotificationAsync(2);
+            await DrainAsync<Notification, PlannerStage>("planner");
+            _clock.Advance(TimeSpan.FromSeconds(60));
+            await DrainAsync<Digest, DigestStage>("digest");
+
+            await using (var db = _database.Context())
+            {
+                var deliveries = await db.Deliveries.AsNoTracking().ToListAsync(Ct);
+                Assert.Equal(2, deliveries.Count);
+                Assert.Equal(renders, _renders.Count);
+                foreach (var delivery in deliveries)
+                {
+                    var sent = JsonDocument.Parse(delivery.Content).RootElement.GetProperty("Body").GetString()!;
+                    Assert.Equal(renders == 1 ? """{"n": 2}""" : $$"""{"id": "{{delivery.Id}}"}""", sent);
+                }
+            }
         }
     }
 }

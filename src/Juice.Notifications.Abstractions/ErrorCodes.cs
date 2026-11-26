@@ -59,6 +59,8 @@ namespace Juice.Notifications
         /// producer's own API.
         /// </summary>
         public const string ManagedByAlias = "managed_by_alias";
+        /// <summary>The row was made through the API; the webhooks alias (phase 5 M46) leaves it alone.</summary>
+        public const string ManagedByApi = "managed_by_api";
         /// <summary>Deliveries went through the integration; disable it instead of deleting it.</summary>
         public const string IntegrationInUse = "integration_in_use";
         /// <summary>The target key is taken by another integration of the tenant.</summary>

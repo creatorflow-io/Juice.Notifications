@@ -394,5 +394,30 @@ namespace Juice.Notifications.Tests
             Assert.Contains(Check("""[ {"id":"a","label":"A"}, {"id":"b","label":"B"}, {"id":"c","label":"C"}, {"id":"d","label":"D"}, {"id":"e","label":"E"}, {"id":"f","label":"F"} ]""").Errors,
                 e => e.Pointer == "/actions");
         }
+
+        /// <summary>The delivery a template renders for, and the escalation step that sends it (phase-5 M46-0): the legacy webhook payload needs both.</summary>
+        [Fact]
+        public async Task Templates_see_the_delivery_id_and_the_escalation_step()
+        {
+            var id = Guid.CreateVersion7();
+            var model = Model() with { Delivery = new RenderDelivery(id), Escalation = new RenderEscalation(2, "paging") };
+            Assert.Equal($"{id} 2 paging", await TemplateRenderer.RenderAsync("{{ delivery.id }} {{ escalation.step }} {{ escalation.policy }}", model, Ct));
+            Assert.Equal($"\"{id}\" 2", await TemplateRenderer.RenderAsync("{{ delivery.id | json.encode }} {{ escalation.step | json.encode }}", model, Ct));
+            // Not an escalation: escalation is empty, so a template can tell.
+            Assert.Equal("plain", await TemplateRenderer.RenderAsync("{{ if escalation }}step{{ else }}plain{{ end }}", Model() with { Delivery = new RenderDelivery(id) }, Ct));
+            Assert.Null(TemplateRenderer.Check("{{ delivery.id }}{{ escalation.step }}{{ escalation.policy }}"));
+        }
+
+        /// <summary>Whether a template reads <c>delivery</c>, from its syntax (phase-5 M46-0): only then is it rendered for each delivery.</summary>
+        [Theory]
+        [InlineData("{{ delivery.id }}", true)]
+        [InlineData("{{ if delivery }}x{{ end }}", true)]
+        [InlineData("{{ for x in [1] }}{{ delivery.id | json.encode }}{{ end }}", true)]
+        [InlineData("{{ data.delivery }} {{ labels.delivery }}", false)]
+        [InlineData("{{ escalation.step }} {{ data.host }}", false)]
+        [InlineData("plain text", false)]
+        [InlineData("{{ if }", true)]
+        public void A_template_reads_the_delivery_only_when_it_names_it(string body, bool uses)
+            => Assert.Equal(uses, TemplateRenderer.UsesDelivery(body));
     }
 }

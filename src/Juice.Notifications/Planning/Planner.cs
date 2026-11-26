@@ -106,6 +106,19 @@ namespace Juice.Notifications.Planning
         public async ValueTask<ResolveResult> ResolveAsync(RecipientSpec spec, ResolveContext context, CancellationToken ct)
         {
             var request = context.Request;
+            if (spec.Key is { } key)
+            {
+                // An escalation step naming a route by its key (phase-5 decision G5): that route's targets, whatever its match, as a legacy
+                // webhook step sent to its endpoints whatever events they took. Disabled or gone, it reaches nobody (the step says so).
+                var named = await context.Db.Routes.AsNoTracking().Where(r => r.TenantId == request.TenantId && r.Key == key && r.Enabled)
+                    .Select(r => new { r.Id, r.Key }).SingleOrDefaultAsync(ct);
+                if (named is null)
+                {
+                    logger.LogWarning("Route {Route} named by an escalation step in tenant {Tenant} is disabled or gone; it reaches nobody", key, request.TenantId);
+                    return new ResolveResult([]);
+                }
+                return new ResolveResult([new ResolvedDestination(RecipientKind.Route, "route:" + named.Key, named.Id, named.Key)]);
+            }
             var routes = await context.Db.Routes.AsNoTracking().Where(r => r.TenantId == request.TenantId && r.Enabled).OrderBy(r => r.Key).ToListAsync(ct);
             var matched = new List<ResolvedDestination>();
             foreach (var route in routes)

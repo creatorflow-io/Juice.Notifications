@@ -190,6 +190,7 @@ namespace Juice.Notifications.Delivering
             var reached = new HashSet<Guid>(existing.Select(e => e.RecipientId));
             var created = 0;
             // The inbox: an item per notification. Everything else: one delivery per destination and channel for all its members.
+            var rendered = new Dictionary<(string Channel, string Carried, RenderEscalation? Escalation), DeliveryPlannerStage.Rendered>();
             var groups = reach.GroupBy(r => r.Destination.Channel == Channels.Inbox ? (r.Destination.Key, r.Destination.Channel, r.Member.Id) : (r.Destination.Key, r.Destination.Channel, Guid.Empty));
             foreach (var group in groups)
             {
@@ -199,12 +200,25 @@ namespace Juice.Notifications.Delivering
                 var first = carried[0];
                 var type = types[first.TypeId];
                 var isDigest = destination.Channel != Channels.Inbox;
+                // Its id before rendering, and the first member's escalation step, as a single notification's delivery has (M46-0).
+                var id = Guid.CreateVersion7();
                 var model = new RenderModel(type.Key, type.Version, type.Name, first.Priority, JsonElement.Parse(first.Data), first.Labels, first.Links,
                     isDigest ? carried.Take(DigestRules.MaxListed).Select(r => new DigestItem(JsonElement.Parse(r.Data), r.Labels, r.Links, r.Priority, r.AcceptedAt,
                         r.CorrelationKey)).ToList() : null,
-                    isDigest ? Math.Max(0, carried.Count - DigestRules.MaxListed) : 0);
-                var (content, template, problem, category) = await planner.RenderAsync(db, row.TenantId, type, first, destination.Channel,
-                    channels.Find(destination.Channel), model, timeoutIsFinal: row.StepFailures >= 2, ct, isDigest ? carried : null);
+                    isDigest ? Math.Max(0, carried.Count - DigestRules.MaxListed) : 0,
+                    new RenderDelivery(id), await DeliveryPlannerStage.EscalationOfAsync(db, entries[0].Member, ct));
+                // Once for every destination of a channel carrying the same notifications, unless the template reads delivery (M46-0).
+                var renderKey = (destination.Channel, string.Join(",", carried.Select(r => r.Id)), model.Escalation);
+                if (!rendered.TryGetValue(renderKey, out var once))
+                {
+                    once = await planner.RenderAsync(db, row.TenantId, type, first, destination.Channel,
+                        channels.Find(destination.Channel), model, timeoutIsFinal: row.StepFailures >= 2, ct, isDigest ? carried : null);
+                    if (!DeliveryPlannerStage.PerDelivery(once))
+                    {
+                        rendered[renderKey] = once;
+                    }
+                }
+                var (content, template, problem, category) = once;
                 if (problem is null && destination.Problem is not null)
                 {
                     (problem, category) = (destination.Problem, FailureCategory.Provider);
@@ -212,7 +226,7 @@ namespace Juice.Notifications.Delivering
                 var until = entries.Select(e => e.Until).FirstOrDefault(u => u is not null);
                 var delivery = new Delivery
                 {
-                    TenantId = row.TenantId, DigestId = isDigest ? row.Id : null, Channel = destination.Channel, IntegrationId = destination.Integration!.Id,
+                    Id = id, TenantId = row.TenantId, DigestId = isDigest ? row.Id : null, Channel = destination.Channel, IntegrationId = destination.Integration!.Id,
                     DestinationKey = destination.Key, DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0,
                     Locale = template?.Locale ?? Types.TypeRules.DefaultLocale, RendererVersion = TemplateRenderer.Version, Content = content,
                     Priority = carried.Max(r => r.Priority), Mandatory = type.Mandatory, CreatedAt = now,

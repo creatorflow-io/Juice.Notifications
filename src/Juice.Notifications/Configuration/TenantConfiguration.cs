@@ -23,41 +23,75 @@ namespace Juice.Notifications.Configuration
 
     public sealed record AllowlistView(string Destination, IReadOnlyList<int> Ports, string ManagedBy, DateTimeOffset UpdatedAt);
 
-    // The Put commands come from the API, where a field left out keeps its stored value, or from configuration provisioning (Provisioned, set only
-    // inside this assembly), where the file states the whole definition, may change a row the file owns and takes over one the API made. A Put that
-    // changes nothing leaves the row as it was: no new UpdatedAt, no audit record.
+    // The Put commands come from the API, where a field left out keeps its stored value, or from an in-process owner (ManagedBy): configuration
+    // provisioning, where the file states the whole definition, may change a row the file owns and takes over one the API made; the webhooks alias
+    // (phase 5 M46) writes through the API's rules but owns its rows. A Put that changes nothing leaves the row as it was: no new UpdatedAt, no
+    // audit record.
+
+    /// <summary>
+    /// A setup write and who makes it (phase-5 decision G1). <see cref="ManagedBy"/> is set only by an in-process caller: the API builds its
+    /// commands field by field and never sets it, so null is the API. Each owner changes and deletes only its own rows (configuration also takes
+    /// over the API's); another owner's row is refused with <see cref="ErrorCodes.ManagedByConfiguration"/>, <see cref="ErrorCodes.ManagedByAlias"/>
+    /// or <see cref="ErrorCodes.ManagedByApi"/>.
+    /// </summary>
+    public interface IOwnedSetupWrite
+    {
+        /// <summary><see cref="Notifications.ManagedBy.Configuration"/>, <see cref="Notifications.ManagedBy.WebhooksAlias"/>, or null for the API.</summary>
+        string? ManagedBy { get; }
+    }
 
     /// <summary>Creates or replaces an integration. Its channel is fixed once created.</summary>
     public sealed record PutIntegration(Guid NotificationTenantId, string Key, string? Channel, string? Kind, JsonElement? Settings, string? SecretRef,
-        int? Priority, bool? Enabled) : MessageBase, IRequest<Outcome<IntegrationView>>
+        int? Priority, bool? Enabled) : MessageBase, IRequest<Outcome<IntegrationView>>, IOwnedSetupWrite
     {
-        internal bool Provisioned { get; init; }
+        public string? ManagedBy { get; init; }
+
+        internal bool Provisioned => ManagedBy == Notifications.ManagedBy.Configuration;
     }
 
-    public sealed record DeleteIntegration(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>;
+    public sealed record DeleteIntegration(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
+    {
+        public string? ManagedBy { get; init; }
+    }
 
     public sealed record PutTarget(Guid NotificationTenantId, string IntegrationKey, string Key, string? Address, string? AddressRef, bool? Enabled)
-        : MessageBase, IRequest<Outcome<TargetView>>
+        : MessageBase, IRequest<Outcome<TargetView>>, IOwnedSetupWrite
     {
-        internal bool Provisioned { get; init; }
+        public string? ManagedBy { get; init; }
+
+        internal bool Provisioned => ManagedBy == Notifications.ManagedBy.Configuration;
     }
 
-    public sealed record DeleteTarget(Guid NotificationTenantId, string IntegrationKey, string Key) : MessageBase, IRequest<Outcome<bool>>;
+    public sealed record DeleteTarget(Guid NotificationTenantId, string IntegrationKey, string Key) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
+    {
+        public string? ManagedBy { get; init; }
+    }
 
     public sealed record PutRoute(Guid NotificationTenantId, string Key, JsonElement? Match, IReadOnlyList<string>? Targets, bool? Enabled)
-        : MessageBase, IRequest<Outcome<RouteView>>
+        : MessageBase, IRequest<Outcome<RouteView>>, IOwnedSetupWrite
     {
-        internal bool Provisioned { get; init; }
+        public string? ManagedBy { get; init; }
+
+        internal bool Provisioned => ManagedBy == Notifications.ManagedBy.Configuration;
     }
 
-    public sealed record DeleteRoute(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>;
-
-    public sealed record PutAllowlistEntry(Guid NotificationTenantId, string Destination, IReadOnlyList<int>? Ports) : MessageBase, IRequest<Outcome<AllowlistView>>
+    public sealed record DeleteRoute(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
     {
-        internal bool Provisioned { get; init; }
+        public string? ManagedBy { get; init; }
     }
 
-    public sealed record DeleteAllowlistEntry(Guid NotificationTenantId, string Destination) : MessageBase, IRequest<Outcome<bool>>;
+    public sealed record PutAllowlistEntry(Guid NotificationTenantId, string Destination, IReadOnlyList<int>? Ports) : MessageBase, IRequest<Outcome<AllowlistView>>,
+        IOwnedSetupWrite
+    {
+        public string? ManagedBy { get; init; }
+
+        internal bool Provisioned => ManagedBy == Notifications.ManagedBy.Configuration;
+    }
+
+    public sealed record DeleteAllowlistEntry(Guid NotificationTenantId, string Destination) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
+    {
+        public string? ManagedBy { get; init; }
+    }
 
     public static partial class ConfigurationRules
     {
@@ -243,6 +277,35 @@ namespace Juice.Notifications.Configuration
         private static Outcome<T> ConfigManaged<T>(string what)
             => Outcome<T>.Conflict(ErrorCodes.ManagedByConfiguration, $"The {what} comes from the deployment's configuration; change it there.");
 
+
+        /// <summary>
+        /// The refusal when <paramref name="caller"/> (a command's <see cref="IOwnedSetupWrite.ManagedBy"/>, null for the API) may not change or
+        /// delete a row <paramref name="owner"/> keeps (phase-5 decision G1); null when it may. Each owner keeps to its own rows; configuration
+        /// also takes over the API's, as the provisioning file always has. The service's own rows are refused by their own check.
+        /// </summary>
+        internal static Outcome<T>? Owned<T>(string? owner, string? caller, string what)
+        {
+            var by = Caller(caller);
+            if (owner is null || owner == by || owner == ManagedBy.Service || owner == ManagedBy.Api && by == ManagedBy.Configuration)
+            {
+                return null;
+            }
+            return owner switch
+            {
+                ManagedBy.Configuration => ConfigManaged<T>(what),
+                ManagedBy.WebhooksAlias => Outcome<T>.Conflict(ErrorCodes.ManagedByAlias,
+                    $"The {what} belongs to the webhooks alias until cutover; change it through /webhooks."),
+                _ => Outcome<T>.Conflict(ErrorCodes.ManagedByApi, $"The {what} was made through the API; it isn't {by}'s to change."),
+            };
+        }
+
+        /// <summary>A command's owner: the API when it names none. Only the in-process owners may be named.</summary>
+        internal static string Caller(string? managedBy) => managedBy switch
+        {
+            null or ManagedBy.Api => ManagedBy.Api,
+            ManagedBy.Configuration or ManagedBy.WebhooksAlias => managedBy,
+            _ => throw new ArgumentException($"A setup write is made by the API (null), {ManagedBy.Configuration} or {ManagedBy.WebhooksAlias}, not '{managedBy}'.", nameof(managedBy)),
+        };
         private static Outcome<T> ServiceManaged<T>()
             => Outcome<T>.Conflict(ErrorCodes.ManagedByService, $"The integration {Inbox.InboxIntegrations.Key} is the service's own (the inbox); it can't be changed or deleted, and it has no targets.");
 
@@ -257,9 +320,9 @@ namespace Juice.Notifications.Configuration
                 return Invalid<IntegrationView>(new FieldError("/key", "A key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
             }
             var existing = await db.Integrations.SingleOrDefaultAsync(i => i.TenantId == r.NotificationTenantId && i.Key == r.Key, ct);
-            if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
+            if (Owned<IntegrationView>(existing?.ManagedBy, r.ManagedBy, "integration " + r.Key) is { } owned)
             {
-                return ConfigManaged<IntegrationView>("integration " + r.Key);
+                return owned;
             }
             if (existing?.ManagedBy == ManagedBy.Service)
             {
@@ -340,7 +403,7 @@ namespace Juice.Notifications.Configuration
                 return Invalid<IntegrationView>([.. errors]);
             }
             var now = clock.UtcNow();
-            var managedBy = r.Provisioned ? ManagedBy.Configuration : existing?.ManagedBy ?? ManagedBy.Api;
+            var managedBy = Caller(r.ManagedBy);
             var hash = ConfigurationRules.IntegrationHash(channel!, kind!, settingsJson, secretRef, priority, enabled);
             if (existing is null)
             {
@@ -372,9 +435,9 @@ namespace Juice.Notifications.Configuration
             {
                 return Outcome<bool>.Ok(false);
             }
-            if (existing.ManagedBy == ManagedBy.Configuration)
+            if (Owned<bool>(existing.ManagedBy, r.ManagedBy, "integration " + r.Key) is { } owned)
             {
-                return ConfigManaged<bool>("integration " + r.Key);
+                return owned;
             }
             if (existing.ManagedBy == ManagedBy.Service)
             {
@@ -426,9 +489,9 @@ namespace Juice.Notifications.Configuration
                         : $"The target key '{r.Key}' is taken by another integration; target keys are unique in a tenant.");
                 }
             }
-            if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
+            if (Owned<TargetView>(existing?.ManagedBy, r.ManagedBy, "target " + r.Key) is { } owned)
             {
-                return ConfigManaged<TargetView>("target " + r.Key);
+                return owned;
             }
             string? address = null;
             var own = providers.FirstOrDefault(p => p.Channel == integration.Channel && p.Kind == integration.Kind) as ITargetAddresses;
@@ -473,7 +536,7 @@ namespace Juice.Notifications.Configuration
                 }
             }
             var now = clock.UtcNow();
-            var managedBy = r.Provisioned ? ManagedBy.Configuration : existing?.ManagedBy ?? ManagedBy.Api;
+            var managedBy = Caller(r.ManagedBy);
             var hash = ConfigurationRules.TargetHash(newAddress, newAddressRef, enabled);
             if (existing is null)
             {
@@ -507,9 +570,9 @@ namespace Juice.Notifications.Configuration
             {
                 return Outcome<bool>.Ok(false);
             }
-            if (existing.ManagedBy == ManagedBy.Configuration)
+            if (Owned<bool>(existing.ManagedBy, r.ManagedBy, "target " + r.Key) is { } owned)
             {
-                return ConfigManaged<bool>("target " + r.Key);
+                return owned;
             }
             if (await ConfigurationRules.RoutesNamingAsync(db, r.NotificationTenantId, [existing.Key], ct) is { Count: > 0 } routes)
             {
@@ -527,9 +590,9 @@ namespace Juice.Notifications.Configuration
                 return Invalid<RouteView>(new FieldError("/key", "A key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
             }
             var existing = await db.Routes.SingleOrDefaultAsync(x => x.TenantId == r.NotificationTenantId && x.Key == r.Key, ct);
-            if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
+            if (Owned<RouteView>(existing?.ManagedBy, r.ManagedBy, "route " + r.Key) is { } owned)
             {
-                return ConfigManaged<RouteView>("route " + r.Key);
+                return owned;
             }
             var errors = new List<FieldError>();
             string? match = null;
@@ -579,7 +642,7 @@ namespace Juice.Notifications.Configuration
                 return Invalid<RouteView>([.. errors]);
             }
             var now = clock.UtcNow();
-            var managedBy = r.Provisioned ? ManagedBy.Configuration : existing?.ManagedBy ?? ManagedBy.Api;
+            var managedBy = Caller(r.ManagedBy);
             var (newMatch, newTargets, enabled) = (match ?? existing!.Match, targets ?? existing!.Targets, r.Enabled ?? existing?.Enabled ?? true);
             var hash = ConfigurationRules.RouteHash(newMatch, newTargets, enabled);
             List<RouteTarget> rows = [];
@@ -650,9 +713,9 @@ namespace Juice.Notifications.Configuration
             {
                 return Outcome<bool>.Ok(false);
             }
-            if (existing.ManagedBy == ManagedBy.Configuration)
+            if (Owned<bool>(existing.ManagedBy, r.ManagedBy, "route " + r.Key) is { } owned)
             {
-                return ConfigManaged<bool>("route " + r.Key);
+                return owned;
             }
             db.Routes.Remove(existing);
             return Outcome<bool>.Ok(true);
@@ -676,11 +739,11 @@ namespace Juice.Notifications.Configuration
                 return Invalid<AllowlistView>(new FieldError("/destination", refused));
             }
             var existing = await db.Allowlist.SingleOrDefaultAsync(a => a.TenantId == r.NotificationTenantId && a.Destination == destination, ct);
-            if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
+            if (Owned<AllowlistView>(existing?.ManagedBy, r.ManagedBy, "allowlist entry " + destination) is { } owned)
             {
-                return ConfigManaged<AllowlistView>("allowlist entry " + destination);
+                return owned;
             }
-            var managedBy = r.Provisioned ? ManagedBy.Configuration : existing?.ManagedBy ?? ManagedBy.Api;
+            var managedBy = Caller(r.ManagedBy);
             if (existing is null)
             {
                 existing = new AllowlistEntry { TenantId = r.NotificationTenantId, Destination = destination };
@@ -705,9 +768,9 @@ namespace Juice.Notifications.Configuration
             {
                 return Outcome<bool>.Ok(false);
             }
-            if (existing.ManagedBy == ManagedBy.Configuration)
+            if (Owned<bool>(existing.ManagedBy, r.ManagedBy, "allowlist entry " + destination) is { } owned)
             {
-                return ConfigManaged<bool>("allowlist entry " + destination);
+                return owned;
             }
             db.Allowlist.Remove(existing);
             return Outcome<bool>.Ok(true);

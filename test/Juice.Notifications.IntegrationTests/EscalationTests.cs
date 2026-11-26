@@ -183,5 +183,45 @@ namespace Juice.Notifications.IntegrationTests
             await DrainAsync<Escalation, EscalationStage>("escalation");
             Assert.Equal(2, (await PeopleAsync(id)).Count);
         }
+
+        /// <summary>
+        /// A step naming a route by its key (phase-5 decision G5) reaches that route whatever its match, as a legacy webhook step reached its
+        /// endpoints whatever events they took; a disabled or deleted route reaches nobody, and the escalation goes on.
+        /// </summary>
+        [Fact]
+        public async Task A_step_naming_a_route_by_key_reaches_it_whatever_its_match()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = _database.Context())
+            {
+                db.Routes.AddRange(
+                    new Route { TenantId = Tenant, Key = "pager", Match = """{"type":"some.other.type"}""", Targets = [], DefinitionHash = "h", UpdatedAt = Seed.Now },
+                    new Route { TenantId = Tenant, Key = "off", Match = "{}", Targets = [], Enabled = false, DefinitionHash = "h", UpdatedAt = Seed.Now });
+                db.EscalationPolicies.Add(new EscalationPolicy
+                {
+                    TenantId = Tenant, Key = "by-route", DefinitionHash = "h", UpdatedAt = Seed.Now,
+                    Steps = """[{"afterMinutes":5,"recipients":[{"kind":"route","key":"pager"},{"kind":"route","key":"off"},{"kind":"route","key":"gone"}]},{"afterMinutes":5,"recipients":[{"kind":"route","key":"gone"}]}]""",
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+            var (id, _) = await NotificationAsync("by-route");
+            await DrainAsync<Notification, PlannerStage>("planner");
+
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            await DrainAsync<Notification, PlannerStage>("planner");
+
+            await using (var db = _database.Context())
+            {
+                var routes = await db.Recipients.AsNoTracking().Where(r => r.NotificationId == id && r.Kind == RecipientKind.Route)
+                    .Select(r => new { r.NamedAs, r.EscalationStep }).ToListAsync(Ct);
+                Assert.Equal([("route:pager", 1)], routes.Select(r => (r.NamedAs, r.EscalationStep)));
+            }
+            // The second step reaches nobody (its route is gone); the escalation still runs it, and ends.
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            await DrainAsync<Notification, PlannerStage>("planner");
+            Assert.Equal(EscalationState.Exhausted, (await EscalationAsync(id)).State);
+        }
     }
 }

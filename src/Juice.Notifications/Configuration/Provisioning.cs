@@ -238,7 +238,7 @@ namespace Juice.Notifications.Configuration
             foreach (var (key, i) in integrations)
             {
                 await Put($"integration '{key}'", handlers.Handle(new PutIntegration(tenantId, key, i.Channel, i.Kind,
-                    i.Settings ?? JsonElement.Parse("{}"), i.SecretRef, i.Priority ?? 0, i.Enabled ?? true) { Provisioned = true }, ct));
+                    i.Settings ?? JsonElement.Parse("{}"), i.SecretRef, i.Priority ?? 0, i.Enabled ?? true) { ManagedBy = ManagedBy.Configuration }, ct));
             }
             var targetKeys = new HashSet<string>(StringComparer.Ordinal);
             foreach (var (integrationKey, i) in integrations)
@@ -251,7 +251,7 @@ namespace Juice.Notifications.Configuration
                         continue;
                     }
                     await Put($"target '{key}' of integration '{integrationKey}'", handlers.Handle(new PutTarget(tenantId, integrationKey, key, t.Address,
-                        t.AddressRef, t.Enabled ?? true) { Provisioned = true }, ct));
+                        t.AddressRef, t.Enabled ?? true) { ManagedBy = ManagedBy.Configuration }, ct));
                 }
             }
             // A secret only the deployment may name signs only for what the deployment configures: an integration given one may not keep enabled
@@ -281,13 +281,13 @@ namespace Juice.Notifications.Configuration
                     problems.Add($"route '{key}': a route has a match ({{}} matches every notification) and its targets");
                     continue;
                 }
-                await Put($"route '{key}'", handlers.Handle(new PutRoute(tenantId, key, r.Match, r.Targets, r.Enabled ?? true) { Provisioned = true }, ct));
+                await Put($"route '{key}'", handlers.Handle(new PutRoute(tenantId, key, r.Match, r.Targets, r.Enabled ?? true) { ManagedBy = ManagedBy.Configuration }, ct));
             }
             var destinations = new HashSet<string>(StringComparer.Ordinal);
             foreach (var a in definition.Allowlist ?? [])
             {
                 var view = await Put($"allowlist entry '{a.Destination}'", handlers.Handle(new PutAllowlistEntry(tenantId, a.Destination ?? "", a.Ports)
-                    { Provisioned = true }, ct));
+                    { ManagedBy = ManagedBy.Configuration }, ct));
                 if (view is not null && !destinations.Add(view.Destination))
                 {
                     problems.Add($"allowlist entry '{a.Destination}': listed twice (as {view.Destination})");

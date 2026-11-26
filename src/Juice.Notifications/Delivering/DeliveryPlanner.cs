@@ -37,8 +37,18 @@ namespace Juice.Notifications.Delivering
     /// <summary>The stage's step-failure limit, which the planner's timeout retries have to stay under.</summary>
     public sealed record DeliveryPlannerLimits(int MaxStepFailures);
 
+    /// <summary>Counts content renders when a host registers one: how the tests see that content is rendered once per channel (phase-5 M46-0).</summary>
+    public sealed class RenderCounter
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        internal void Add() => Interlocked.Increment(ref _count);
+    }
+
     public sealed class DeliveryPlannerStage(ILogger<DeliveryPlannerStage> logger, IChannelRegistry channels, Inbox.InboxIntegrations inboxes,
-        DeliveryPlannerLimits? limits = null) : IStage<NotificationRecipient>
+        DeliveryPlannerLimits? limits = null, RenderCounter? renders = null) : IStage<NotificationRecipient>
     {
         public string Name => DeliveryStageNames.DeliveryPlanner;
 
@@ -102,7 +112,8 @@ namespace Juice.Notifications.Delivering
                 return;
             }
             var type = await db.Types.AsNoTracking().SingleAsync(t => t.Id == request.TypeId, ct);
-            var model = new RenderModel(type.Key, type.Version, type.Name, request.Priority, JsonElement.Parse(request.Data), request.Labels, request.Links);
+            var model = new RenderModel(type.Key, type.Version, type.Name, request.Priority, JsonElement.Parse(request.Data), request.Labels, request.Links,
+                Escalation: await EscalationOfAsync(db, row, ct));
 
             var created = 0;
             // What this recipient already has (a retried step), read once; and each channel's content, rendered once for all its destinations.
@@ -128,12 +139,18 @@ namespace Juice.Notifications.Delivering
                     continue;
                 }
                 // Rendered even for a destination with a problem (its integration disabled), so a dead-letter retry once it is fixed has content to send.
-                if (!rendered.ContainsKey(destination.Channel))
+                // Once per channel for all its destinations, unless the template reads delivery (its id): then for each delivery (M46-0).
+                var id = Guid.CreateVersion7();
+                if (!rendered.TryGetValue(destination.Channel, out var once))
                 {
-                    rendered[destination.Channel] = await RenderAsync(db, row.TenantId, type, request, destination.Channel, channels.Find(destination.Channel), model,
-                        timeoutIsFinal: row.StepFailures >= TimeoutsAllowed, ct);
+                    once = await RenderAsync(db, row.TenantId, type, request, destination.Channel, channels.Find(destination.Channel),
+                        model with { Delivery = new RenderDelivery(id) }, timeoutIsFinal: row.StepFailures >= TimeoutsAllowed, ct);
+                    if (!PerDelivery(once))
+                    {
+                        rendered[destination.Channel] = once;
+                    }
                 }
-                var (content, template, problem, category) = rendered[destination.Channel];
+                var (content, template, problem, category) = once;
                 if (problem is null && destination.Problem is not null)
                 {
                     // A destination-level problem (an integration disabled) is the provider's side, not the content.
@@ -141,7 +158,7 @@ namespace Juice.Notifications.Delivering
                 }
                 var delivery = new Delivery
                 {
-                    TenantId = row.TenantId, Channel = destination.Channel, IntegrationId = destination.Integration.Id, DestinationKey = destination.Key,
+                    Id = id, TenantId = row.TenantId, Channel = destination.Channel, IntegrationId = destination.Integration.Id, DestinationKey = destination.Key,
                     DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0, Locale = template?.Locale ?? Types.TypeRules.DefaultLocale,
                     RendererVersion = TemplateRenderer.Version, Content = content, Priority = request.Priority, Mandatory = type.Mandatory, CreatedAt = context.Now,
                     Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed, FailureCheckDue = problem is not null,
@@ -373,8 +390,31 @@ namespace Juice.Notifications.Delivering
         /// <summary>One channel's content, or the problem that stopped it and its failure category.</summary>
         internal sealed record Rendered(string Content, Template? Template, string? Problem, FailureCategory? Category);
 
+        /// <summary>Content rendered with a Scriban template that reads <c>delivery</c>: it is the one delivery's, never shared with another (M46-0).</summary>
+        internal static bool PerDelivery(Rendered rendered)
+            => rendered.Template is { Engine: TemplateEngines.Scriban } template && TemplateRenderer.UsesDelivery(template.Body);
+
+
         /// <summary>What a delivery stores when its content couldn't be rendered: nothing to send, so a dead-letter retry refuses it.</summary>
         private const string NoContent = "";
+
+        /// <summary>
+        /// The escalation step a recipient was planned by, with its policy's key, for templates (<c>escalation.step</c>, <c>escalation.policy</c>);
+        /// null for a recipient of the notification itself. A policy deleted since is named by its id.
+        /// </summary>
+        internal static async Task<RenderEscalation?> EscalationOfAsync(NotificationsDbContext db, NotificationRecipient row, CancellationToken ct)
+        {
+            if (row.EscalationStep <= 0)
+            {
+                return null;
+            }
+            var policy = await (from e in db.Escalations.AsNoTracking()
+                                where e.TenantId == row.TenantId && e.NotificationId == row.NotificationId
+                                join p in db.EscalationPolicies.AsNoTracking() on new { e.TenantId, Id = e.PolicyId } equals new { p.TenantId, p.Id } into policies
+                                from p in policies.DefaultIfEmpty()
+                                select new { e.PolicyId, Key = p == null ? null : p.Key }).FirstOrDefaultAsync(ct);
+            return new RenderEscalation(row.EscalationStep, policy?.Key ?? policy?.PolicyId.ToString() ?? "");
+        }
 
         /// <summary>
         /// The content for one channel, shaped as its definition says: the tenant's template, else the application's, in <c>en</c>; a passthrough
@@ -387,6 +427,7 @@ namespace Juice.Notifications.Delivering
             NotificationRequest request, string channel, ChannelDefinition? definition, RenderModel model, bool timeoutIsFinal, CancellationToken ct,
             IReadOnlyList<NotificationRequest>? digest = null)
         {
+            renders?.Add();
             if (definition is null)
             {
                 return new Rendered(NoContent, null, $"The channel {channel} isn't registered.", FailureCategory.Content);
