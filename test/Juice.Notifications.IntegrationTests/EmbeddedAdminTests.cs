@@ -62,6 +62,10 @@ namespace Juice.Notifications.IntegrationTests
             protected override ValueTask<AdminRights> RightsAsync(ClaimsPrincipal user, CancellationToken ct)
                 => ValueTask.FromResult(user.IsInRole("Admin") ? AdminRights.All
                     : user.IsInRole("Operator") ? AdminRights.Read | AdminRights.Operate
+                    // One right alone (QA M44-3: the route matrix).
+                    : user.IsInRole("Read") ? AdminRights.Read
+                    : user.IsInRole("Operate") ? AdminRights.Operate
+                    : user.IsInRole("Configure") ? AdminRights.Configure
                     : AdminRights.None);
         }
 
@@ -431,6 +435,84 @@ namespace Juice.Notifications.IntegrationTests
             LocalStack.RequireAvailable();
             await using var app = await HostAsync();
             AdminRoutes.AssertPagesAndRights(app.Services, AdminPages.Embedded, $"{Prefix}/api/v1/tenants/");
+        }
+
+        /// <summary>
+        /// QA (M44-3): every mapped admin route, called over HTTP as each role (Read, Operate, Configure alone, Admin, none, anonymous) and on
+        /// another tenant's path. The guard answers as the route's right says: anonymous 401; no right <c>not_tenant_admin</c>; a right short of
+        /// the route's <c>not_allowed</c>; another tenant <c>tenant_forbidden</c>, even to Admin; and a caller with the right reaches the handler,
+        /// whose answer (to placeholder ids and an empty body) is never an error of the server.
+        /// </summary>
+        [Fact]
+        public async Task Every_route_answers_each_role_as_its_right_says()
+        {
+            LocalStack.RequireAvailable();
+            await using var app = await HostAsync();
+            var endpoints = app.Services.GetRequiredService<EndpointDataSource>().Endpoints.OfType<RouteEndpoint>()
+                .Where(e => e.Metadata.GetMetadata<AdminPageMetadata>() is not null && (e.RoutePattern.RawText ?? "").Contains("{tenantId", StringComparison.Ordinal))
+                .SelectMany(e => (e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["GET"]).Select(m => (Endpoint: e, Method: m)))
+                .ToList();
+            Assert.True(endpoints.Count > 20, $"{endpoints.Count} routes");
+            var other = Guid.CreateVersion7();
+            // An admin names the correlation's application (keys are per application).
+            string PathOf(RouteEndpoint e, Guid tenant) => "/" + System.Text.RegularExpressions.Regex.Replace(e.RoutePattern.RawText!.TrimStart('/'), @"\{([^}:=?*]+)([^}]*)\}",
+                m => m.Groups[1].Value == "tenantId" ? tenant.ToString() : m.Groups[2].Value.Contains("guid", StringComparison.Ordinal) ? Guid.CreateVersion7().ToString() : "qa-x")
+                + (e.RoutePattern.RawText!.Contains("/correlations/{key}", StringComparison.Ordinal) ? "?application=adminhost" : "");
+            async Task<(HttpStatusCode Status, string Code)> CallAsync(string? role, string method, string path)
+            {
+                using var client = Client(app, role);
+                using var request = new HttpRequestMessage(new HttpMethod(method), path);
+                if (!HttpMethods.IsGet(method) && !HttpMethods.IsDelete(method) && !HttpMethods.IsHead(method))
+                {
+                    request.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                }
+                using var response = await client.SendAsync(request, Ct);
+                var body = await response.Content.ReadAsStringAsync(Ct);
+                var code = "";
+                if (body.Length > 0 && body.TrimStart().StartsWith('{'))
+                {
+                    try
+                    {
+                        using var json = JsonDocument.Parse(body);
+                        code = json.RootElement.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString()! : "";
+                    }
+                    catch (JsonException)
+                    {
+                    }
+                }
+                return (response.StatusCode, code);
+            }
+            var failures = new List<string>();
+            var guardCodes = new[] { ErrorCodes.NotAllowed, ErrorCodes.NotTenantAdmin, ErrorCodes.TenantForbidden };
+            foreach (var (endpoint, method) in endpoints)
+            {
+                var path = PathOf(endpoint, Tenant);
+                var needed = NotificationsAdminRegistration.Needed(endpoint, method);
+                void Expect(string who, (HttpStatusCode Status, string Code) got, Func<(HttpStatusCode Status, string Code), bool> ok, string expected)
+                {
+                    if (!ok(got))
+                    {
+                        failures.Add($"{method} {endpoint.RoutePattern.RawText} as {who}: {(int)got.Status} {got.Code}, expected {expected}");
+                    }
+                }
+                Expect("anonymous", await CallAsync(null, method, path), g => g.Status == HttpStatusCode.Unauthorized, "401");
+                Expect("none", await CallAsync("Viewer", method, path), g => g == (HttpStatusCode.Forbidden, ErrorCodes.NotTenantAdmin), "403 not_tenant_admin");
+                foreach (var (role, rights) in new[] { ("Read", AdminRights.Read), ("Operate", AdminRights.Operate), ("Configure", AdminRights.Configure), ("Admin", AdminRights.All) })
+                {
+                    var got = await CallAsync(role, method, path);
+                    if ((rights & needed) == needed)
+                    {
+                        Expect(role, got, g => (int)g.Status < 500 && !(g.Status == HttpStatusCode.Forbidden && guardCodes.Contains(g.Code)), "the handler's answer, not the guard's or a 5xx");
+                    }
+                    else
+                    {
+                        Expect(role, got, g => g == (HttpStatusCode.Forbidden, ErrorCodes.NotAllowed), "403 not_allowed");
+                    }
+                }
+                Expect("Admin, another tenant", await CallAsync("Admin", method, PathOf(endpoint, other)),
+                    g => g == (HttpStatusCode.Forbidden, ErrorCodes.TenantForbidden), "403 tenant_forbidden");
+            }
+            Assert.True(failures.Count == 0, string.Join("\n", failures));
         }
     }
 
