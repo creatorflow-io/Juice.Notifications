@@ -23,6 +23,13 @@ namespace Juice.Notifications
 
         /// <summary>The largest <see cref="StageHealth.OldestDue"/> across the stages; null when nothing is due anywhere.</summary>
         public TimeSpan? OldestDueAny { get; init; }
+
+        /// <summary>
+        /// Whether anything is getting out (phase-5 M49-0b, "not getting out"): the dispatcher's attempts in the last <see cref="SendHealth.Window"/>,
+        /// and the oldest delivery still in flight. A provider refusing every send shows here, not in a stage's <see cref="StageHealth.Failing"/>:
+        /// its deliveries back off without failing a step, so they are never due for long.
+        /// </summary>
+        public SendHealth Sends { get; init; } = new();
     }
 
     /// <summary>One stage's health: what this replica saw of it, and what the database says across replicas.</summary>
@@ -45,5 +52,34 @@ namespace Juice.Notifications
 
         /// <summary>Where <see cref="Failing"/> stops counting.</summary>
         public const int MaxFailing = 1000;
+    }
+
+    /// <summary>The dispatcher's sends, from the database across replicas and tenants (M49-0b).</summary>
+    public sealed record SendHealth
+    {
+        /// <summary>The window the attempts are counted in: the last 15 minutes.</summary>
+        public TimeSpan Window { get; init; } = DefaultWindow;
+
+        /// <summary>Attempts in the window that got the message out: <c>Delivered</c> and <c>Accepted</c>, counted up to <see cref="MaxCount"/>.</summary>
+        public int Succeeded { get; init; }
+
+        /// <summary>Attempts in the window that failed: <c>RetryableFailure</c>, <c>PermanentFailure</c> and <c>Unknown</c>, counted up to <see cref="MaxCount"/>.</summary>
+        public int Failed { get; init; }
+
+        /// <summary>
+        /// How long the oldest delivery still in flight (<c>Pending</c>, <c>Sending</c>, <c>Retrying</c>) has existed, by its creation; null when
+        /// none is. A dry run's deliveries (<c>WouldSend</c>) make no attempts and are never in flight, so they show in neither signal.
+        /// </summary>
+        /// <remarks>
+        /// In service mode, deliveries that an inactive (suspended) tenant's gate holds <c>Pending</c> on purpose count as in flight too, so one
+        /// suspended tenant can make this grow on a healthy pipeline. Embedded hosts use the open gate and aren't affected. Excluding them is
+        /// deferred (#55), to the service's own dead-man.
+        /// </remarks>
+        public TimeSpan? OldestUndelivered { get; init; }
+
+        public static readonly TimeSpan DefaultWindow = TimeSpan.FromMinutes(15);
+
+        /// <summary>Where <see cref="Succeeded"/> and <see cref="Failed"/> stop counting, so a busy deployment's read stays bounded.</summary>
+        public const int MaxCount = 10000;
     }
 }

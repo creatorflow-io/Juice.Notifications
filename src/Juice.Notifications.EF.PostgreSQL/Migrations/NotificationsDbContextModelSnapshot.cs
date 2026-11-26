@@ -663,6 +663,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasKey("TenantId", "Id")
                         .HasName("pk_deliveries");
 
+                    b.HasIndex("CreatedAt")
+                        .HasDatabaseName("ix_deliveries_in_flight")
+                        .HasFilter("status IN ('Pending', 'Sending', 'Retrying')");
+
                     b.HasIndex("Id")
                         .HasDatabaseName("ix_deliveries_failure_check")
                         .HasFilter("failure_check_due");
@@ -754,6 +758,9 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasKey("TenantId", "Id")
                         .HasName("pk_delivery_attempts");
+
+                    b.HasIndex("At")
+                        .HasDatabaseName("ix_delivery_attempts_at");
 
                     b.HasIndex("TenantId", "IntegrationId")
                         .HasDatabaseName("ix_delivery_attempts_tenant_id_integration_id");

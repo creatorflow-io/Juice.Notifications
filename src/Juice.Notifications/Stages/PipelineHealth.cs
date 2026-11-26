@@ -56,6 +56,32 @@ namespace Juice.Notifications.Stages
                 Running = running.Value,
                 Stages = stages,
                 OldestDueAny = stages.Values.Max(s => s.OldestDue),
+                Sends = await SendsAsync(now, cancellationToken),
+            };
+        }
+
+        private static readonly AttemptOutcome[] Succeeded = [AttemptOutcome.Delivered, AttemptOutcome.Accepted];
+        private static readonly AttemptOutcome[] Failed = [AttemptOutcome.RetryableFailure, AttemptOutcome.PermanentFailure, AttemptOutcome.Unknown];
+        private static readonly DeliveryStatus[] InFlight = [DeliveryStatus.Pending, DeliveryStatus.Sending, DeliveryStatus.Retrying];
+
+        /// <summary>
+        /// The attempts of the last <see cref="SendHealth.DefaultWindow"/> (through <c>ix_delivery_attempts_at</c>, each count capped), and the oldest
+        /// delivery in flight (through <c>ix_deliveries_in_flight</c>): what shows a provider refusing every send, which no stage shows.
+        /// </summary>
+        private async Task<SendHealth> SendsAsync(DateTimeOffset now, CancellationToken ct)
+        {
+            var since = now - SendHealth.DefaultWindow;
+            var window = db.Attempts.AsNoTracking().Where(a => a.At >= since);
+            var succeeded = await window.Where(a => Succeeded.Contains(a.Outcome)).Take(SendHealth.MaxCount).CountAsync(ct);
+            var failed = await window.Where(a => Failed.Contains(a.Outcome)).Take(SendHealth.MaxCount).CountAsync(ct);
+            var oldest = await db.Deliveries.AsNoTracking().Where(d => InFlight.Contains(d.Status))
+                .OrderBy(d => d.CreatedAt).Select(d => (DateTimeOffset?)d.CreatedAt).FirstOrDefaultAsync(ct);
+            return new SendHealth
+            {
+                Window = SendHealth.DefaultWindow,
+                Succeeded = succeeded,
+                Failed = failed,
+                OldestUndelivered = oldest is { } created ? now - created : null,
             };
         }
 
