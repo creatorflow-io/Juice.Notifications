@@ -30,7 +30,23 @@ namespace Juice.Notifications.Hosting
         /// (hosted services start in the order they are registered): an embedded host's application and types.
         /// </summary>
         public Action<IServiceCollection>? BeforeStages { get; set; }
+
+        /// <summary>How the pipeline is hosted (m44-architecture §3.5): the service, or embedded in a product's host for one tenant.</summary>
+        public NotificationsMode Mode { get; set; } = NotificationsMode.Service;
+
+        /// <summary>Embedded: the host's one tenant; the admin API refuses any other in its path.</summary>
+        public Guid? EmbeddedTenantId { get; set; }
     }
+
+    /// <summary>How the pipeline is hosted: the centralized service, or embedded in a product's own host (phase-5-plan I57).</summary>
+    public enum NotificationsMode { Service, Embedded }
+
+    /// <summary>
+    /// The hosting mode as the pipeline was registered (m44-architecture §3.5): the admin API maps the pages the mode has, and, embedded, refuses
+    /// any tenant but <see cref="EmbeddedTenantId"/>. Set by the pipeline's registration, never by the host, so no page can claim what the
+    /// pipeline doesn't have.
+    /// </summary>
+    public sealed record NotificationsHosting(NotificationsMode Mode, Guid? EmbeddedTenantId);
 
     /// <summary>Warns at start when the dispatcher is in dry run (phase-5-plan I67): deliveries planned meanwhile are recorded, not sent.</summary>
     internal sealed class DryRunNotice(Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions> options, ILogger<DryRunNotice> logger) : IHostedService
@@ -61,6 +77,7 @@ namespace Juice.Notifications.Hosting
             Action<IServiceProvider, DbContextOptionsBuilder> database, NotificationsPipelineOptions? options = null)
         {
             options ??= new NotificationsPipelineOptions();
+            services.AddSingleton(new NotificationsHosting(options.Mode, options.Mode == NotificationsMode.Embedded ? options.EmbeddedTenantId : null));
             services.AddDbContext<NotificationsDbContext>(database);
             services.TryAddSingleton(TimeProvider.System);
             services.AddSingleton(new DatabaseMigrator.Settings(configuration.GetSection(DatabaseOptions.Section).Get<DatabaseOptions>() ?? new DatabaseOptions()));

@@ -98,23 +98,7 @@ namespace Juice.Notifications.Api
         /// often lacks: Keycloak's carry <c>sub</c>, <c>azp</c> and <c>client_id</c> only. A client is named by its client id, so a producer's
         /// or an operator tool's changes say which client made them; anything else by its subject.
         /// </summary>
-        internal static string? Caller(System.Security.Claims.ClaimsPrincipal user)
-        {
-            if (user.Identity?.IsAuthenticated != true)
-            {
-                return null;
-            }
-            string? Claim(string type) => user.FindFirst(type)?.Value is { Length: > 0 } value ? value : null;
-            if ((Claim("preferred_username") ?? Claim("name")) is { } name)
-            {
-                return name;
-            }
-            if ((Claim("client_id") ?? Claim("azp")) is { } client)
-            {
-                return "client:" + client;
-            }
-            return Claim("sub");
-        }
+        internal static string? Caller(System.Security.Claims.ClaimsPrincipal user) => Admin.AdminCaller.Name(user);
     }
 
     /// <summary>One audit record per tenant provisioned, with the rows it changed, under <see cref="ConfigurationProvisioner.Actor"/>.</summary>

@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Juice.MediatR;
+using Juice.Notifications.Admin;
 using Juice.Notifications.Api.Contracts;
 using Juice.Notifications.Data;
 using Juice.Notifications.History;
@@ -12,23 +13,14 @@ namespace Juice.Notifications.Api
     /// </summary>
     internal static class HistoryEndpoints
     {
-        public static void MapHistoryEndpoints(this IEndpointRouteBuilder app)
+        public static void MapHistoryEndpoints(this IEndpointRouteBuilder tenant)
         {
-            var deliveries = app.MapGroup("/api/v1/tenants/{tenantId:guid}/deliveries").WithTags("Delivery history");
-            deliveries.MapGet("", ListAsync);
-            deliveries.MapGet("/{id:guid}", GetAsync);
-            deliveries.MapPost("/replay", ReplayAsync).AddEndpointFilter(AdminOnly);
-            deliveries.MapPost("/{id:guid}/retry", RetryAsync).AddEndpointFilter(AdminOnly);
-        }
-
-        private static async ValueTask<object?> AdminOnly(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
-        {
-            var http = context.HttpContext;
-            var allowed = Guid.TryParse(http.GetRouteValue("tenantId") as string, out var tenantId)
-                && await http.RequestServices.GetRequiredService<ITenantAccess>().CanAdministerAsync(http.User, tenantId, http.RequestAborted);
-            return allowed
-                ? await next(context)
-                : ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin, "Only the tenant's admins retry deliveries.");
+            var deliveries = tenant.MapGroup("/deliveries").WithTags("Delivery history").WithMetadata(new AdminPageMetadata(AdminPages.Deliveries));
+            deliveries.MapGet("", ListAsync).ProducerToo();
+            deliveries.MapGet("/{id:guid}", GetAsync).ProducerToo();
+            // Retry and replay are operating, not configuring (p5-d6: an Operator retries).
+            deliveries.MapPost("/replay", ReplayAsync).Needs(AdminRights.Operate);
+            deliveries.MapPost("/{id:guid}/retry", RetryAsync).Needs(AdminRights.Operate);
         }
 
         /// <summary>Bulk replay (phase-4-plan I44): the tenant's failed deliveries matching the filter, each as a single retry.</summary>
@@ -58,22 +50,27 @@ namespace Juice.Notifications.Api
         }
 
         /// <summary>No application filter for a tenant admin; the producer's own application otherwise; or the refusal.</summary>
-        private static async Task<(bool Allowed, Guid? ApplicationId, IResult? Refusal)> ViewerAsync(Guid tenantId, ClaimsPrincipal user, ITenantAccess access,
-            Producers producers, CancellationToken ct)
+        private static async Task<(bool Allowed, Guid? ApplicationId, IResult? Refusal)> ViewerAsync(Guid tenantId, ClaimsPrincipal user, INotificationsAdminAccess access,
+            IServiceProvider services, CancellationToken ct)
         {
-            if (await access.CanAdministerAsync(user, tenantId, ct))
+            if (await access.RightsAsync(user, tenantId, ct) != AdminRights.None)
             {
                 return (true, null, null);
             }
-            var (caller, refusal) = await producers.ResolveAsync(user, ct, forWriting: false);
-            return caller is null ? (false, null, refusal) : (true, caller.Id, null);
+            // Not an admin: the service's producer, for its own deliveries (the rights filter let it this far only where the hook is).
+            if (services.GetService<IAdminFallbackCaller>() is not { } fallback)
+            {
+                return (false, null, ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin, "The caller doesn't administer this tenant."));
+            }
+            var (application, refusal) = await fallback.ResolveAsync(user, ct);
+            return application is null ? (false, null, refusal) : (true, application, null);
         }
 
-        private static async Task<IResult> ListAsync(Guid tenantId, ClaimsPrincipal user, ITenantAccess access, Producers producers, DeliveryHistory history,
+        private static async Task<IResult> ListAsync(Guid tenantId, ClaimsPrincipal user, INotificationsAdminAccess access, IServiceProvider services, DeliveryHistory history,
             string? status, string? channel, string? integration, string? type, Guid? request, DateTimeOffset? from, DateTimeOffset? to, Guid? before,
             int? limit, CancellationToken ct)
         {
-            var (allowed, applicationId, refusal) = await ViewerAsync(tenantId, user, access, producers, ct);
+            var (allowed, applicationId, refusal) = await ViewerAsync(tenantId, user, access, services, ct);
             if (!allowed)
             {
                 return refusal!;
@@ -100,10 +97,10 @@ namespace Juice.Notifications.Api
             return Results.Ok(new DeliveryPageResponse(page.Items.Select(ToResponse).ToList(), page.Next));
         }
 
-        private static async Task<IResult> GetAsync(Guid tenantId, Guid id, ClaimsPrincipal user, ITenantAccess access, Producers producers,
+        private static async Task<IResult> GetAsync(Guid tenantId, Guid id, ClaimsPrincipal user, INotificationsAdminAccess access, IServiceProvider services,
             DeliveryHistory history, CancellationToken ct)
         {
-            var (allowed, applicationId, refusal) = await ViewerAsync(tenantId, user, access, producers, ct);
+            var (allowed, applicationId, refusal) = await ViewerAsync(tenantId, user, access, services, ct);
             if (!allowed)
             {
                 return refusal!;

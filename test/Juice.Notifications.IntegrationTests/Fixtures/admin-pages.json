@@ -1,0 +1,6 @@
+{
+  "service": ["overview", "deliveries", "notifications", "correlations", "storms", "integrations", "routes", "mutes", "escalation-policies", "allowlist", "types",
+    "display-groups", "subscribers", "groups", "topics", "resolvers", "settings", "applications"],
+  "embedded": ["overview", "deliveries", "notifications", "correlations", "storms", "integrations", "routes", "mutes", "escalation-policies", "allowlist", "types",
+    "settings"]
+}

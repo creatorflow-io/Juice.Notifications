@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Juice.Notifications.Api.Contracts;
@@ -48,6 +49,14 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.Equal("obs-operator", read.GetProperty("heldBy").GetString());
                 var typed = read.Deserialize<CorrelationResponse>(JsonSerializerOptions.Web)!;
                 Assert.Equal((heldAt, "silence:7", "obs-operator"), (typed.HeldAt!.Value, typed.HoldReason, typed.HeldBy));
+            }
+
+            // The admin who leaves the application out is told it's missing (#14 review), as when embedded; a producer reads its own without.
+            using (var missing = await admin.GetAsync(path, Ct))
+            {
+                var problem = await missing.Content.ReadFromJsonAsync<JsonElement>(Ct);
+                Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidRequest, "/application"),
+                    (missing.StatusCode, problem.GetProperty("code").GetString(), problem.GetProperty("errors")[0].GetProperty("pointer").GetString()));
             }
 
             var page = await JsonAsync(admin, $"{Tenant}/correlations?key={Uri.EscapeDataString(key)}");

@@ -119,3 +119,38 @@ namespace Juice.Notifications.Api
         }
     }
 }
+
+namespace Juice.Notifications.Api
+{
+    /// <summary>
+    /// The admin package's access in the service (m44-architecture §6.1): from <see cref="ITenantAccess"/>, which has no finer grain, so a tenant
+    /// admin has every right and anyone else none. The answers are the service's as before the admin package.
+    /// </summary>
+    internal sealed class TenantAccessAdminAccess(ITenantAccess access) : Admin.INotificationsAdminAccess
+    {
+        public async ValueTask<Admin.AdminRights> RightsAsync(System.Security.Claims.ClaimsPrincipal user, Guid tenantId, CancellationToken ct = default)
+            => await access.CanAdministerAsync(user, tenantId, ct) ? Admin.AdminRights.All : Admin.AdminRights.None;
+
+        public async ValueTask<Admin.AdminTenants> TenantsAsync(System.Security.Claims.ClaimsPrincipal user, CancellationToken ct = default)
+        {
+            var administered = await access.AdministeredAsync(user, ct);
+            return new Admin.AdminTenants(administered.Every, administered.Ids.ToList());
+        }
+    }
+
+    /// <summary>The service's producers on the endpoints they share with admins (their own deliveries and correlations), disabled ones too.</summary>
+    internal sealed class ProducerFallbackCaller(Producers producers) : Admin.IAdminFallbackCaller
+    {
+        public async ValueTask<(Guid? ApplicationId, IResult? Refusal)> ResolveAsync(System.Security.Claims.ClaimsPrincipal user, CancellationToken ct)
+        {
+            var (application, refusal) = await producers.ResolveAsync(user, ct, forWriting: false);
+            return (application?.Id, refusal);
+        }
+    }
+
+    /// <summary>The service's platform admin role (<see cref="Roles.PlatformAdmin"/>), for the access answer.</summary>
+    internal sealed class PlatformAdminRole : Admin.IAdminPlatformRole
+    {
+        public bool IsPlatformAdmin(System.Security.Claims.ClaimsPrincipal user) => user.IsInRole(Roles.PlatformAdmin);
+    }
+}

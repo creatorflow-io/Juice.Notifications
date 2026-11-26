@@ -580,5 +580,39 @@ namespace Juice.Notifications.IntegrationTests
             using var person = producer.App.Client(await LocalStack.PersonTokenAsync());
             Assert.Equal(HttpStatusCode.Forbidden, (await person.GetAsync($"{SendUrl}/{id}", Ct)).StatusCode);
         }
+
+        /// <summary>
+        /// QA (#14 round 2, the reviewer's case): in the service, a producer reading another application's notification in the same tenant by
+        /// its id gets 404 <c>not_found</c>, the same answer as for no notification at all (nothing tells it the id exists), while the tenant's
+        /// admin reads it and sees whose it is. The other application is seeded beside the sample producer, linked to the same tenant.
+        /// </summary>
+        [Fact]
+        public async Task A_producer_reading_another_applications_notification_by_id_gets_not_found()
+        {
+            LocalStack.RequireAvailable();
+            Guid theirs;
+            var other = Seed.Application("other-" + Guid.NewGuid().ToString("N")[..8]);
+            await using (var db = producer.App.Database.Context())
+            {
+                var type = Seed.Type(other.Id, other.Key + ".thing");
+                var request = Seed.Request(ProducerApp.Tenant, other.Id, type.Id, Guid.NewGuid().ToString("N"));
+                db.Entry(request).Property(r => r.TypeKey).CurrentValue = type.Key;
+                var notification = Seed.Notification(ProducerApp.Tenant, request.Id);
+                db.AddRange(other, type, new ApplicationTenant { ApplicationId = other.Id, TenantId = ProducerApp.Tenant, LinkedAt = Seed.Now }, request, notification);
+                await db.SaveChangesAsync(Ct);
+                theirs = request.Id; // the API names a notification by its request's id (what the send answered)
+            }
+
+            using var client = await producer.ProducerAsync();
+            using var response = await client.GetAsync($"{SendUrl}/{theirs}", Ct);
+            Assert.Equal((HttpStatusCode.NotFound, ErrorCodes.NotFound), (response.StatusCode, await CodeAsync(response)));
+            // Nothing in the answer names the other application or its notification.
+            var body = await response.Content.ReadAsStringAsync(Ct);
+            Assert.DoesNotContain(other.Key, body, StringComparison.Ordinal);
+
+            using var admin = producer.App.Client(await LocalStack.AdminTokenAsync());
+            var read = await admin.GetFromJsonAsync<NotificationResponse>($"{SendUrl}/{theirs}", Ct);
+            Assert.Equal((theirs, other.Key), (read!.Id, read.Application));
+        }
     }
 }

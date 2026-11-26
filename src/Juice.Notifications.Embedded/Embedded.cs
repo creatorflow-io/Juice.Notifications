@@ -67,6 +67,8 @@ namespace Juice.Notifications.Embedded
             }, new NotificationsPipelineOptions
             {
                 People = false,
+                Mode = NotificationsMode.Embedded,
+                EmbeddedTenantId = options.TenantId,
                 // After the migrator and the provisioning file, before the stages: a request can't be planned before its type exists.
                 BeforeStages = s => s.AddHostedService<EmbeddedApplicationProvisioner>(),
             });

@@ -97,7 +97,11 @@ namespace Juice.Notifications.Api
             services.AddScoped<People.DeviceRegistry>();
             services.AddHostedService<People.ServiceTypesProvisioner>();
             services.Configure<People.DeviceOptions>(configuration.GetSection(People.DeviceOptions.Section));
-            services.AddScoped<CorrelationEndpoints.Owners>();
+            // The tenant-admin API (Juice.Notifications.Admin): its access from the tenant pattern, producers on the endpoints they share.
+            services.AddJuiceNotificationsAdmin();
+            services.AddScoped<Admin.INotificationsAdminAccess, TenantAccessAdminAccess>();
+            services.AddScoped<Admin.IAdminFallbackCaller, ProducerFallbackCaller>();
+            services.AddSingleton<Admin.IAdminPlatformRole, PlatformAdminRole>();
             // Display groups and the inbox (phase-2-plan M15).
             services.AddScoped<Inbox.DisplayGroupReader>();
             services.AddScoped<Inbox.PersonInboxReader>();
@@ -214,16 +218,13 @@ namespace Juice.Notifications.Api
         {
             app.MapHealthChecks("/health/live", new() { Predicate = _ => false }).AllowAnonymous();
             app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") }).AllowAnonymous();
-            app.MapAccessEndpoints();
+            // The tenant-admin API at the root, as before the admin package: the same routes and answers (M44-3).
+            app.MapJuiceNotificationsAdmin("");
             app.MapApplicationEndpoints();
             app.MapProducerEndpoints();
-            app.MapCorrelationEndpoints();
             app.MapCorrelationHoldEndpoints();
-            app.MapConfigurationEndpoints();
             app.MapPeopleEndpoints();
             app.MapMeEndpoints();
-            app.MapHistoryEndpoints();
-            app.MapInvestigationEndpoints();
             app.MapDisplayGroupEndpoints();
             app.MapCallbackEndpoints();
             // A session ends when its token does (a person removed from the tenant gets no new one), and reconnects with a fresh one.

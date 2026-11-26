@@ -23,11 +23,13 @@
     <Using Include="Microsoft.Extensions.DependencyInjection" />
     <Using Include="Microsoft.Extensions.Hosting" />
     <Using Include="Microsoft.Extensions.Logging" />
+    <Using Include="Juice.Notifications.Admin" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
     <ProjectReference Include="..\Juice.Notifications.Api.Contracts\Juice.Notifications.Api.Contracts.csproj" />
+    <ProjectReference Include="..\Juice.Notifications.Admin\Juice.Notifications.Admin.csproj" />
   </ItemGroup>
 
   <ItemGroup>
