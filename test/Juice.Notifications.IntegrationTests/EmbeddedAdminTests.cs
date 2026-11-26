@@ -232,6 +232,39 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
+        /// QA (#14 round 1): a notification by id is an admin read, embedded too: an operator (Read) reads one the host sent, with its fields and
+        /// deliveries; an unknown id is 404; a viewer (no right) and anonymous are refused; another tenant is tenant_forbidden.
+        /// </summary>
+        [Fact]
+        public async Task A_notification_by_id_is_read_by_a_reader_and_refused_to_the_rest()
+        {
+            LocalStack.RequireAvailable();
+            await HostSchemaAsync();
+            await using var app = await HostAsync();
+            Guid id;
+            await using (var scope = app.Services.CreateAsyncScope())
+            {
+                var host = scope.ServiceProvider.GetRequiredService<HostDbContext>();
+                await using var transaction = await host.Database.BeginTransactionAsync(Ct);
+                id = (await scope.ServiceProvider.GetRequiredService<INotificationClient>().SendAsync(
+                    new NotificationToSend("adminhost.thing", "by-id-1") { Data = JsonSerializer.SerializeToElement(new { n = 3 }) }, Ct)).Id;
+                await transaction.CommitAsync(Ct);
+            }
+            using var operatorClient = Client(app, "Operator");
+            var read = await (await OkAsync(operatorClient.GetAsync($"{Api}/notifications/{id}", Ct))).Content.ReadFromJsonAsync<JsonElement>(Ct);
+            Assert.Equal((id.ToString(), "adminhost.thing", "by-id-1"),
+                (read.GetProperty("id").GetString(), read.GetProperty("type").GetString(), read.GetProperty("idempotencyKey").GetString()));
+            Assert.Equal((HttpStatusCode.NotFound, ErrorCodes.NotFound), await ProblemAsync(operatorClient.GetAsync($"{Api}/notifications/{Guid.CreateVersion7()}", Ct)));
+            using var viewer = Client(app, "Viewer");
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.NotTenantAdmin), await ProblemAsync(viewer.GetAsync($"{Api}/notifications/{id}", Ct)));
+            using var anonymous = Client(app, null);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync($"{Api}/notifications/{id}", Ct)).StatusCode);
+            using var admin = Client(app, "Admin");
+            Assert.Equal((HttpStatusCode.Forbidden, ErrorCodes.TenantForbidden),
+                await ProblemAsync(admin.GetAsync($"{Prefix}/api/v1/tenants/{Guid.CreateVersion7()}/notifications/{id}", Ct)));
+        }
+
+        /// <summary>
         /// A correlation is named by its application (keys are per application): an admin who leaves it out is told so at <c>/application</c>
         /// (400), not refused as a non-admin (#14 review); a viewer is still refused.
         /// </summary>
