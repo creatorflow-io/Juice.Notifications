@@ -108,6 +108,8 @@ namespace Juice.Notifications.Workflows
             }
             // A route's own digest (phase-5 M46-1, decision G2): its recipients wait in the open digest of the route and type for its window, as
             // a legacy webhook endpoint grouped what came within its window. A recipient already in a digest (the type's own) isn't among these.
+            // They aren't counted towards a storm (route_minutes), nor in a storm's Digested while one is open on the route: the route's own window
+            // already groups them, and only the routes that send at once can storm.
             if (waiting.Any(r => r.RouteKey is not null))
             {
                 var keys = waiting.Where(r => r.RouteKey is not null).Select(r => r.RouteKey!).Distinct().ToList();
