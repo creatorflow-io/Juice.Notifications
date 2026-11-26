@@ -469,6 +469,52 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(0, provider.Sends);
         }
 
+        /// <summary>
+        /// QA (M44-2), end to end with the real webhook provider and a real receiver on this machine: an embedded host in dry run records the
+        /// signed delivery as <c>WouldSend</c> with its body, no attempt row, and the receiver hears nothing. The same host's setup out of dry run
+        /// (the control, a second host on the same database) does reach the receiver, so the silence is the dry run's.
+        /// </summary>
+        [Fact]
+        public async Task An_embedded_host_in_dry_run_sends_nothing_to_a_real_receiver()
+        {
+            LocalStack.RequireAvailable();
+            await using var receiver = await Receiver.StartAsync();
+            Guid dry;
+            await using (var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: true, receiver,
+                services: s => s.PostConfigure<Providers.DeliveryOptions>(o => o.DryRun = true)))
+            {
+                dry = await host.InTransactionAsync(async (_, client) => (await client.SendAsync(Notification("dry-real-1"), Ct)).Id);
+                var delivery = await DeliveryOfAsync(dry, d => d.Status == DeliveryStatus.WouldSend);
+                Assert.Equal((true, 0, true), (delivery.DryRun, delivery.Attempts, delivery.Content.Length > 0));
+                await using var db = _database.Context();
+                Assert.False(await db.Attempts.AnyAsync(a => a.DeliveryId == delivery.Id, Ct));
+            }
+            Assert.Empty(receiver.Requests);
+
+            await using (var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: true, receiver))
+            {
+                var real = await host.InTransactionAsync(async (_, client) => (await client.SendAsync(Notification("dry-real-2"), Ct)).Id);
+                await DeliveryOfAsync(real, d => d.Status == DeliveryStatus.Delivered);
+            }
+            Assert.Single(receiver.Requests);
+            // The dry one stays as it was: nothing sends it later.
+            Assert.Equal(DeliveryStatus.WouldSend, (await DeliveryOfAsync(dry, _ => true)).Status);
+
+            async Task<Delivery> DeliveryOfAsync(Guid request, Func<Delivery, bool> done)
+            {
+                Delivery? found = null;
+                for (var i = 0; i < 300 && (found is null || !done(found)); i++)
+                {
+                    await Task.Delay(100, Ct);
+                    await using var db = _database.Context();
+                    found = await db.Deliveries.AsNoTracking().SingleOrDefaultAsync(d => db.DeliveryItems.Any(x => x.DeliveryId == d.Id && x.RequestId == request), Ct);
+                }
+                Assert.NotNull(found);
+                Assert.True(done(found), $"{found.Status}");
+                return found;
+            }
+        }
+
         [Fact]
         public async Task The_setup_is_provisioned_and_each_change_reaches_the_host_audit_sink()
         {
