@@ -370,9 +370,10 @@ namespace Juice.Notifications.Planning
                     named, bounds.MaxRecipients, row.TenantId, row.Id);
                 db.Recipients.Add(Unreached(row, named, resolverKey, RecipientOutcome.Truncated, context.Now));
             }
-            if (unavailable.Count > 0 || truncated.Count > 0)
+            // Counted as recorded: a step planned again counts none of the names it recorded before.
+            var (unresolvedCount, truncatedCount) = (unavailable.Keys.Count(n => !recorded.Contains(n)), truncated.Keys.Count(n => !recorded.Contains(n)));
+            if (unresolvedCount > 0 || truncatedCount > 0)
             {
-                var (unresolvedCount, truncatedCount) = (unavailable.Count, truncated.Count);
                 context.AfterCommit.Add(() =>
                 {
                     if (unresolvedCount > 0)
