@@ -299,6 +299,33 @@ namespace Juice.Notifications.IntegrationTests
             Assert.False(planned.DryRun);
         }
 
+        /// <summary>
+        /// Every recipient a plan creates is stamped (M44-2c, #16 review), the names that reached no one too: an escalation step naming a route
+        /// that's gone records it as reaching nobody, with the step's flag beside the address it did reach.
+        /// </summary>
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task A_name_that_reached_no_one_is_stamped_as_the_plans_other_recipients(bool dryNow)
+        {
+            LocalStack.RequireAvailable();
+            var scene = await SceneAsync(acceptedDry: !dryNow);
+            await using (var db = _database.Context())
+            {
+                var now = _clock.GetUtcNow();
+                await db.Notifications.Where(n => n.TenantId == scene.Tenant && n.Id == scene.Notification.Id).ExecuteUpdateAsync(s => s
+                    .SetProperty(n => n.State, NotificationState.Planning).SetProperty(n => n.NextAt, now).SetProperty(n => n.EscalationStep, 1)
+                    .SetProperty(n => n.EscalationSpecs, """[{"kind":"address","channel":"email","address":"ops@example.com"},{"kind":"route","key":"gone"}]"""), Ct);
+            }
+            Assert.Equal(1, (await Planner(dryNow).GetRequiredService<StageRunner<Notification, PlannerStage>>().RunOnceAsync("planner", Options, Ct)).Completed);
+            await using var read = _database.Context();
+            var recipients = await read.Recipients.AsNoTracking().Where(r => r.TenantId == scene.Tenant && r.NotificationId == scene.Notification.Id)
+                .Select(r => new { r.Kind, r.Outcome, r.DryRun }).ToListAsync(Ct);
+            Assert.Contains(recipients, r => r.Kind == RecipientKind.Name && r.Outcome == RecipientOutcome.Failed);
+            Assert.Equal(2, recipients.Count);
+            Assert.All(recipients, r => Assert.Equal((bool?)dryNow, r.DryRun));
+        }
+
         [Fact]
         public async Task A_dry_delivery_whose_request_expired_is_expired_not_would_send()
         {
