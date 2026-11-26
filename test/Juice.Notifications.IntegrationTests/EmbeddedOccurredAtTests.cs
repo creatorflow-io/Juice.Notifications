@@ -246,6 +246,59 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(change == "acknowledge" && commit ? CorrelationState.Acknowledged : CorrelationState.Open, correlation.State);
         }
 
+        /// <summary>
+        /// QA (M44-2b), Observability's cutover end to end with a real receiver: an alert fires in shadow (an embedded host in dry run), the host
+        /// restarts out of it, and the alert's escalation step falls due after the switch. The firing stays <c>WouldSend</c> (legacy sent it); the
+        /// step, planned after the switch, pages for real (legacy's escalation stopped at the switch): the receiver hears exactly that one.
+        /// </summary>
+        [Fact]
+        public async Task An_alert_fired_in_shadow_escalates_for_real_after_the_switch()
+        {
+            LocalStack.RequireAvailable();
+            await using var receiver = await DeliveryTests.Receiver.StartAsync();
+            const string key = "alert:cutover";
+            Guid firing;
+            await using (var shadow = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false, receiver, services: s =>
+            {
+                s.Replace(ServiceDescriptor.Singleton<TimeProvider>(_clock));
+                s.PostConfigure<Providers.DeliveryOptions>(o => o.DryRun = true);
+            }))
+            {
+                await AlertSetupAsync();
+                await using (var db = _database.Context())
+                {
+                    var type = await db.Types.AsNoTracking().SingleAsync(t => t.Key == Alert, Ct);
+                    db.Templates.Add(new Template { TypeId = type.Id, Channel = Channels.Webhook, Locale = "en", Version = 1, Engine = "scriban", Body = """{"alert":"firing"}""", CreatedAt = Seed.Now });
+                    await db.SaveChangesAsync(Ct);
+                }
+                firing = await shadow.InTransactionAsync(async (_, client) =>
+                    (await client.SendAsync(Send("cutover-1", _clock.GetUtcNow(), Alert, key, new Dictionary<string, string> { ["policy"] = "page" }), Ct)).Id);
+                await DrainAsync<Notification, PlannerStage>(shadow, "planner");
+                await DrainAsync<NotificationRecipient, Delivering.DeliveryPlannerStage>(shadow, "delivery-planner");
+                await DrainAsync<Delivery, Delivering.DispatcherStage>(shadow, "dispatcher");
+            }
+            Assert.Empty(receiver.Requests);
+
+            await using (var live = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false, receiver,
+                services: s => s.Replace(ServiceDescriptor.Singleton<TimeProvider>(_clock))))
+            {
+                _clock.Advance(TimeSpan.FromMinutes(5));
+                await DrainAsync<Escalation, EscalationStage>(live, "escalation");
+                await DrainAsync<Notification, PlannerStage>(live, "planner");
+                await DrainAsync<NotificationRecipient, Delivering.DeliveryPlannerStage>(live, "delivery-planner");
+                await DrainAsync<Delivery, Delivering.DispatcherStage>(live, "dispatcher");
+            }
+            Assert.Single(receiver.Requests);
+            await using var check = _database.Context();
+            var sent = await (from d in check.Deliveries.AsNoTracking()
+                              join i in check.DeliveryItems on new { d.TenantId, DeliveryId = d.Id } equals new { i.TenantId, i.DeliveryId }
+                              join r in check.Recipients on new { i.TenantId, Id = i.RecipientId } equals new { r.TenantId, r.Id }
+                              where i.RequestId == firing
+                              orderby r.EscalationStep
+                              select new { r.EscalationStep, d.Status, d.DryRun }).ToListAsync(Ct);
+            Assert.Equal([(0, DeliveryStatus.WouldSend, true), (1, DeliveryStatus.Delivered, false)], sent.Select(x => (x.EscalationStep, x.Status, x.DryRun)));
+        }
+
         /// <summary>A type whose workflow escalates, and a policy whose one step, 5 minutes on, pages the provisioned route <c>all</c> by key.</summary>
         private async Task AlertSetupAsync()
         {
