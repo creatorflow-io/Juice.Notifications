@@ -259,6 +259,61 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
 
+        /// <summary>
+        /// QA (M44-1): a hold rolled back with the host's transaction leaves the escalation as it was (its fence rolled back too, so a stage that
+        /// claimed it keeps its save); a committed hold fences it, leaves its time alone (the stage parks it when it falls due) and wakes nothing.
+        /// </summary>
+        [Fact]
+        public async Task A_rolled_back_hold_leaves_the_escalation_unfenced_and_a_committed_one_fences_it_and_wakes_nothing()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            const string key = "alert:fence";
+            var request = await host.InTransactionAsync(async (_, client) => (await client.SendAsync(Notification("fence") with { CorrelationKey = key }, Ct)).Id);
+            var due = DateTimeOffset.UtcNow.AddMinutes(5);
+            due = due.AddTicks(-(due.Ticks % 10));
+            await using (var db = _database.Context())
+            {
+                var notification = await db.Notifications.AsNoTracking().SingleAsync(n => n.RequestId == request, Ct);
+                var correlation = await db.Correlations.AsNoTracking().SingleAsync(c => c.Key == key, Ct);
+                db.Escalations.Add(new Escalation
+                {
+                    TenantId = Tenant, NotificationId = notification.Id, CorrelationId = correlation.Id, PolicyId = Guid.CreateVersion7(),
+                    State = EscalationState.Running, NextAt = due, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+            var version = (await HoldStateAsync(key)).Escalation!.Version;
+            await DrainAsync(host);
+
+            await host.InTransactionAsync(async (_, client) =>
+            {
+                Assert.True((await client.HoldAsync(key, "silence:1", "host", Ct)).Changed);
+                return false;
+            });
+            var (unheld, untouched) = await HoldStateAsync(key);
+            Assert.Null(unheld.HeldAt);
+            Assert.Equal((version, (DateTimeOffset?)due, (DateTimeOffset?)null), (untouched!.Version, untouched.NextAt, untouched.HeldAt));
+
+            var hold = await host.InTransactionAsync(async (_, client) => await client.HoldAsync(key, "silence:1", "host", Ct));
+            Assert.Equal((true, true, 0), (hold.Held, hold.Changed, hold.Resumed));
+            Assert.False(await WokenAsync(host), "a hold wakes no stage");
+            var (held, fenced) = await HoldStateAsync(key);
+            Assert.NotNull(held.HeldAt);
+            Assert.Equal((version + 1, (DateTimeOffset?)due, (DateTimeOffset?)null, (string?)null), (fenced!.Version, fenced.NextAt, fenced.HeldAt, fenced.ClaimedBy));
+
+            // Takes any wake-up left by the send, so the check below sees only what the hold asks for.
+            static Task DrainAsync(EmbeddedHost host)
+                => host.Services.GetRequiredService<Stages.StageNudges>().WaitAsync(Workflows.EscalationStage.StageName, TimeSpan.FromMilliseconds(50), Ct);
+
+            static async Task<bool> WokenAsync(EmbeddedHost host)
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                await host.Services.GetRequiredService<Stages.StageNudges>().WaitAsync(Workflows.EscalationStage.StageName, TimeSpan.FromSeconds(1), Ct);
+                return watch.Elapsed < TimeSpan.FromMilliseconds(800);
+            }
+        }
+
         [Fact]
         public async Task Without_a_transaction_a_hold_or_release_is_refused()
         {
