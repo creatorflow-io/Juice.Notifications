@@ -423,6 +423,44 @@ namespace Juice.Notifications.IntegrationTests
             }
             Assert.Contains("\"Index Name\": \"ix_deliveries_in_flight\"",
                 await PlanAsync(db => Juice.Notifications.Stages.NotificationsPipelineHealth.OldestInFlight(db.Deliveries).Take(1), now, count: false));
+            // A generic plan (what a prepared or auto-prepared statement settles on) still uses the index for the health read's query...
+            Assert.Contains("\"Index Name\": \"ix_deliveries_in_flight\"",
+                await GenericPlanAsync(db => Juice.Notifications.Stages.NotificationsPipelineHealth.OldestInFlight(db.Deliveries).Take(1)));
+            // ...and can't for the same read with its statuses as a parameter (the control: this check would catch the parameter coming back).
+            DeliveryStatus[] parameter = [DeliveryStatus.Pending, DeliveryStatus.Sending, DeliveryStatus.Retrying];
+            Assert.DoesNotContain("\"Index Name\": \"ix_deliveries_in_flight\"",
+                await GenericPlanAsync(db => db.Deliveries.Where(d => parameter.Contains(d.Status)).OrderBy(d => d.CreatedAt).Select(d => (DateTimeOffset?)d.CreatedAt).Take(1)));
+        }
+
+        /// <summary>
+        /// The generic plan of a query (<c>PREPARE</c>, <c>plan_cache_mode = force_generic_plan</c>): the plan that doesn't know its parameters'
+        /// values, so a partial index is used only when its filter holds for any of them.
+        /// </summary>
+        private async Task<string> GenericPlanAsync<T>(Func<NotificationsDbContext, IQueryable<T>> query)
+        {
+            await using var db = _database.Context();
+            var lines = query(db).ToQueryString().Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+            var body = string.Join('\n', lines.Where(l => !l.StartsWith("--", StringComparison.Ordinal)));
+            var types = new List<string>();
+            var values = new List<string>();
+            foreach (var declared in lines.Where(l => l.StartsWith("-- @", StringComparison.Ordinal)))
+            {
+                var name = declared[4..declared.IndexOf('=')];
+                var array = declared.Contains('{', StringComparison.Ordinal);
+                types.Add(array ? "text[]" : "integer");
+                values.Add(array ? "'{Pending,Sending,Retrying}'" : "1");
+                body = System.Text.RegularExpressions.Regex.Replace(body, $@"@{name}\b", $"${types.Count}");
+            }
+            var connection = (Npgsql.NpgsqlConnection)db.Database.GetDbConnection();
+            await connection.OpenAsync(Ct);
+            var signature = types.Count == 0 ? "" : $"({string.Join(", ", types)})";
+            var arguments = values.Count == 0 ? "" : $"({string.Join(", ", values)})";
+            await using (var prepare = new Npgsql.NpgsqlCommand($"SET plan_cache_mode = force_generic_plan; PREPARE generic{signature} AS {body}", connection))
+            {
+                await prepare.ExecuteNonQueryAsync(Ct);
+            }
+            await using var explain = new Npgsql.NpgsqlCommand($"EXPLAIN (FORMAT JSON) EXECUTE generic{arguments}", connection);
+            return (string)(await explain.ExecuteScalarAsync(Ct))!;
         }
 
         private async Task<string> PlanAsync<T>(Func<NotificationsDbContext, IQueryable<T>> query, DateTimeOffset now, bool count)
