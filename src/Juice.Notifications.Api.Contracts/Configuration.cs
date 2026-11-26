@@ -9,7 +9,8 @@ namespace Juice.Notifications.Api.Contracts
     public sealed record PutTargetBody(string? Address, string? AddressRef, bool? Enabled);
 
     /// <summary><c>PUT …/routes/{key}</c>: which notifications reach which targets (design §6.3).</summary>
-    public sealed record PutRouteBody(JsonElement? Match, List<string>? Targets, bool? Enabled);
+    /// <summary>A route; <c>digestSeconds</c> (0–3600) sends what reaches it as one digest per window and type, 0 or none each at once.</summary>
+    public sealed record PutRouteBody(JsonElement? Match, List<string>? Targets, bool? Enabled, int? DigestSeconds = null);
 
     /// <summary><c>PUT …/allowlist</c>: a private host or network outbound HTTP may reach, with its ports (design §13.1).</summary>
     public sealed record PutAllowlistBody(string? Destination, List<int>? Ports);
@@ -31,7 +32,8 @@ namespace Juice.Notifications.Api.Contracts
 
     public sealed record TargetResponse(string Key, string? Address, string? AddressRef, bool Enabled, string ManagedBy, DateTimeOffset UpdatedAt);
 
-    public sealed record RouteResponse(string Key, JsonElement Match, IReadOnlyList<string> Targets, bool Enabled, string ManagedBy, DateTimeOffset UpdatedAt);
+    public sealed record RouteResponse(string Key, JsonElement Match, IReadOnlyList<string> Targets, bool Enabled, string ManagedBy, DateTimeOffset UpdatedAt,
+        int DigestSeconds = 0);
 
     public sealed record AllowlistResponse(string Destination, IReadOnlyList<int> Ports, string ManagedBy, DateTimeOffset UpdatedAt);
 

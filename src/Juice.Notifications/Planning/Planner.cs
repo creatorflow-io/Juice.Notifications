@@ -448,7 +448,14 @@ namespace Juice.Notifications.Planning
                     await storms.CountAsync(db, row.TenantId, routes, context.Now, context.AfterCommit, ct);
                 }
             }
-            if (!escalating && (!workflows.For(type).IsSendOnly || stormy))
+            // A route with its own digest (phase-5 M46-1) takes its recipients the same way: the workflow's send step puts them in its digest.
+            var routeDigest = false;
+            if (!escalating && !stormy && workflows.For(type).IsSendOnly && due.Any(r => r.RouteKey is not null))
+            {
+                var keys = due.Where(r => r.RouteKey is not null).Select(r => r.RouteKey!).Distinct().ToList();
+                routeDigest = await db.Routes.AsNoTracking().AnyAsync(x => x.TenantId == row.TenantId && keys.Contains(x.Key) && x.DigestSeconds > 0, ct);
+            }
+            if (!escalating && (!workflows.For(type).IsSendOnly || stormy || routeDigest))
             {
                 // A workflow: the people wait (Pending, not due) until its send step, which applies mutes and preferences as they are then. The
                 // notification runs its workflow on the next claim, at once.
