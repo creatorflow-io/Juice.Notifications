@@ -47,6 +47,13 @@ namespace Juice.Notifications.Configuration
         public string? ManagedBy { get; init; }
 
         internal bool Provisioned => ManagedBy == Notifications.ManagedBy.Configuration;
+
+        /// <summary>
+        /// The id a new integration takes (phase-5 M46-2): an in-process caller's, as the webhooks alias keeps a legacy endpoint's id. The API
+        /// never sets it; null makes a new one. Only a create takes it: an existing integration keeps its own, and a different one is refused, as
+        /// is one another integration of the tenant has.
+        /// </summary>
+        public Guid? Id { get; init; }
     }
 
     public sealed record DeleteIntegration(Guid NotificationTenantId, string Key) : MessageBase, IRequest<Outcome<bool>>, IOwnedSetupWrite
@@ -328,6 +335,13 @@ namespace Juice.Notifications.Configuration
             {
                 return ServiceManaged<IntegrationView>();
             }
+            // An id is the caller's for a new integration only (M46-2): an existing one keeps its own, and one another integration has is taken.
+            if (r.Id is { } id && (existing is not null ? existing.Id != id : await db.Integrations.AnyAsync(i => i.TenantId == r.NotificationTenantId && i.Id == id, ct)))
+            {
+                return Outcome<IntegrationView>.Conflict(ErrorCodes.IdInUse, existing is not null
+                    ? $"The integration {r.Key} has another id; an integration's id doesn't change."
+                    : $"Another integration of this tenant has the id {id}.");
+            }
             // From configuration the file states the secret: one it leaves out is none, not the stored one. Through the API, one sent back as it
             // is stored is no new secret (a client that PUTs back what it read).
             var sentSecret = !r.Provisioned && existing is not null && r.SecretRef == existing.SecretRef ? null : r.SecretRef;
@@ -409,7 +423,7 @@ namespace Juice.Notifications.Configuration
             {
                 existing = new Integration
                 {
-                    TenantId = r.NotificationTenantId, Key = r.Key, Channel = channel!, Kind = kind!, Settings = settingsJson, SecretRef = secretRef,
+                    TenantId = r.NotificationTenantId, Id = r.Id ?? Guid.CreateVersion7(), Key = r.Key, Channel = channel!, Kind = kind!, Settings = settingsJson, SecretRef = secretRef,
                     Priority = priority, Enabled = enabled, ManagedBy = managedBy, DefinitionHash = hash, UpdatedAt = now,
                 };
                 db.Integrations.Add(existing);

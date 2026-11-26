@@ -72,6 +72,9 @@ namespace Juice.Notifications.Embedded
             });
             services.AddPostgresClaimStore();
             services.Replace(ServiceDescriptor.Scoped<Configuration.IProvisioningScope, EmbeddedProvisioningScope>());
+            services.TryAddScoped<HostScope>();
+            // The pipeline's commands in the host's transaction, for a host that changes its rows and the setup together (phase-5 M46-2).
+            services.TryAddScoped<INotificationsHostScope>(sp => sp.GetRequiredService<HostScope>());
             services.TryAddScoped<INotificationClient, EmbeddedNotificationClient>();
             // Changes to the setup, to the host's sink when it has one (I62).
             services.AddScoped(typeof(Juice.MediatR.INotificationHandler<>), typeof(AuditForwarder<>));

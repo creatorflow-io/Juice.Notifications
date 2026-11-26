@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Juice.Notifications.Data;
+using Juice.Notifications.Configuration;
 using Juice.Notifications.Embedded;
 using Juice.Notifications.Types;
 using Microsoft.EntityFrameworkCore;
@@ -438,6 +439,106 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Null(health.OldestDueAny);
         }
 
+        private static PutIntegration Hooks(string key, Guid? id = null, string secretRef = TestHooks.SecretRef)
+            => new(Tenant, key, "webhook", "webhook", JsonSerializer.SerializeToElement(new { }), secretRef, 0, true) { Id = id };
+
+        /// <summary>
+        /// A host that writes its own row and the pipeline's setup together (M46-2, the webhooks alias): one transaction, so its commit keeps
+        /// both and its rollback leaves neither.
+        /// </summary>
+        [Fact]
+        public async Task The_host_scope_commits_and_rolls_back_with_the_host()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            foreach (var (name, commit) in new[] { ("committed", true), ("rolled-back", false) })
+            {
+                await host.InHostScopeAsync(async (hostDb, scope) =>
+                {
+                    hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = name });
+                    await hostDb.SaveChangesAsync(Ct);
+                    var outcome = await scope.RunAsync(work => work.SendAsync(Hooks($"hooks-{name}"), Ct), Ct);
+                    Assert.Equal(OutcomeKind.Ok, outcome.Kind);
+                    return commit;
+                });
+            }
+            await using var db = _database.Context();
+            await using var check = host.HostContext();
+            Assert.Equal(["committed"], await check.Things.Where(t => t.Name == "committed" || t.Name == "rolled-back").Select(t => t.Name).ToListAsync(Ct));
+            Assert.Equal(["hooks-committed"], await db.Integrations.Where(i => i.Key.StartsWith("hooks-")).Select(i => i.Key).ToListAsync(Ct));
+        }
+
+        /// <summary>A command the pipeline refuses, or one that fails, takes the host's own row with it when the host rolls back on it (M46-2).</summary>
+        [Fact]
+        public async Task A_refused_or_failed_pipeline_command_rolls_the_host_row_back()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            // Refused: a secret the API may not name. The host rolls back on the refusal.
+            await host.InHostScopeAsync(async (hostDb, scope) =>
+            {
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "refused" });
+                await hostDb.SaveChangesAsync(Ct);
+                var outcome = await scope.RunAsync(work => work.SendAsync(Hooks("hooks-refused", secretRef: "env:OTHER_SECRET"), Ct), Ct);
+                return outcome.Kind == OutcomeKind.Ok;
+            });
+            // Failed: the second command breaks the unique key the first one took (an id another integration has), in the database itself.
+            await Assert.ThrowsAnyAsync<Exception>(() => host.InHostScopeAsync(async (hostDb, scope) =>
+            {
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "failed" });
+                await hostDb.SaveChangesAsync(Ct);
+                return await scope.RunAsync(async work =>
+                {
+                    Assert.Equal(OutcomeKind.Ok, (await work.SendAsync(Hooks("hooks-failed"), Ct)).Kind);
+                    work.Db.Integrations.Add(new Integration
+                    {
+                        TenantId = Tenant, Key = "hooks-failed", Channel = "webhook", Kind = "webhook", Settings = "{}", DefinitionHash = "h",
+                    });
+                    await work.Db.SaveChangesAsync(Ct);
+                    return true;
+                }, Ct);
+            }));
+            await using var db = _database.Context();
+            await using var check = host.HostContext();
+            Assert.False(await check.Things.AnyAsync(t => t.Name == "refused" || t.Name == "failed", Ct));
+            Assert.False(await db.Integrations.AnyAsync(i => i.Key == "hooks-refused" || i.Key == "hooks-failed", Ct));
+        }
+
+        [Fact]
+        public async Task Without_a_host_transaction_the_host_scope_is_refused()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await using var scope = host.Services.CreateAsyncScope();
+            var refused = await Assert.ThrowsAsync<NotificationRefusedException>(() =>
+                scope.ServiceProvider.GetRequiredService<INotificationsHostScope>().RunAsync(work => work.SendAsync(Hooks("hooks-none"), Ct), Ct));
+            Assert.Equal(ErrorCodes.NoTransaction, refused.Code);
+        }
+
+        /// <summary>
+        /// An in-process caller's integration id (M46-2): a create takes it; another integration's is refused, and so is a different one for an
+        /// existing integration, whose id never changes.
+        /// </summary>
+        [Fact]
+        public async Task An_integration_takes_the_callers_id_once_and_refuses_one_taken()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            var id = Guid.CreateVersion7();
+            var outcomes = await host.InHostScopeAsync((_, scope) => scope.RunAsync(async work => new[]
+            {
+                await work.SendAsync(Hooks("hooks-kept", id), Ct),
+                await work.SendAsync(Hooks("hooks-kept", id), Ct),                 // the same: unchanged
+                await work.SendAsync(Hooks("hooks-other", id), Ct),                // another integration's id
+                await work.SendAsync(Hooks("hooks-kept", Guid.CreateVersion7()), Ct), // a different id for this one
+            }, Ct));
+            Assert.Equal([(OutcomeKind.Ok, null), (OutcomeKind.Ok, null), (OutcomeKind.Conflict, ErrorCodes.IdInUse), (OutcomeKind.Conflict, ErrorCodes.IdInUse)],
+                outcomes.Select(o => (o.Kind, o.Code)));
+            await using var db = _database.Context();
+            Assert.Equal(id, (await db.Integrations.SingleAsync(i => i.Key == "hooks-kept", Ct)).Id);
+            Assert.False(await db.Integrations.AnyAsync(i => i.Key == "hooks-other", Ct));
+        }
+
         [Fact]
         public void The_container_holds_nothing_of_the_service()
         {
@@ -622,6 +723,22 @@ namespace Juice.Notifications.IntegrationTests
                 {
                     action();
                 }
+                return result;
+            }
+
+            /// <summary>Host work in its transaction through the host scope (M46-2): committed unless it returns false; an exception rolls it back.</summary>
+            public async Task<T> InHostScopeAsync<T>(Func<HostDbContext, INotificationsHostScope, Task<T>> work)
+            {
+                await using var scope = _host.Services.CreateAsyncScope();
+                var db = scope.ServiceProvider.GetRequiredService<HostDbContext>();
+                await using var transaction = await db.Database.BeginTransactionAsync(Ct);
+                var result = await work(db, scope.ServiceProvider.GetRequiredService<INotificationsHostScope>());
+                if (result is false)
+                {
+                    await transaction.RollbackAsync(Ct);
+                    return result;
+                }
+                await transaction.CommitAsync(Ct);
                 return result;
             }
 

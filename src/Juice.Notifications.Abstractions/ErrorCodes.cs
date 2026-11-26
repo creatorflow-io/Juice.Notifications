@@ -62,6 +62,8 @@ namespace Juice.Notifications
         /// <summary>The row was made through the API; the webhooks alias (phase 5 M46) leaves it alone.</summary>
         public const string ManagedByApi = "managed_by_api";
         /// <summary>Deliveries went through the integration; disable it instead of deleting it.</summary>
+        /// <summary>The id a create named is another row's, or a row's id would change (phase 5 M46-2: ids an in-process caller keeps).</summary>
+        public const string IdInUse = "id_in_use";
         public const string IntegrationInUse = "integration_in_use";
         /// <summary>The target key is taken by another integration of the tenant.</summary>
         public const string TargetExists = "target_exists";
