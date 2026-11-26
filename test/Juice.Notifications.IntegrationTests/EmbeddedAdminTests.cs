@@ -318,6 +318,16 @@ namespace Juice.Notifications.IntegrationTests
             }
             var received = Assert.Single(receiver.Requests);
             Assert.Contains("\"n\":7", received.Body);
+
+            // The notification's page reads it by id, as an operator (Read): it and its delivery (M48 found it unmapped when embedded).
+            using var operatorClient = Client(app, "Operator");
+            var list = (await (await OkAsync(operatorClient.GetAsync($"{Api}/notifications", Ct))).Content.ReadFromJsonAsync<JsonElement>(Ct));
+            var id = list.GetProperty("items")[0].GetProperty("id").GetGuid();
+            var detail = (await (await OkAsync(operatorClient.GetAsync($"{Api}/notifications/{id}", Ct))).Content.ReadFromJsonAsync<JsonElement>(Ct));
+            Assert.Equal(("adminhost.thing", "delivered"), (detail.GetProperty("type").GetString(), detail.GetProperty("deliveries")[0].GetProperty("status").GetString()));
+            Assert.Equal((HttpStatusCode.NotFound, ErrorCodes.NotFound), await ProblemAsync(operatorClient.GetAsync($"{Api}/notifications/{Guid.CreateVersion7()}", Ct)));
+            using var viewer = Client(app, "Viewer");
+            Assert.Equal(HttpStatusCode.Forbidden, (await viewer.GetAsync($"{Api}/notifications/{id}", Ct)).StatusCode);
         }
 
         [Fact]

@@ -19,6 +19,8 @@ namespace Juice.Notifications.Api
         {
             var investigation = tenant.MapGroup("").WithTags("Investigation");
             investigation.MapGet("/notifications", NotificationsAsync).WithMetadata(new AdminPageMetadata(AdminPages.Notifications));
+            // A notification by id: the admin's detail page, and a producer reading its own (the service's hook; phase-1-plan, design §5.2).
+            investigation.MapGet("/notifications/{id:guid}", NotificationAsync).WithMetadata(new AdminPageMetadata(AdminPages.Notifications)).ProducerToo();
             investigation.MapGet("/notifications/{id:guid}/recipients", RecipientsAsync).WithMetadata(new AdminPageMetadata(AdminPages.Notifications));
             investigation.MapGet("/correlations", CorrelationsAsync).WithMetadata(new AdminPageMetadata(AdminPages.Correlations));
             investigation.MapGet("/overview", OverviewAsync).WithMetadata(new AdminPageMetadata(AdminPages.Overview));
@@ -45,6 +47,35 @@ namespace Juice.Notifications.Api
                 limit ?? Investigation.DefaultLimit), ct);
             return Results.Ok(new NotificationPageResponse(page.Items.Select(n => new NotificationListItemResponse(n.Id, n.Type, n.TypeVersion,
                 n.Application, n.CorrelationKey, n.Priority, n.State, n.Error, n.Actor, n.AcceptedAt)).ToList(), page.Next));
+        }
+
+        /// <summary>
+        /// A notification and its deliveries: any of the tenant's; for a producer of the service (no right in the tenant), only its own, and
+        /// another's is not found.
+        /// </summary>
+        private static async Task<IResult> NotificationAsync(Guid tenantId, Guid id, System.Security.Claims.ClaimsPrincipal user, INotificationsAdminAccess access,
+            IServiceProvider services, Intake.NotificationReader reader, CancellationToken ct)
+        {
+            Guid? application = null;
+            if (await access.RightsAsync(user, tenantId, ct) == AdminRights.None)
+            {
+                // The rights filter let it this far only where the service's producer hook is.
+                if (services.GetService<IAdminFallbackCaller>() is not { } fallback)
+                {
+                    return ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantAdmin, "The caller doesn't administer this tenant.");
+                }
+                var (producer, refusal) = await fallback.ResolveAsync(user, ct);
+                if (producer is null)
+                {
+                    return refusal!;
+                }
+                application = producer;
+            }
+            return await reader.GetAsync(tenantId, application, id, ct) is { } n
+                ? Results.Ok(new NotificationResponse(n.Id, n.Type, n.TypeVersion, n.IdempotencyKey, n.CorrelationKey, n.Priority, n.Labels, n.Links, n.Actor,
+                    n.AcceptedAt, n.ExpiresAt, n.State, n.Error, n.Deliveries.Select(d => new DeliveryResponse(d.Id, d.Channel, d.DestinationKey, d.Status,
+                    d.Attempts, d.FailureCategory, d.CreatedAt, d.CompletedAt)).ToList(), n.Application))
+                : ApiResults.NotFound(application is null ? $"There is no notification {id} in this tenant." : $"There is no notification {id} of yours in this tenant.");
         }
 
         private static async Task<IResult> RecipientsAsync(Guid tenantId, Guid id, Guid? after, int? limit, Investigation reader, CancellationToken ct)
