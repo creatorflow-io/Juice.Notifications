@@ -599,7 +599,7 @@ namespace Juice.Notifications.Data
                 e.Property(x => x.By).HasMaxLength(20);
                 e.Property(x => x.Key).HasMaxLength(500);
                 e.Property(x => x.State).HasConversion<string>().HasMaxLength(20);
-                e.HasIndex(x => new { x.TenantId, x.TypeKey, x.By, x.Key }).IsUnique().HasFilter("state = 'Open'").HasDatabaseName("ix_digests_open");
+                e.HasIndex(x => new { x.TenantId, x.TypeKey, x.By, x.Key, x.DryRun }).IsUnique().HasFilter("state = 'Open'").HasDatabaseName("ix_digests_open");
             });
 
             model.Entity<ThrottleEntry>(e =>

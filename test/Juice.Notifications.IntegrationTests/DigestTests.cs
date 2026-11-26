@@ -78,14 +78,15 @@ namespace Juice.Notifications.IntegrationTests
             while (pass.Claimed > 0);
         }
 
-        /// <summary>A notification to both webhooks, due now, with its own data.</summary>
-        private async Task<Guid> NotificationAsync(int n)
+        /// <summary>A notification to both webhooks, due now, with its own data; accepted dry when <paramref name="dry"/> (M44-2b).</summary>
+        private async Task<Guid> NotificationAsync(int n, bool dry = false)
         {
             await using var db = _database.Context();
             var request = Seed.Request(Tenant, _seed.App, _seed.Type.Id, $"k{n}-{Guid.NewGuid():N}");
             db.Entry(request).Property(r => r.TypeKey).CurrentValue = _seed.Type.Key;
             db.Entry(request).Property(r => r.Data).CurrentValue = $$"""{ "n": {{n}} }""";
             db.Entry(request).Property(r => r.AcceptedAt).CurrentValue = _clock.GetUtcNow().AddSeconds(n);
+            db.Entry(request).Property(r => r.DryRun).CurrentValue = dry;
             db.Entry(request).Property(r => r.Recipients).CurrentValue = $$"""
                 [{"kind":"address","channel":"webhook","address":"{{HookA}}"},{"kind":"address","channel":"webhook","address":"{{HookB}}"}]
                 """;
@@ -169,19 +170,9 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
 
-        /// <summary>
-        /// A digest given up while open closes under the lock members join under before it reads its members (phases 3–4 review, round 3): a
-        /// notification joining at that moment either is among the members it fails, or finds the digest closed and opens the next one; none is
-        /// left waiting in a digest that never sends.
-        /// </summary>
-        /// <summary>
-        /// A digest closed in dry run (phase-5-plan I67) plans dry deliveries, fixed from its own close (one option value for all its members),
-        /// and the dispatcher records them as would-send: nothing goes to the webhooks.
-        /// </summary>
-        [Fact]
-        public async Task A_digest_closed_in_dry_run_plans_dry_deliveries_that_end_as_would_send()
+        /// <summary>The stages with <c>Delivery:DryRun</c> on, dispatching too (shadow mode).</summary>
+        private ServiceProvider DryServices()
         {
-            LocalStack.RequireAvailable();
             var services = new ServiceCollection().AddLogging(l => l.AddProvider(new ErrorLogProvider()));
             services.AddDbContext<NotificationsDbContext>(options => NotificationsDbContext.Configure(options, _database.ConnectionString));
             services.AddSingleton<TimeProvider>(_clock);
@@ -190,21 +181,34 @@ namespace Juice.Notifications.IntegrationTests
             services.AddPlanning(Options, runWorkers: false);
             services.AddDeliveryPlanning(Options, runWorkers: false);
             services.AddDispatching(Options, runWorkers: false);
-            await using var dry = services.BuildServiceProvider();
-            async Task Drain<T, TStage>(string stage) where T : Claimable, ITenantOwned where TStage : class, IStage<T>
+            return services.BuildServiceProvider();
+        }
+
+        private static async Task DrainAsync<T, TStage>(ServiceProvider services, string stage) where T : Claimable, ITenantOwned where TStage : class, IStage<T>
+        {
+            PassResult pass;
+            do
             {
-                PassResult pass;
-                do
-                {
-                    pass = await dry.GetRequiredService<StageRunner<T, TStage>>().RunOnceAsync(stage, Options, Ct);
-                    Assert.Equal(0, pass.Failed);
-                }
-                while (pass.Claimed > 0);
+                pass = await services.GetRequiredService<StageRunner<T, TStage>>().RunOnceAsync(stage, Options, Ct);
+                Assert.Equal(0, pass.Failed);
             }
+            while (pass.Claimed > 0);
+        }
+
+        /// <summary>
+        /// A digest of requests accepted in dry run (phase-5-plan I67, M44-2b) is dry and plans dry deliveries, and the dispatcher records them
+        /// as would-send: nothing goes to the webhooks.
+        /// </summary>
+        [Fact]
+        public async Task A_digest_closed_in_dry_run_plans_dry_deliveries_that_end_as_would_send()
+        {
+            LocalStack.RequireAvailable();
+            await using var dry = DryServices();
+            Task Drain<T, TStage>(string stage) where T : Claimable, ITenantOwned where TStage : class, IStage<T> => DrainAsync<T, TStage>(dry, stage);
 
             for (var n = 1; n <= 3; n++)
             {
-                await NotificationAsync(n);
+                await NotificationAsync(n, dry: true);
             }
             await Drain<Notification, PlannerStage>("planner");
             _clock.Advance(TimeSpan.FromSeconds(60));
@@ -223,6 +227,52 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Empty(await check.Attempts.ToListAsync(Ct));
         }
 
+        /// <summary>
+        /// Across the switch (M44-2b, decision a): a digest opened in dry run stays dry and closes dry, though the option is off when it closes; a
+        /// member joining after the switch doesn't join it but opens a new, real digest for the same key, so legacy's send isn't repeated and the
+        /// new work isn't lost. Through the type's digest; a route's digest (M46-1) joins by the same code.
+        /// </summary>
+        [Fact]
+        public async Task A_digest_open_at_the_switch_closes_dry_and_a_member_after_it_opens_a_real_one()
+        {
+            LocalStack.RequireAvailable();
+            await using (var dry = DryServices())
+            {
+                await NotificationAsync(1, dry: true);
+                await NotificationAsync(2, dry: true);
+                await DrainAsync<Notification, PlannerStage>(dry, "planner");
+            }
+            // The switch: Delivery:DryRun off from here (the fixture's services), with the dry digest still open.
+            _clock.Advance(TimeSpan.FromSeconds(30));
+            await NotificationAsync(3);
+            await DrainAsync<Notification, PlannerStage>("planner");
+            await using (var db = _database.Context())
+            {
+                var open = await db.Digests.AsNoTracking().Where(d => d.State == DigestState.Open).OrderBy(d => d.OpensAt).ToListAsync(Ct);
+                Assert.Equal([true, false], open.Select(d => d.DryRun));
+                Assert.Equal(open[0].Key, open[1].Key);
+                var members = await db.Recipients.AsNoTracking().GroupBy(r => r.DigestId).Select(g => new { g.Key, Count = g.Count() }).ToListAsync(Ct);
+                Assert.Equal(4, members.Single(m => m.Key == open[0].Id).Count);
+                Assert.Equal(2, members.Single(m => m.Key == open[1].Id).Count);
+            }
+
+            _clock.Advance(TimeSpan.FromSeconds(60));
+            await DrainAsync<Digest, DigestStage>("digest");
+            await using var check = _database.Context();
+            var digests = await check.Digests.AsNoTracking().OrderBy(d => d.OpensAt).ToListAsync(Ct);
+            Assert.All(digests, d => Assert.NotEqual(DigestState.Open, d.State));
+            var deliveries = await check.Deliveries.AsNoTracking().ToListAsync(Ct);
+            Assert.Equal(4, deliveries.Count);
+            Assert.All(deliveries.Where(d => d.DigestId == digests[0].Id), d => Assert.True(d.DryRun));
+            Assert.All(deliveries.Where(d => d.DigestId == digests[1].Id), d => Assert.False(d.DryRun));
+            Assert.Equal(2, deliveries.Count(d => d.DigestId == digests[0].Id));
+        }
+
+        /// <summary>
+        /// A digest given up while open closes under the lock members join under before it reads its members (phases 3–4 review, round 3): a
+        /// notification joining at that moment either is among the members it fails, or finds the digest closed and opens the next one; none is
+        /// left waiting in a digest that never sends.
+        /// </summary>
         [Fact]
         public async Task A_digest_given_up_while_open_takes_the_joining_lock_and_fails_every_member()
         {

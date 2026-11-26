@@ -86,11 +86,19 @@ namespace Juice.Notifications.Delivering
         private static IQueryable<DeliveryItem> Deliveries(NotificationsDbContext db, NotificationRecipient row)
             => db.DeliveryItems.AsNoTracking().Where(i => i.TenantId == row.TenantId && i.RecipientId == row.Id);
 
-        /// <summary>A recipient's outcome once delivery planning is through with it (Planned: it has deliveries).</summary>
-        /// <summary>Whether a delivery planned now is dry (phase-5-plan I67): fixed at planning, so a backlog keeps the mode it was planned in.</summary>
+        /// <summary>Whether the pipeline runs dry now (phase-5-plan I67, <c>Delivery:DryRun</c>).</summary>
         internal static bool DryRun(StageContext context)
             => context.Services.GetService<Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions>>()?.Value.DryRun ?? false;
 
+        /// <summary>
+        /// Whether a recipient's deliveries are dry (phase-5 M44-2b): the request's own recipients as the request was accepted
+        /// (<see cref="NotificationRequest.DryRun"/>), whatever the mode is now; an escalation step's as the mode is now, when the step is
+        /// planned, since legacy's escalation stops at the switch and a step of an alert open across it must page. A delivery keeps what it is
+        /// planned with (retries and replays too).
+        /// </summary>
+        internal static bool DryRun(NotificationRequest request, int escalationStep, bool dryNow) => escalationStep > 0 ? dryNow : request.DryRun;
+
+        /// <summary>A recipient's outcome once delivery planning is through with it (Planned: it has deliveries).</summary>
         private static void Counted(StageContext context, NotificationRecipient row)
             => context.AfterCommit.Add(() => Telemetry.Recipients.Add(1, new KeyValuePair<string, object?>("outcome", row.Outcome.ToString())));
 
@@ -165,7 +173,7 @@ namespace Juice.Notifications.Delivering
                     Id = id, TenantId = row.TenantId, Channel = destination.Channel, IntegrationId = destination.Integration.Id, DestinationKey = destination.Key,
                     DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0, Locale = template?.Locale ?? Types.TypeRules.DefaultLocale,
                     RendererVersion = TemplateRenderer.Version, Content = content, Priority = request.Priority, Mandatory = type.Mandatory, CreatedAt = context.Now,
-                    DryRun = DryRun(context),
+                    DryRun = DryRun(request, row.EscalationStep, DryRun(context)),
                     Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed, FailureCheckDue = problem is not null,
                     FailureCategory = problem is null ? null : category,
                     LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? context.Now : null, CompletedAt = problem is null ? null : context.Now,

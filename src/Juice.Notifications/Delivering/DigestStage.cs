@@ -229,7 +229,7 @@ namespace Juice.Notifications.Delivering
                     Id = id, TenantId = row.TenantId, DigestId = isDigest ? row.Id : null, Channel = destination.Channel, IntegrationId = destination.Integration!.Id,
                     DestinationKey = destination.Key, DestinationSnapshot = destination.Snapshot, TemplateVersion = template?.Version ?? 0,
                     Locale = template?.Locale ?? Types.TypeRules.DefaultLocale, RendererVersion = TemplateRenderer.Version, Content = content,
-                    Priority = carried.Max(r => r.Priority), Mandatory = type.Mandatory, CreatedAt = now, DryRun = DeliveryPlannerStage.DryRun(context),
+                    Priority = carried.Max(r => r.Priority), Mandatory = type.Mandatory, CreatedAt = now, DryRun = row.DryRun,
                     Status = problem is null ? DeliveryStatus.Pending : DeliveryStatus.Failed, FailureCategory = problem is null ? null : category,
                     FailureCheckDue = problem is not null,
                     LastError = ChannelContent.Cut(problem, 2000), NextAt = problem is null ? until ?? now : null, CompletedAt = problem is null ? null : now,

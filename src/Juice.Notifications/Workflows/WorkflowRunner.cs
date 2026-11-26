@@ -73,7 +73,7 @@ namespace Juice.Notifications.Workflows
                         await StartEscalationAsync(context, db, row, request, escalate, now, ct);
                         break;
                     case DigestStep digest:
-                        await JoinDigestAsync(db, row, request, digest, now, ct);
+                        await JoinDigestAsync(db, row, request, digest, now, Delivering.DeliveryPlannerStage.DryRun(context), ct);
                         // Its send is the digest's: past both (the declaration guarantees the send follows).
                         row.WorkflowStep++;
                         break;
@@ -135,7 +135,7 @@ namespace Juice.Notifications.Workflows
                 if (storming.Count > 0)
                 {
                     var digested = waiting.Where(r => r.RouteKey is { } key && storming.Contains(key)).Select(r => r.Id).ToHashSet();
-                    await JoinDigestAsync(db, row, request, new DigestStep(storms.Window, DigestKeys.Route), context.Now, ct, digested);
+                    await JoinDigestAsync(db, row, request, new DigestStep(storms.Window, DigestKeys.Route), context.Now, Delivering.DeliveryPlannerStage.DryRun(context), ct, digested);
                     waiting = waiting.Where(r => !digested.Contains(r.Id)).ToList();
                     if (waiting.Count == 0)
                     {
@@ -304,38 +304,41 @@ namespace Juice.Notifications.Workflows
         /// <summary>
         /// Puts the notification's waiting recipients in the open digest for their key (I31), creating it (closing a window from now) if there is
         /// none: per key, in its own short transaction under the digest's lock, committed at once, so a closing digest either has them or another
-        /// opens for them. A recipient already in one (this step run again) stays where it is.
+        /// opens for them. A recipient already in one (this step run again) stays where it is. Each joins the open digest whose dry run matches its
+        /// own (M44-2b, <see cref="Delivering.DeliveryPlannerStage.DryRun(NotificationRequest, int, bool)"/>, with <paramref name="dryNow"/> the
+        /// mode now): a digest opened dry before the switch closes dry, and real members after it open a real one.
         /// </summary>
         private static async Task JoinDigestAsync(NotificationsDbContext db, Notification row, NotificationRequest request, DigestStep digest, DateTimeOffset now,
-            CancellationToken ct, IReadOnlySet<Guid>? only = null)
+            bool dryNow, CancellationToken ct, IReadOnlySet<Guid>? only = null)
         {
             var waiting = (await db.Recipients.AsNoTracking()
                 .Where(r => r.TenantId == row.TenantId && r.NotificationId == row.Id && r.Outcome == RecipientOutcome.Pending && r.DigestId == null)
-                .Select(r => new { r.Id, r.RouteKey, r.SubscriberId, r.NamedAs }).ToListAsync(ct))
+                .Select(r => new { r.Id, r.RouteKey, r.SubscriberId, r.NamedAs, r.EscalationStep }).ToListAsync(ct))
                 .Where(r => only is null || only.Contains(r.Id)).ToList();
             var open = DigestState.Open.ToString();
-            foreach (var group in waiting.GroupBy(r => Fit(digest.By switch
+            foreach (var group in waiting.GroupBy(r => (Key: Fit(digest.By switch
             {
                 DigestKeys.Route => r.RouteKey ?? r.NamedAs,
                 DigestKeys.Subscriber => r.SubscriberId?.ToString() ?? r.NamedAs,
                 DigestKeys.Correlation => request.CorrelationKey ?? "",
                 _ => "",
-            }), StringComparer.Ordinal))
+            }), Dry: Delivering.DeliveryPlannerStage.DryRun(request, r.EscalationStep, dryNow))))
             {
-                var key = group.Key;
+                var (key, dry) = group.Key;
                 var ids = group.Select(r => r.Id).ToList();
                 await using var transaction = await db.Database.BeginTransactionAsync(ct);
+                // One lock for both flags: the key's digests change one at a time, as before.
                 var lockKey = DigestLock(row.TenantId, request.TypeKey, digest.By, key);
                 await db.Database.ExecuteSqlAsync($"SELECT pg_advisory_xact_lock({DigestLockSpace}, hashtext({lockKey}))", ct);
                 var digestId = await db.Digests.Where(d => d.TenantId == row.TenantId && d.TypeKey == request.TypeKey && d.By == digest.By && d.Key == key
-                    && d.State == DigestState.Open).Select(d => (Guid?)d.Id).SingleOrDefaultAsync(ct);
+                    && d.DryRun == dry && d.State == DigestState.Open).Select(d => (Guid?)d.Id).SingleOrDefaultAsync(ct);
                 if (digestId is null)
                 {
                     digestId = Guid.CreateVersion7();
                     var closes = now + digest.Window;
                     await db.Database.ExecuteSqlAsync($"""
-                        INSERT INTO notifications.digests (tenant_id, id, type_key, "by", key, state, opens_at, closes_at, members, version, next_at, step_failures)
-                        VALUES ({row.TenantId}, {digestId}, {request.TypeKey}, {digest.By}, {key}, {open}, {now}, {closes}, 0, 0, {closes}, 0)
+                        INSERT INTO notifications.digests (tenant_id, id, type_key, "by", key, state, opens_at, closes_at, members, version, next_at, step_failures, dry_run)
+                        VALUES ({row.TenantId}, {digestId}, {request.TypeKey}, {digest.By}, {key}, {open}, {now}, {closes}, 0, 0, {closes}, 0, {dry})
                         """, ct);
                 }
                 await db.Recipients.Where(r => r.TenantId == row.TenantId && ids.Contains(r.Id) && r.DigestId == null)
