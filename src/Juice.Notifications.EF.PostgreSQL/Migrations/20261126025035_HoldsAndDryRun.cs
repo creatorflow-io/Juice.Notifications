@@ -118,6 +118,8 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // Narrows managed_by back to varchar(10) on the five tables: it fails (22001) once any row there holds a longer value, such as
+            // ManagedBy.WebhooksAlias ("webhooks-alias", 14). Convert or delete those rows before rolling this migration back.
             migrationBuilder.DropCheckConstraint(
                 name: "ck_correlations_hold",
                 schema: "notifications",

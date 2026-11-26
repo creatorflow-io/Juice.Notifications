@@ -32,9 +32,32 @@ namespace Juice.Notifications.Hosting
         public Action<IServiceCollection>? BeforeStages { get; set; }
     }
 
+    /// <summary>
+    /// Refuses to start a host whose resolved delivery options (what the dispatcher reads) ask for dry run before it is built (M44-2): in
+    /// <see cref="IHostedLifecycleService.StartingAsync"/>, which the host runs for every lifecycle service before any hosted service starts.
+    /// </summary>
+    internal sealed class DryRunGuard(Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions> options) : IHostedLifecycleService
+    {
+        public Task StartingAsync(CancellationToken cancellationToken)
+            => options.Value.DryRun && !Providers.DeliveryOptions.DryRunSupported
+                ? throw new Microsoft.Extensions.Options.OptionsValidationException(Microsoft.Extensions.Options.Options.DefaultName,
+                    typeof(Providers.DeliveryOptions), [NotificationsPipelineRegistration.DryRunUnsupported])
+                : Task.CompletedTask;
+
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
     public static class NotificationsPipelineRegistration
     {
-        private const string DryRunUnsupported = "Dry run arrives with M44-2.";
+        internal const string DryRunUnsupported = "Dry run arrives with M44-2.";
 
         /// <summary>
         /// The pipeline both hosting modes run (design §4.1, phase-5-plan I57): its database (<paramref name="database"/> configures
@@ -96,6 +119,9 @@ namespace Juice.Notifications.Hosting
                 throw new InvalidOperationException(DryRunUnsupported);
             }
             services.AddOptions<Providers.DeliveryOptions>().Validate(o => !o.DryRun || Providers.DeliveryOptions.DryRunSupported, DryRunUnsupported).ValidateOnStart();
+            // And as the dispatcher will read it: a host may register IOptions<DeliveryOptions> itself, past the options factory and its validation
+            // (QA D1). Checked as the host starts, before any hosted service starts.
+            services.AddHostedService<DryRunGuard>();
             // A dispatcher lease covers connect + request timeouts with room to spare (design §11).
             var dispatcher = new Stages.StageOptions { Lease = TimeSpan.FromSeconds(60) };
             configuration.GetSection("Stages:Dispatcher").Bind(dispatcher); // settings override the defaults one by one

@@ -150,7 +150,7 @@ namespace Juice.Notifications.IntegrationTests
         /// A host that registers IOptions&lt;DeliveryOptions&gt; itself (Options.Create) bypasses the factory, so validation sees DryRun false
         /// while the dispatcher sees true.
         /// </summary>
-        [Fact(Skip = D1)]
+        [Fact]
         public async Task Dry_run_in_a_directly_registered_options_instance_is_refused_at_start()
         {
             var (host, probe) = Build([], (s, _) => s.Replace(ServiceDescriptor.Singleton<IOptions<DeliveryOptions>>(Options.Create(new DeliveryOptions { DryRun = true }))));
@@ -158,7 +158,7 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>D1 in the real service host: the App starts with DryRun true where the dispatcher reads it.</summary>
-        [Fact(Skip = D1)]
+        [Fact]
         public async Task The_service_refuses_to_start_with_a_directly_registered_dry_run_options_instance()
         {
             LocalStack.RequireAvailable();
