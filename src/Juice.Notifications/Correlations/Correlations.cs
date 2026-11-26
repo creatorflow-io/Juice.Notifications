@@ -28,6 +28,33 @@ namespace Juice.Notifications.Correlations
         public static string Name(CorrelationState state) => state.ToString().ToLowerInvariant();
     }
 
+    /// <summary>A hold or release after the call: the correlation as it stands, whether the call changed it, and the parked escalations it made due.</summary>
+    public sealed record CorrelationHoldResult(CorrelationView View, bool Changed, int Resumed);
+
+    /// <summary>What a hold or a release does to a correlation (phase-5-plan p5-d3; m44-architecture §4.1).</summary>
+    public enum HoldDecision { Invalid, None, Hold, ReplaceReason, Release }
+
+    /// <summary>
+    /// The hold rules, pure. The correlation's state gates neither call: a hold stands until the producer releases it, whatever happens to the
+    /// correlation (resolve, cancel, reopen), because the producer decides suppression (D13).
+    /// </summary>
+    public static class HoldRules
+    {
+        public const int MaxReason = 200;
+
+        public static bool IsReason(string? reason) => Types.TypeRules.IsLabel(reason, MaxReason);
+
+        /// <summary>Unheld: hold. Held for this reason: no change. Held for another: the reason is replaced, its start and who held it kept.</summary>
+        public static HoldDecision Hold(DateTimeOffset? heldAt, string? holdReason, string? reason)
+            => !IsReason(reason) ? HoldDecision.Invalid
+                : heldAt is null ? HoldDecision.Hold
+                : string.Equals(holdReason, reason, StringComparison.Ordinal) ? HoldDecision.None
+                : HoldDecision.ReplaceReason;
+
+        /// <summary>Held: release. Not held: no change.</summary>
+        public static HoldDecision Release(DateTimeOffset? heldAt) => heldAt is null ? HoldDecision.None : HoldDecision.Release;
+    }
+
     public static class CorrelationBook
     {
         /// <summary>
@@ -64,7 +91,7 @@ namespace Juice.Notifications.Correlations
     /// cancelling of everything still due are one transaction, and bulk statements, which a command's handler can't run inside its transaction.
     /// </summary>
     public sealed class CorrelationLifecycle(NotificationsDbContext db, TimeProvider clock, IInboxEvents inbox, Events.ProducerEvents events,
-        ILogger<CorrelationLifecycle> logger)
+        ILogger<CorrelationLifecycle> logger, Stages.StageNudges? nudges = null)
     {
         public Task<Outcome<CorrelationView>> AcknowledgeAsync(Guid tenantId, Guid applicationId, string key, string? by, CancellationToken ct)
             => ChangeAsync(tenantId, applicationId, key, by, null, ct, (c, now) => c.State switch
@@ -91,6 +118,132 @@ namespace Juice.Notifications.Correlations
                 CorrelationState.Cancelled => Change.None,
                 _ => Change.Closed,
             });
+
+        /// <summary>
+        /// Holds the correlation's escalation (p5-d3): from the commit on, a step of it that falls due is parked by the escalation stage until the
+        /// release. In any state (the hold stands until released). Every running escalation of it is fenced (its version moves on and its claim is
+        /// cleared, m44-architecture §6.3), so a stage worker part way through a step it read unheld loses its save, and parks on its next pass.
+        /// Again with the same reason writes nothing.
+        /// </summary>
+        public Task<Outcome<CorrelationHoldResult>> HoldAsync(Guid tenantId, Guid applicationId, string key, string? reason, string? by, CancellationToken ct)
+        {
+            if (!HoldRules.IsReason(reason))
+            {
+                return Task.FromResult(Outcome<CorrelationHoldResult>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",
+                    [new FieldError("/reason", $"Why it is held is 1–{HoldRules.MaxReason} characters, no control characters or surrounding spaces.")]));
+            }
+            return HoldChangeAsync(tenantId, applicationId, key, by, ct, async (c, now) =>
+            {
+                var decision = HoldRules.Hold(c.HeldAt, c.HoldReason, reason);
+                if (decision == HoldDecision.Hold)
+                {
+                    (c.HeldAt, c.HoldReason, c.HeldBy) = (now, reason, by);
+                }
+                else if (decision == HoldDecision.ReplaceReason)
+                {
+                    c.HoldReason = reason; // the hold goes on: since when, and who held it, stay
+                }
+                else
+                {
+                    return null;
+                }
+                await SaveAndFenceAsync(c, now, resume: false, ct);
+                logger.LogInformation("Correlation {Key} of application {Application} in tenant {Tenant} held ({Reason})", key, applicationId, tenantId, reason);
+                return 0;
+            });
+        }
+
+        /// <summary>
+        /// Releases the hold: every parked escalation of the correlation is due now, and runs through the stage's checks as any due step does (a
+        /// correlation closed meanwhile stops it). The other running ones are fenced as for a hold. Not held: no change. The escalation stage is
+        /// woken once this commits.
+        /// </summary>
+        public Task<Outcome<CorrelationHoldResult>> ReleaseAsync(Guid tenantId, Guid applicationId, string key, string? by, CancellationToken ct)
+            => HoldChangeAsync(tenantId, applicationId, key, by, ct, async (c, now) =>
+            {
+                if (HoldRules.Release(c.HeldAt) != HoldDecision.Release)
+                {
+                    return null;
+                }
+                (c.HeldAt, c.HoldReason, c.HeldBy) = (null, null, null);
+                var resumed = await SaveAndFenceAsync(c, now, resume: true, ct);
+                logger.LogInformation("Correlation {Key} of application {Application} in tenant {Tenant} released: {Resumed} escalations resumed",
+                    key, applicationId, tenantId, resumed);
+                return resumed;
+            });
+
+        /// <summary>
+        /// Saves the correlation (its row version: a request, a resolve or another hold at the same moment can't both commit), then fences its
+        /// running escalations: each one's version moves on and its claim is cleared, and on a release the parked ones are due now. Returns how many
+        /// were parked and are due again.
+        /// </summary>
+        private async Task<int> SaveAndFenceAsync(Correlation c, DateTimeOffset now, bool resume, CancellationToken ct)
+        {
+            c.UpdatedAt = now;
+            await db.SaveChangesAsync(ct);
+            var running = EscalationState.Running.ToString();
+            await db.Database.ExecuteSqlAsync($"""
+                UPDATE notifications.escalations e
+                SET claimed_by = NULL, lease_until = NULL, version = e.version + 1, updated_at = {now}
+                WHERE e.tenant_id = {c.TenantId} AND e.correlation_id = {c.Id} AND e.state = {running}
+                """, ct);
+            if (!resume)
+            {
+                return 0;
+            }
+            return await db.Database.ExecuteSqlAsync($"""
+                UPDATE notifications.escalations e
+                SET next_at = {now}, held_at = NULL, claimed_by = NULL, lease_until = NULL, version = e.version + 1, updated_at = {now}
+                WHERE e.tenant_id = {c.TenantId} AND e.correlation_id = {c.Id} AND e.state = {running} AND e.held_at IS NOT NULL
+                """, ct);
+        }
+
+        /// <summary>
+        /// A hold or release in one transaction: its own, or the host's it was called in (embedded), which the host commits. <paramref name="change"/>
+        /// returns null for no change (nothing written; its own transaction rolled back) or the escalations it resumed.
+        /// </summary>
+        private async Task<Outcome<CorrelationHoldResult>> HoldChangeAsync(Guid tenantId, Guid applicationId, string key, string? by, CancellationToken ct,
+            Func<Correlation, DateTimeOffset, Task<int?>> change)
+        {
+            if (by is not null && !Types.TypeRules.IsLabel(by, CorrelationLimits.MaxBy))
+            {
+                return Outcome<CorrelationHoldResult>.Invalid(ErrorCodes.InvalidRequest, "The request has errors.",
+                    [new FieldError("/by", $"Who did it is 1–{CorrelationLimits.MaxBy} characters, no control characters or surrounding spaces.")]);
+            }
+            // To the microsecond, as PostgreSQL keeps it: the hold this answers with is the one a later read shows.
+            var now = clock.GetUtcNow();
+            now = now.AddTicks(-(now.Ticks % 10));
+            var own = db.Database.CurrentTransaction is null ? await db.Database.BeginTransactionAsync(ct) : null;
+            await using (own)
+            {
+                var correlation = await db.Correlations.SingleOrDefaultAsync(c => c.TenantId == tenantId && c.ApplicationId == applicationId && c.Key == key, ct);
+                if (correlation is null)
+                {
+                    return Outcome<CorrelationHoldResult>.NotFound($"There is no correlation {key}.");
+                }
+                var resumed = await change(correlation, now);
+                if (resumed is null)
+                {
+                    if (own is not null)
+                    {
+                        await own.RollbackAsync(ct);
+                    }
+                    return Outcome<CorrelationHoldResult>.Ok(new CorrelationHoldResult(await ViewAsync(db, correlation, ct), false, 0));
+                }
+                if (own is not null)
+                {
+                    await own.CommitAsync(ct);
+                    if (resumed > 0)
+                    {
+                        // Committed: the stage takes the resumed steps now rather than at its next poll. Embedded, the client does both once the
+                        // host commits.
+                        Telemetry.EscalationsReleased.Add(resumed.Value);
+                        nudges?.Wake(Workflows.EscalationStage.StageName);
+                    }
+                }
+                return Outcome<CorrelationHoldResult>.Ok(new CorrelationHoldResult(await ViewAsync(db, correlation, ct), true, resumed.Value));
+            }
+        }
 
         private enum Change { None, Changed, Acknowledges, Stops, Closed }
 
@@ -168,7 +321,7 @@ namespace Juice.Notifications.Correlations
                     const string acknowledged = "acknowledged";
                     await db.Database.ExecuteSqlAsync($"""
                         UPDATE notifications.escalations e
-                        SET state = {stopped}, stop_reason = {acknowledged}, next_at = NULL, claimed_by = NULL, lease_until = NULL, version = e.version + 1, updated_at = {now}
+                        SET state = {stopped}, stop_reason = {acknowledged}, next_at = NULL, held_at = NULL, claimed_by = NULL, lease_until = NULL, version = e.version + 1, updated_at = {now}
                         FROM notifications.escalation_policies p
                         WHERE e.tenant_id = {tenantId} AND e.correlation_id = {correlation.Id} AND e.state = {running}
                           AND p.tenant_id = e.tenant_id AND p.id = e.policy_id AND p.stop_on_acknowledge
@@ -248,7 +401,7 @@ namespace Juice.Notifications.Correlations
                 == CorrelationState.Resolved ? "resolved" : "cancelled";
             await db.Database.ExecuteSqlAsync($"""
                 UPDATE notifications.escalations e
-                SET state = {ended}, stop_reason = {stopReason}, next_at = NULL, claimed_by = NULL, lease_until = NULL, version = e.version + 1, updated_at = {now}
+                SET state = {ended}, stop_reason = {stopReason}, next_at = NULL, held_at = NULL, claimed_by = NULL, lease_until = NULL, version = e.version + 1, updated_at = {now}
                 WHERE e.tenant_id = {tenantId} AND e.correlation_id = {correlationId} AND e.state = {escalating}
                 """, ct);
             return (notifications, recipients, deliveries);

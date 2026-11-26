@@ -168,6 +168,159 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
 
+        /// <summary>
+        /// A correlation of the host's with an escalation parked by a hold (p5-d3), as the escalation stage leaves one: Running, not due, held since
+        /// now. The stages are off in these hosts, so the row is written as the stage would write it.
+        /// </summary>
+        private async Task<Guid> ParkedAsync(EmbeddedHost host, string key)
+        {
+            var request = await host.InTransactionAsync(async (_, client) => (await client.SendAsync(Notification(key) with { CorrelationKey = key }, Ct)).Id);
+            Assert.True((await host.InTransactionAsync(async (_, client) => await client.HoldAsync(key, "silence:1", "host", Ct))).Changed);
+            await using var db = _database.Context();
+            var notification = await db.Notifications.AsNoTracking().SingleAsync(n => n.RequestId == request, Ct);
+            var correlation = await db.Correlations.AsNoTracking().SingleAsync(c => c.Key == key, Ct);
+            var escalation = new Escalation
+            {
+                TenantId = Tenant, NotificationId = notification.Id, CorrelationId = correlation.Id, PolicyId = Guid.CreateVersion7(), State = EscalationState.Running,
+                HeldAt = DateTimeOffset.UtcNow, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Escalations.Add(escalation);
+            await db.SaveChangesAsync(Ct);
+            return escalation.Id;
+        }
+
+        private async Task<(Correlation Correlation, Escalation? Escalation)> HoldStateAsync(string key)
+        {
+            await using var db = _database.Context();
+            var correlation = await db.Correlations.AsNoTracking().SingleAsync(c => c.Key == key, Ct);
+            return (correlation, await db.Escalations.AsNoTracking().SingleOrDefaultAsync(e => e.CorrelationId == correlation.Id, Ct));
+        }
+
+        [Fact]
+        public async Task A_hold_in_a_rolled_back_host_transaction_never_happened()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await host.InTransactionAsync(async (_, client) => await client.SendAsync(Notification("hold-rb") with { CorrelationKey = "alert:rb" }, Ct));
+
+            await host.InTransactionAsync(async (_, client) =>
+            {
+                var hold = await client.HoldAsync("alert:rb", "silence:1", "host", Ct);
+                Assert.Equal((true, true, "silence:1", "host", CorrelationState.Open), (hold.Held, hold.Changed, hold.Reason, hold.HeldBy, hold.State));
+                return false;
+            });
+            Assert.Null((await HoldStateAsync("alert:rb")).Correlation.HeldAt);
+        }
+
+        [Fact]
+        public async Task A_committed_release_resumes_the_parked_escalation_and_wakes_its_stage_only_once_the_host_commits()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await ParkedAsync(host, "alert:rel");
+
+            // Rolled back: still held, still parked; the wake asked for never runs.
+            var before = host.CommittedActions;
+            await host.InTransactionAsync(async (_, client) =>
+            {
+                var released = await client.ReleaseAsync("alert:rel", "host", Ct);
+                Assert.Equal((false, true, 1), (released.Held, released.Changed, released.Resumed));
+                return false;
+            });
+            var (held, parked) = await HoldStateAsync("alert:rel");
+            Assert.NotNull(held.HeldAt);
+            Assert.Equal(((DateTimeOffset?)null, true), (parked!.NextAt, parked.HeldAt is not null));
+
+            // Committed: due now, and the escalation stage woken by the commit action, which runs only after the commit.
+            await host.InTransactionAsync(async (_, client) =>
+            {
+                Assert.Equal(1, (await client.ReleaseAsync("alert:rel", "host", Ct)).Resumed);
+                Assert.Equal(before + 2, host.CommittedActions);
+                Assert.False(await WokenAsync(host), "the stage isn't woken before the host commits");
+                return true;
+            });
+            Assert.True(await WokenAsync(host));
+            var (open, resumed) = await HoldStateAsync("alert:rel");
+            Assert.Null(open.HeldAt);
+            Assert.Equal((true, (DateTimeOffset?)null), (resumed!.NextAt is not null, resumed.HeldAt));
+
+            // Again: nothing held, nothing to wake.
+            var again = await host.InTransactionAsync(async (_, client) => await client.ReleaseAsync("alert:rel", null, Ct));
+            Assert.Equal((false, 0), (again.Changed, again.Resumed));
+            Assert.Equal(before + 2, host.CommittedActions);
+
+            // Whether the escalation stage has a wake-up waiting (the stages are off here, so nothing else takes it): it answers at once if so,
+            // else at the end of its wait. Taking it reads it, so each wake is seen once.
+            static async Task<bool> WokenAsync(EmbeddedHost host)
+            {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                await host.Services.GetRequiredService<Stages.StageNudges>().WaitAsync(Workflows.EscalationStage.StageName, TimeSpan.FromSeconds(1), Ct);
+                return watch.Elapsed < TimeSpan.FromMilliseconds(800);
+            }
+        }
+
+        [Fact]
+        public async Task Without_a_transaction_a_hold_or_release_is_refused()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await using var scope = host.Services.CreateAsyncScope();
+            var client = scope.ServiceProvider.GetRequiredService<INotificationClient>();
+            Assert.Equal(ErrorCodes.NoTransaction, (await Assert.ThrowsAsync<NotificationRefusedException>(() => client.HoldAsync("alert:x", "silence:1", null, Ct))).Code);
+            Assert.Equal(ErrorCodes.NoTransaction, (await Assert.ThrowsAsync<NotificationRefusedException>(() => client.ReleaseAsync("alert:x", null, Ct))).Code);
+            var unknown = await Assert.ThrowsAsync<NotificationRefusedException>(() => host.InTransactionAsync(async (_, c) => await c.HoldAsync("alert:none", "silence:1", null, Ct)));
+            Assert.Equal(ErrorCodes.NotFound, unknown.Code);
+        }
+
+        /// <summary>
+        /// A release that meets another change of the correlation (here an update held by another connection, committed while the release waits)
+        /// is refused as <c>concurrent_change</c>, and the host's transaction is still usable: asking again in it answers on the new state.
+        /// </summary>
+        [Fact]
+        public async Task A_conflicting_release_is_refused_as_a_concurrent_change_and_the_host_transaction_goes_on()
+        {
+            LocalStack.RequireAvailable();
+            await using var host = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false);
+            await ParkedAsync(host, "alert:race");
+
+            await host.InTransactionAsync(async (hostDb, client) =>
+            {
+                hostDb.Things.Add(new Thing { Id = Guid.CreateVersion7(), Name = "kept" });
+                await hostDb.SaveChangesAsync(Ct);
+                await using (var other = _database.Context())
+                {
+                    await using var otherTransaction = await other.Database.BeginTransactionAsync(Ct);
+                    await other.Database.ExecuteSqlAsync($"UPDATE notifications.correlations SET updated_at = now() WHERE key = 'alert:race'", Ct);
+                    var release = client.ReleaseAsync("alert:race", "host", Ct);
+                    await LockWaitAsync();
+                    await otherTransaction.CommitAsync(Ct);
+                    var refused = await Assert.ThrowsAsync<NotificationRefusedException>(() => release);
+                    Assert.Equal(ErrorCodes.ConcurrentChange, refused.Code);
+                }
+                Assert.Equal(1, (await client.ReleaseAsync("alert:race", "host", Ct)).Resumed);
+                return true;
+            });
+            Assert.Null((await HoldStateAsync("alert:race")).Correlation.HeldAt);
+            await using var check = host.HostContext();
+            Assert.Single(await check.Things.Where(t => t.Name == "kept").ToListAsync(Ct));
+        }
+
+        /// <summary>Waits until a statement of this database waits on a row lock.</summary>
+        private async Task LockWaitAsync()
+        {
+            await using var db = _database.Context();
+            for (var i = 0; i < 100; i++)
+            {
+                if (await db.Database.SqlQuery<int>($"SELECT count(*)::int AS \"Value\" FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'")
+                    .SingleAsync(Ct) > 0)
+                {
+                    return;
+                }
+                await Task.Delay(50, Ct);
+            }
+            Assert.Fail("The release never waited on the other transaction.");
+        }
+
         [Fact]
         public async Task The_setup_is_provisioned_and_each_change_reaches_the_host_audit_sink()
         {

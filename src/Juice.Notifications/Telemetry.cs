@@ -92,5 +92,11 @@ namespace Juice.Notifications
             => ActivityContext.TryParse(traceParent, null, out var parent)
                 ? Source.StartActivity(name, kind, parent)
                 : Source.StartActivity(name, kind);
+
+        // M44 holds
+        public static readonly Counter<long> EscalationsHeld = Meter.CreateCounter<long>("notifications.escalations_held",
+            description: "Due escalation steps parked by their correlation's hold (p5-d3).");
+        public static readonly Counter<long> EscalationsReleased = Meter.CreateCounter<long>("notifications.escalations_released",
+            description: "Parked escalations made due by a release (p5-d3).");
     }
 }

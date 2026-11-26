@@ -179,18 +179,24 @@ namespace Juice.Notifications.IntegrationTests
                 (body.GetProperty("heldAt").GetDateTimeOffset(), body.GetProperty("holdReason").GetString(), body.GetProperty("heldBy").GetString()));
         }
 
-        /// <summary>M44-0 maps nothing for holds (CorrelationHoldEndpoints is empty until M44-1): the routes don't exist yet.</summary>
+        /// <summary>
+        /// M44-1 maps the hold routes: the endpoint answers with its own problem (this fixture links no producer, so not_a_producer; with one,
+        /// not_found for an unknown key), never an unmatched route's 404 or 405 without a code.
+        /// </summary>
         [Fact]
-        public async Task The_hold_routes_are_not_mapped_before_M44_1()
+        public async Task The_hold_routes_are_mapped_and_answer_with_their_own_problem()
         {
             LocalStack.RequireAvailable();
             using var producer = fixture.App.Client(await LocalStack.ProducerTokenAsync());
             var url = $"/api/v1/tenants/{ProducerApp.Tenant}/correlations/qa-none";
             using var hold = await producer.PostAsJsonAsync($"{url}/hold", new HoldCorrelationBody("silence:1", null), Ct);
             using var release = await producer.PostAsJsonAsync($"{url}/release", new ReleaseCorrelationBody(null), Ct);
-            // 405, not 404: the path matches the GET route of a key, which takes every segment (a key may hold a '/'); no POST answers it.
-            Assert.True(hold.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed, hold.StatusCode.ToString());
-            Assert.True(release.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed, release.StatusCode.ToString());
+            foreach (var answer in new[] { hold, release })
+            {
+                Assert.NotEqual(HttpStatusCode.MethodNotAllowed, answer.StatusCode);
+                var body = await answer.Content.ReadAsStringAsync(Ct);
+                Assert.True(body.Contains("\"code\":\"not_a_producer\"") || body.Contains("\"code\":\"not_found\""), $"{answer.StatusCode}: {body}");
+            }
         }
     }
 }

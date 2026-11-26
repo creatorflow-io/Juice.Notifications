@@ -166,6 +166,28 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal(NotificationState.Planned, (await db.Notifications.AsNoTracking().SingleAsync(n => n.Id == keeps, Ct)).State);
         }
 
+        /// <summary>A step parked by a hold (p5-d3) is no claim for any worker, however late: the claim store skips a row with nothing due.</summary>
+        [Fact]
+        public async Task A_parked_escalation_is_never_claimed()
+        {
+            LocalStack.RequireAvailable();
+            var (id, key) = await NotificationAsync("keeps");
+            await DrainAsync<Notification, PlannerStage>("planner");
+            await using (var db = _database.Context())
+            {
+                var lifecycle = new CorrelationLifecycle(db, _clock, new NoInboxEvents(), _services!.GetRequiredService<Events.ProducerEvents>(), NullLogger<CorrelationLifecycle>.Instance);
+                Assert.Equal(OutcomeKind.Ok, (await lifecycle.HoldAsync(Tenant, _seed.App, key, "silence:1", null, Ct)).Kind);
+            }
+            _clock.Advance(TimeSpan.FromMinutes(5));
+            await DrainAsync<Escalation, EscalationStage>("escalation");
+            Assert.NotNull((await EscalationAsync(id)).HeldAt);
+
+            await using var scope = _services!.CreateAsyncScope();
+            var claims = await scope.ServiceProvider.GetRequiredService<IClaimStore>()
+                .ClaimAsync<Escalation>("anyone", 10, TimeSpan.FromSeconds(30), _clock.GetUtcNow().AddDays(30), Ct);
+            Assert.Empty(claims);
+        }
+
         [Fact]
         public async Task Resolving_stops_an_escalation_before_its_step()
         {

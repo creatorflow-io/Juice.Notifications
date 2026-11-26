@@ -69,7 +69,7 @@ namespace Juice.Notifications.Api
         /// <c>%2F</c>, so decoding it again would turn a key's own <c>%41</c> into <c>A</c>, and undoing only <c>%2F</c> can't tell a key's
         /// <c>%2F</c> (sent <c>%252F</c>) from a slash.
         /// </summary>
-        private static string Key(HttpContext http, string key)
+        internal static string Key(HttpContext http, string key)
         {
             var raw = http.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpRequestFeature>()?.RawTarget;
             const string marker = "/correlations/";
