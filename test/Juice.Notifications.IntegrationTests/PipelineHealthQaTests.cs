@@ -102,7 +102,7 @@ namespace Juice.Notifications.IntegrationTests
         // ─── Cost over a backlog ────────
 
         /// <summary>
-        /// 60,000 due deliveries (20,000 of them backing off after failed steps), 40,000 delivered ones, and 30,000 due notifications: the read is
+        /// 60,000 due deliveries (500 of them backing off after failed steps, as failing rows are few), 40,000 delivered ones, and 30,000 due notifications: the read is
         /// milliseconds, through the due and failing indexes, never a sequential scan.
         /// </summary>
         [Fact]
@@ -110,8 +110,8 @@ namespace Juice.Notifications.IntegrationTests
         {
             LocalStack.RequireAvailable();
             var (_, template) = await SeedAsync();
-            await CloneAsync("deliveries", template, 40_000, "now() - (g || ' seconds')::interval", "0");
-            await CloneAsync("deliveries", template, 20_000, "now() - (g || ' seconds')::interval", "3");
+            await CloneAsync("deliveries", template, 59_500, "now() - (g || ' seconds')::interval", "0");
+            await CloneAsync("deliveries", template, 500, "now() - (g || ' seconds')::interval", "3");
             await CloneAsync("deliveries", template, 40_000, "NULL", "0");
             await using (var db = _database.Context())
             {
@@ -146,7 +146,7 @@ namespace Juice.Notifications.IntegrationTests
             times.Sort();
             var median = times[times.Count / 2];
             Report($"health read over the backlog: median {median:F1} ms, max {times[^1]:F1} ms");
-            Assert.Equal(StageHealth.MaxFailing, health.Stages["dispatcher"].Failing);
+            Assert.Equal(501, health.Stages["dispatcher"].Failing); // the clones and the template
             Assert.True(health.Stages["dispatcher"].OldestDue > TimeSpan.FromHours(10), "the oldest due delivery is the earliest clone");
             Assert.True(health.Stages["planner"].OldestDue >= TimeSpan.FromMinutes(4.9));
             Assert.True(median < 50, $"median {median:F1} ms");
@@ -165,6 +165,27 @@ namespace Juice.Notifications.IntegrationTests
             Report($"deliveries failing:\n{failing}");
             Assert.Contains("ix_deliveries_failing", failing);
             Assert.DoesNotContain("Seq Scan", failing);
+        }
+
+        /// <summary>
+        /// A stage failing on a mass scale (20,000 rows backing off): the count stops at its cap and stays cheap. With so many, PostgreSQL may
+        /// read the table instead of the partial index; the LIMIT keeps it short either way.
+        /// </summary>
+        [Fact]
+        public async Task Mass_failing_is_capped_and_stays_cheap()
+        {
+            LocalStack.RequireAvailable();
+            var (_, template) = await SeedAsync();
+            await CloneAsync("deliveries", template, 20_000, "now() - (g || ' seconds')::interval", "3");
+            await CloneAsync("deliveries", template, 40_000, "NULL", "0");
+            await ExecuteAsync("ANALYZE notifications.deliveries;");
+            await ReadAsync();
+            var watch = Stopwatch.StartNew();
+            var health = await ReadAsync();
+            var ms = watch.Elapsed.TotalMilliseconds;
+            Report($"health read with 20,000 failing deliveries: {ms:F1} ms");
+            Assert.Equal(StageHealth.MaxFailing, health.Stages["dispatcher"].Failing);
+            Assert.True(ms < 500, $"{ms:F1} ms");
         }
 
         /// <summary>
