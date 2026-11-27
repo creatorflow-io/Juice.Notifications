@@ -291,8 +291,23 @@ namespace Juice.Notifications.IntegrationTests
             // No exporter in this test: the intake keeps the producer's trace whether or not the host records traces.
             var trace = System.Diagnostics.ActivityTraceId.CreateRandom();
             var key = "q-" + Short();
-            await PublishAsync(intake.Producer, intake.Producer, Message(key),
-                new Dictionary<string, object?> { ["traceparent"] = $"00-{trace}-{System.Diagnostics.ActivitySpanId.CreateRandom()}-01" });
+            // Publish inside an Activity continuing that trace, as an instrumented producer does. RabbitMQ.Client 7 writes its publish
+            // span's context into traceparent whenever any listener samples it, so with no ambient Activity another test's listener
+            // would turn the header into a new root trace (deferred #42).
+            var context = new System.Diagnostics.ActivityContext(trace, System.Diagnostics.ActivitySpanId.CreateRandom(), System.Diagnostics.ActivityTraceFlags.Recorded);
+            using var source = new System.Diagnostics.ActivitySource("Juice.Notifications.IntegrationTests.Producer");
+            using var listener = new System.Diagnostics.ActivityListener
+            {
+                ShouldListenTo = s => s == source,
+                Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) => System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            };
+            System.Diagnostics.ActivitySource.AddActivityListener(listener);
+            using (var producing = source.StartActivity("produce", System.Diagnostics.ActivityKind.Producer, context))
+            {
+                Assert.NotNull(producing);
+                await PublishAsync(intake.Producer, intake.Producer, Message(key),
+                    new Dictionary<string, object?> { ["traceparent"] = $"00-{trace}-{producing.SpanId}-01" });
+            }
             var request = await AcceptedAsync(key);
             Assert.NotNull(request.TraceParent);
             Assert.Equal(trace.ToString(), request.TraceParent.Split('-')[1]);

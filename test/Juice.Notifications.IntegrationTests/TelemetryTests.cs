@@ -17,7 +17,9 @@ namespace Juice.Notifications.IntegrationTests
             var stopped = new ConcurrentQueue<Activity>();
             using var listener = new ActivityListener
             {
-                ShouldListenTo = _ => true,
+                // Only the sources asserted on: a listen-all listener also samples other classes' sources (RabbitMQ.Client's publisher
+                // among them) while classes run in parallel, and that publisher then rewrites traceparent (deferred #42).
+                ShouldListenTo = source => source.Name is Telemetry.Name or "System.Net.Http" or "Microsoft.AspNetCore",
                 Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
                 ActivityStopped = a => { if (a.TraceId == trace) stopped.Enqueue(a); },
             };
