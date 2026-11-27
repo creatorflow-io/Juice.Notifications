@@ -74,13 +74,14 @@ namespace Juice.Notifications.Stages
 
         /// <summary>
         /// When the delivery a gate holds whose hold has lapsed (its <c>next_at</c> at or before <paramref name="lapsedBefore"/>, so nobody has
-        /// looked at it again for a whole <c>TenantHold</c>) and that was held longest was created, through <c>ix_deliveries_tenant_held</c>. The
+        /// looked at it again for a whole <c>TenantHold</c>) that was created first (the oldest, not the one longest overdue), read through
+        /// <c>ix_deliveries_tenant_held</c>, which holds only the held rows. The
         /// statuses and the flag are literals for the same reason as in <see cref="OldestInFlight"/>.
         /// </summary>
         internal static IQueryable<DateTimeOffset?> OldestLapsedHold(IQueryable<Delivery> deliveries, DateTimeOffset lapsedBefore) => deliveries
             .Where(d => d.TenantHeld && (d.Status == DeliveryStatus.Pending || d.Status == DeliveryStatus.Sending || d.Status == DeliveryStatus.Retrying)
                 && d.NextAt <= lapsedBefore)
-            .OrderBy(d => d.NextAt).Select(d => (DateTimeOffset?)d.CreatedAt);
+            .OrderBy(d => d.CreatedAt).Select(d => (DateTimeOffset?)d.CreatedAt);
 
         /// <summary>
         /// The attempts of the last <see cref="SendHealth.DefaultWindow"/> (through <c>ix_delivery_attempts_at</c>, each count capped), and the oldest
