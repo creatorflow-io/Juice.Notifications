@@ -84,17 +84,19 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Equal((HttpStatusCode.BadRequest, ErrorCodes.InvalidConfiguration, "/settings"),
                 await ProblemAsync(admin.PutAsJsonAsync($"{Other}/resolvers/x", new PutResolverBody("fake", null, Json("""{ "invalid": 1 }"""), null, null), Ct)));
 
+            // A key only this test uses: the class shares one scratch DB, and another test leaves a resolver on Tenant (deferred #50).
+            var key = "people-" + Guid.NewGuid().ToString("N")[..8];
             // Handles everything its implementation can when left out, in order.
-            var created = await OkAsync<ResolverResponse>(admin.PutAsJsonAsync($"{Other}/resolvers/people", new PutResolverBody("fake", null, null, null, null), Ct));
+            var created = await OkAsync<ResolverResponse>(admin.PutAsJsonAsync($"{Other}/resolvers/{key}", new PutResolverBody("fake", null, null, null, null), Ct));
             Assert.Equal(("fake", "group,role,user", true, ManagedBy.Api), (created.Kind, string.Join(",", created.Handles), created.Enabled, created.ManagedBy));
             // A Put keeps what it leaves out; the kind is fixed.
-            var changed = await OkAsync<ResolverResponse>(admin.PutAsJsonAsync($"{Other}/resolvers/people", new PutResolverBody(null, ["user", "user"], null, null, false), Ct));
+            var changed = await OkAsync<ResolverResponse>(admin.PutAsJsonAsync($"{Other}/resolvers/{key}", new PutResolverBody(null, ["user", "user"], null, null, false), Ct));
             Assert.Equal(("user", false), (string.Join(",", changed.Handles), changed.Enabled));
 
-            Assert.Equal(["people"], (await OkAsync<List<ResolverResponse>>(admin.GetAsync($"{Other}/resolvers", Ct))).Select(r => r.Key));
-            Assert.Empty(await OkAsync<List<ResolverResponse>>(admin.GetAsync($"{Tenant}/resolvers", Ct)));
-            Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"{Other}/resolvers/people", Ct)).StatusCode);
-            Assert.Empty(await OkAsync<List<ResolverResponse>>(admin.GetAsync($"{Other}/resolvers", Ct)));
+            Assert.Contains(key, (await OkAsync<List<ResolverResponse>>(admin.GetAsync($"{Other}/resolvers", Ct))).Select(r => r.Key));
+            Assert.DoesNotContain(key, (await OkAsync<List<ResolverResponse>>(admin.GetAsync($"{Tenant}/resolvers", Ct))).Select(r => r.Key));
+            Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"{Other}/resolvers/{key}", Ct)).StatusCode);
+            Assert.DoesNotContain(key, (await OkAsync<List<ResolverResponse>>(admin.GetAsync($"{Other}/resolvers", Ct))).Select(r => r.Key));
         }
 
         [Fact]
