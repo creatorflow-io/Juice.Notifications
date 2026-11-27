@@ -90,13 +90,13 @@ namespace Juice.Notifications.IntegrationTests
         public static string Secret(string name) => Env.Value[name];
 
         public static string ServerConnectionString(string database)
-            => $"Host=127.0.0.1;Port=5434;Database={database};Username=notifications;Password={Env.Value["POSTGRES_PASSWORD"]};Maximum Pool Size={MaxPoolSize}";
+            => $"Host=127.0.0.1;Port=5434;Database={database};Username=notifications;Password={Env.Value["POSTGRES_PASSWORD"]};Maximum Pool Size={MaxPoolSize};Minimum Pool Size=0;Connection Idle Lifetime=10";
 
         /// <summary>
         /// Every test host and scratch database has its own pool, and a full run builds hundreds of them against a server that allows 300
-        /// connections (and is shared with other runs): the default of 100 each can exhaust it ("too many clients", 53300, deferred #56).
+        /// connections (and is shared with other runs): the default of 100 each can exhaust it ("too many clients", 53300, deferred #56). Idle connections of finished classes are the likelier build-up, so pools also drop them after 10 s.
         /// </summary>
-        public const int MaxPoolSize = 30;
+        public const int MaxPoolSize = 50;
 
         /// <summary>A client-credentials token from the local Keycloak.</summary>
         public static async Task<string> TokenAsync(string clientId, string secretName)
