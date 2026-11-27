@@ -140,13 +140,29 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Empty((await List($"channel=email&request={request}")).Items);
             Assert.Empty((await List($"request={request}&from={Uri.EscapeDataString(DateTimeOffset.UtcNow.AddMinutes(1).ToString("O"))}")).Items);
 
-            // Two pages of one, newest first, then the end.
-            var first = await List("integration=history-hooks&limit=1");
+            // Two pages of one over deliveries this test makes itself, in an integration only it uses (the scratch DB may hold
+            // no other history-hooks delivery when this test runs alone or first: deferred #51).
+            var integration = "history-page-" + Short();
+            var target = "page-" + Short();
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/{integration}", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/{integration}/targets/{target}", new PutTargetBody(receiver.Url, null, null), Ct));
+            var sent = new List<Guid>();
+            for (var n = 0; n < 2; n++)
+            {
+                var id = await SendThroughRouteAsync(admin, client, integration, target, """{ "webhook": "passthrough" }""");
+                sent.Add(Assert.Single((await DeliveredAsync(client, id)).Deliveries).Id);
+            }
+
+            var first = await List($"integration={integration}&limit=1");
+            var firstId = Assert.Single(first.Items).Id;
             Assert.NotNull(first.Next);
-            var second = await List($"integration=history-hooks&limit=1&before={first.Next}");
-            Assert.True(second.Items.Count <= 1);
-            Assert.All(second.Items, i => Assert.True(i.CreatedAt <= first.Items[0].CreatedAt));
-            Assert.DoesNotContain(first.Items[0].Id, second.Items.Select(i => i.Id));
+            var second = await List($"integration={integration}&limit=1&before={first.Next}");
+            var secondId = Assert.Single(second.Items).Id;
+            Assert.Equal(sent.Order(), new[] { firstId, secondId }.Order());
+            // Newest first is the cursor's contract on the id (uuid order is the text order of its hex digits).
+            Assert.True(string.CompareOrdinal(firstId.ToString(), secondId.ToString()) > 0, "the first page holds the greater id");
+            Assert.Null(second.Next);
+            Assert.Equal(2, (await List($"integration={integration}&limit=200")).Items.Count);
 
             // A time with an offset is the same instant in UTC.
             Assert.Contains(failed.Id, (await List($"request={request}&from={Uri.EscapeDataString(DateTimeOffset.UtcNow.AddHours(-1).ToOffset(TimeSpan.FromHours(7)).ToString("O"))}")).Items.Select(i => i.Id));
