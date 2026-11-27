@@ -83,6 +83,16 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         [Fact]
+        public async Task The_lapsed_hold_age_is_the_oldest_creation_not_that_of_the_longest_overdue_row()
+        {
+            LocalStack.RequireAvailable();
+            // Both lapsed: the one overdue longest (smaller next_at) is the newer.
+            await SeedAsync(TimeSpan.FromMinutes(10), DeliveryStatus.Pending, held: true, dueIn: TimeSpan.FromMinutes(-30));
+            await SeedAsync(TimeSpan.FromMinutes(50), DeliveryStatus.Pending, held: true, dueIn: TimeSpan.FromMinutes(-20));
+            Assert.Equal(TimeSpan.FromMinutes(50), await OldestUndeliveredAsync());
+        }
+
+        [Fact]
         public async Task Upgrade_rows_from_before_the_migration_count_until_re_held()
         {
             LocalStack.RequireAvailable();
