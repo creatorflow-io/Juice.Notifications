@@ -105,8 +105,50 @@ namespace Juice.Notifications.IntegrationTests
             var requests = await SendAsync(type, 1000);
             Assert.Equal(1000, requests.Distinct().Count());
 
+            // A progress-based budget: the pipeline may be slow under a full run, but a stalled one makes no progress. Poll with two cheap
+            // counts; give up after a minute without growth in either, or at the hard cap (deferred #56).
+            var noProgress = TimeSpan.FromSeconds(60);
+            var hardCap = TimeSpan.FromMinutes(8);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var lastProgress = clock.Elapsed;
+            (int Carried, int Accepted) seen = (0, 0);
             Dictionary<Guid, (int Deliveries, int Requests, int Carried)> byTarget = [];
-            for (var i = 0; i < 600; i++)
+            string? gaveUp = null;
+            while (true)
+            {
+                await using var db = App.Database.Context();
+                var carriedNow = await (from item in db.DeliveryItems
+                                        join request in db.Requests on new { item.TenantId, Id = item.RequestId } equals new { request.TenantId, request.Id }
+                                        where request.TypeKey == type
+                                        select item.RequestId).CountAsync(Ct);
+                var acceptedNow = await (from item in db.DeliveryItems
+                                         join delivery in db.Deliveries on new { item.TenantId, Id = item.DeliveryId } equals new { delivery.TenantId, delivery.Id }
+                                         join request in db.Requests on new { item.TenantId, Id = item.RequestId } equals new { request.TenantId, request.Id }
+                                         where request.TypeKey == type && delivery.Status == DeliveryStatus.Accepted
+                                         select item.RequestId).CountAsync(Ct);
+                if (carriedNow > seen.Carried || acceptedNow > seen.Accepted)
+                {
+                    lastProgress = clock.Elapsed;
+                }
+                seen = (carriedNow, acceptedNow);
+                // Every item of both routes is in and accepted: only now the heavier check (nothing still pending).
+                if (carriedNow == 2000 && acceptedNow == 2000)
+                {
+                    var pending = await db.Recipients.AsNoTracking().CountAsync(r => r.Outcome == RecipientOutcome.Pending
+                        && db.Notifications.Any(n => n.Id == r.NotificationId && db.Requests.Any(q => q.Id == n.RequestId && q.TypeKey == type)), Ct);
+                    if (pending == 0)
+                    {
+                        break;
+                    }
+                }
+                if (clock.Elapsed - lastProgress > noProgress || clock.Elapsed > hardCap)
+                {
+                    gaveUp = $"The storm stalled after {clock.Elapsed.TotalSeconds:F0} s ({(clock.Elapsed - lastProgress).TotalSeconds:F0} s without progress): "
+                        + $"{seen.Carried} of 2000 items carried, {seen.Accepted} accepted.";
+                    break;
+                }
+                await Task.Delay(500, Ct);
+            }
             {
                 await using var db = App.Database.Context();
                 var items = await (from item in db.DeliveryItems
@@ -114,16 +156,10 @@ namespace Juice.Notifications.IntegrationTests
                                    join request in db.Requests on new { item.TenantId, Id = item.RequestId } equals new { request.TenantId, request.Id }
                                    where request.TypeKey == type
                                    select new { delivery.Id, delivery.DestinationKey, delivery.Status, item.RequestId }).AsNoTracking().ToListAsync(Ct);
-                var pending = await db.Recipients.AsNoTracking().CountAsync(r => r.Outcome == RecipientOutcome.Pending
-                    && db.Notifications.Any(n => n.Id == r.NotificationId && db.Requests.Any(q => q.Id == n.RequestId && q.TypeKey == type)), Ct);
                 byTarget = items.GroupBy(x => x.DestinationKey).ToDictionary(g => Guid.Parse(g.Key[3..]),
                     g => (g.Select(x => x.Id).Distinct().Count(), g.Select(x => x.RequestId).Distinct().Count(), g.Count()));
-                if (pending == 0 && byTarget.Count == 2 && byTarget.Values.All(t => t.Requests == 1000) && items.All(x => x.Status == DeliveryStatus.Accepted))
-                {
-                    break;
-                }
-                await Task.Delay(200, Ct);
             }
+            Assert.True(gaveUp is null, gaveUp);
 
             Assert.Equal(2, byTarget.Count);
             foreach (var (_, (deliveries, carried, items)) in byTarget)
