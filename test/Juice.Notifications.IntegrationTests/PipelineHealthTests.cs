@@ -402,6 +402,11 @@ namespace Juice.Notifications.IntegrationTests
                 {
                     var d = Seed.Delivery(Tenant, _integration.Id);
                     (d.Status, d.NextAt) = i % 100 == 0 ? (DeliveryStatus.Retrying, now.AddMinutes(1)) : (DeliveryStatus.Delivered, (DateTimeOffset?)null);
+                    d.TenantHeld = i % 100 == 50; // a few held rows, due and past their hold: the lapsed-hold read has rows to choose from
+                    if (d.TenantHeld)
+                    {
+                        (d.Status, d.NextAt) = (DeliveryStatus.Pending, now.AddMinutes(-30));
+                    }
                     db.Deliveries.Add(d);
                     db.Attempts.Add(new DeliveryAttempt
                     {
@@ -420,9 +425,19 @@ namespace Juice.Notifications.IntegrationTests
                 var sql = Juice.Notifications.Stages.NotificationsPipelineHealth.OldestInFlight(context.Deliveries).Take(1).ToQueryString();
                 Assert.DoesNotContain("ANY (", sql);
                 Assert.Contains("IN ('Pending', 'Sending', 'Retrying')", sql);
+                Assert.Contains("NOT (d.tenant_held)", sql);
+                var held = Juice.Notifications.Stages.NotificationsPipelineHealth.OldestLapsedHold(context.Deliveries, now).Take(1).ToQueryString();
+                Assert.DoesNotContain("ANY (", held);
+                Assert.Contains("IN ('Pending', 'Sending', 'Retrying')", held);
+                Assert.Contains("d.tenant_held", held);
             }
             Assert.Contains("\"Index Name\": \"ix_deliveries_in_flight\"",
                 await PlanAsync(db => Juice.Notifications.Stages.NotificationsPipelineHealth.OldestInFlight(db.Deliveries).Take(1), now, count: false));
+            // The lapsed-hold read: through its own partial index, in a custom and in a generic plan.
+            Assert.Contains("\"Index Name\": \"ix_deliveries_tenant_held\"",
+                await PlanAsync(db => Juice.Notifications.Stages.NotificationsPipelineHealth.OldestLapsedHold(db.Deliveries, now - TimeSpan.FromMinutes(5)).Take(1), now, count: false));
+            Assert.Contains("\"Index Name\": \"ix_deliveries_tenant_held\"",
+                await GenericPlanAsync(db => Juice.Notifications.Stages.NotificationsPipelineHealth.OldestLapsedHold(db.Deliveries, now - TimeSpan.FromMinutes(5)).Take(1)));
             // A generic plan (what a prepared or auto-prepared statement settles on) still uses the index for the health read's query...
             Assert.Contains("\"Index Name\": \"ix_deliveries_in_flight\"",
                 await GenericPlanAsync(db => Juice.Notifications.Stages.NotificationsPipelineHealth.OldestInFlight(db.Deliveries).Take(1)));
@@ -447,8 +462,9 @@ namespace Juice.Notifications.IntegrationTests
             {
                 var name = declared[4..declared.IndexOf('=')];
                 var array = declared.Contains('{', StringComparison.Ordinal);
-                types.Add(array ? "text[]" : "integer");
-                values.Add(array ? "'{Pending,Sending,Retrying}'" : "1");
+                var timestamp = declared.Contains("DateTime", StringComparison.Ordinal);
+                types.Add(array ? "text[]" : timestamp ? "timestamptz" : "integer");
+                values.Add(array ? "'{Pending,Sending,Retrying}'" : timestamp ? "'2026-11-26T08:55:00Z'" : "1");
                 body = System.Text.RegularExpressions.Regex.Replace(body, $@"@{name}\b", $"${types.Count}");
             }
             var connection = (Npgsql.NpgsqlConnection)db.Database.GetDbConnection();

@@ -127,10 +127,25 @@ namespace Juice.Notifications.Api
             }).Needs(AdminRights.Read); // a preview changes nothing
 
             // The tenant's own settings (phase-4-plan §4) and its storms (I43).
-            settings.MapGet("/settings", async (Guid tenantId, TenantSettingsReader reader, CancellationToken ct)
-                => Results.Ok(ToResponse(await reader.GetAsync(tenantId, ct))));
-            settings.MapPut("/settings", (Guid tenantId, TenantSettingsBody body, IMediator mediator, NotificationsDbContext db, CancellationToken ct)
-                => SendAsync(mediator, db, new PutTenantSettings(tenantId, body.StormThreshold, body.RequestRetentionDays, body.ContentRetentionDays), ToResponse, ct));
+            // The version is an optimistic-concurrency token (M52): GET shows it (body and ETag), PUT may send it back (If-Match or body version) and
+            // answers 409 concurrent_change when the settings changed since. Without one, a PUT is written as before, but one that loses a race
+            // between its read and its save is a 409 too.
+            settings.MapGet("/settings", async (Guid tenantId, TenantSettingsReader reader, HttpContext http, CancellationToken ct) =>
+            {
+                var view = await reader.GetAsync(tenantId, ct);
+                http.Response.Headers.ETag = SettingsVersion.ETag(view.Version);
+                return Results.Ok(ToResponse(view));
+            });
+            settings.MapPut("/settings", (Guid tenantId, TenantSettingsBody body, HttpContext http, IMediator mediator, NotificationsDbContext db, CancellationToken ct) =>
+            {
+                if (!SettingsVersion.TryResolve(http.Request.Headers.IfMatch.ToString(), body.Version, out var expected))
+                {
+                    return Task.FromResult(ApiResults.Problem(StatusCodes.Status400BadRequest, ErrorCodes.InvalidRequest, "The request has errors.",
+                        [new FieldError("/version", "If-Match must be one tag of a settings version (\"n\") and agree with the body's version, when both are sent.")]));
+                }
+                return SendAsync(mediator, db, new PutTenantSettings(tenantId, body.StormThreshold, body.RequestRetentionDays, body.ContentRetentionDays, expected),
+                    s => { http.Response.Headers.ETag = SettingsVersion.ETag(s.Version); return ToResponse(s); }, ct);
+            });
             storms.MapGet("/storms", async (Guid tenantId, bool? all, TenantSettingsReader reader, CancellationToken ct)
                 => Results.Ok((await reader.StormsAsync(tenantId, all ?? false, ct))
                     .Select(s => new StormResponse(s.Id, s.Route, s.StartedAt, s.EndedAt, s.Peak, s.Digested))));
@@ -172,7 +187,7 @@ namespace Juice.Notifications.Api
             => new(t.Type, t.TypeVersion, t.Channel, t.Locale, t.Application, t.Tenant, t.TenantVersion, t.UpdatedAt);
 
         private static TenantSettingsResponse ToResponse(TenantSettingsView s) => new(s.StormThreshold, s.DefaultStormThreshold, s.RequestRetentionDays,
-            s.DefaultRequestRetentionDays, s.ContentRetentionDays, s.DefaultContentRetentionDays, s.UpdatedAt);
+            s.DefaultRequestRetentionDays, s.ContentRetentionDays, s.DefaultContentRetentionDays, s.UpdatedAt, s.Version);
 
         private static Task<IResult> SendAsync<TView, TResponse>(IMediator mediator, NotificationsDbContext db, IRequest<Outcome<TView>> command,
             Func<TView, TResponse> map, CancellationToken ct)

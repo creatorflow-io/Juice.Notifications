@@ -67,6 +67,7 @@ namespace Juice.Notifications.Delivering
         private async Task SendAsync(StageContext context, Delivery row, CancellationToken ct)
         {
             var db = context.Db;
+            row.TenantHeld = false; // set again below only if the gate holds it now
             if (row.Status is not (DeliveryStatus.Pending or DeliveryStatus.Retrying))
             {
                 context.Done(row, null);
@@ -111,6 +112,7 @@ namespace Juice.Notifications.Delivering
             if (tenants is not null && !await tenants.IsActiveAsync(row.TenantId, ct))
             {
                 logger.LogInformation("Delivery {Delivery} held: tenant {Tenant} isn't active", row.Id, row.TenantId);
+                row.TenantHeld = true;
                 context.Done(row, context.Now + options.Value.TenantHold);
                 return;
             }

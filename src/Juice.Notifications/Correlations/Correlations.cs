@@ -385,7 +385,7 @@ namespace Juice.Notifications.Correlations
                 """, ct);
             var deliveries = await db.Database.ExecuteSqlAsync($"""
                 UPDATE notifications.deliveries d
-                SET status = {deliveryCancelled}, next_at = NULL, completed_at = {now}, last_error = {reason}, version = d.version + 1, failure_check_due = TRUE
+                SET status = {deliveryCancelled}, next_at = NULL, completed_at = {now}, last_error = {reason}, version = d.version + 1, failure_check_due = TRUE, tenant_held = FALSE
                 WHERE d.tenant_id = {tenantId} AND d.status IN ({deliveryPending}, {retrying}) AND (d.lease_until IS NULL OR d.lease_until <= {now})
                   AND EXISTS (SELECT 1 FROM notifications.delivery_items i JOIN notifications.requests r ON r.tenant_id = i.tenant_id AND r.id = i.request_id
                               WHERE i.tenant_id = d.tenant_id AND i.delivery_id = d.id AND r.correlation_id = {correlationId})

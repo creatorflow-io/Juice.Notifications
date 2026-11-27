@@ -46,6 +46,7 @@ namespace Juice.Notifications.History
             }
             // Not claimable while Failed (no NextAt), so no worker holds it; the version still fences two retries at once.
             delivery.Status = DeliveryStatus.Pending;
+            delivery.TenantHeld = false;
             delivery.FailureCategory = null;
             delivery.LastError = null; // the attempts keep each error; the row shows the current one
             delivery.ProviderMessageId = null;

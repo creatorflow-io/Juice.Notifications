@@ -71,9 +71,9 @@ namespace Juice.Notifications
         /// none is. A dry run's deliveries (<c>WouldSend</c>) make no attempts and are never in flight, so they show in neither signal.
         /// </summary>
         /// <remarks>
-        /// In service mode, deliveries that an inactive (suspended) tenant's gate holds <c>Pending</c> on purpose count as in flight too, so one
-        /// suspended tenant can make this grow on a healthy pipeline. Embedded hosts use the open gate and aren't affected. Excluding them is
-        /// deferred (#55), to the service's own dead-man.
+        /// Deliveries that an inactive (suspended or not yet active) tenant's gate holds on purpose are excluded, so one suspended tenant can't
+        /// make this grow on a healthy pipeline, until their hold lapses: a held delivery nobody has looked at again for a whole
+        /// <c>TenantHold</c> past its due time counts from its creation. Embedded hosts use the open gate and aren't affected.
         /// </remarks>
         public TimeSpan? OldestUndelivered { get; init; }
 

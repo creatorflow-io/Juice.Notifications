@@ -320,6 +320,7 @@ namespace Juice.Notifications.Data
             {
                 e.ToTable("tenant_settings");
                 e.HasKey(x => x.TenantId);
+                e.Property(x => x.Version).HasDefaultValue(0).IsConcurrencyToken();
             });
 
             // Requests waiting for redaction (phase-4-plan I46): the sweep reads them oldest first.
@@ -660,7 +661,9 @@ namespace Juice.Notifications.Data
                 e.HasIndex(x => new { x.TenantId, x.Status, x.CreatedAt });
                 e.HasIndex(x => x.Id).HasFilter("failure_check_due").HasDatabaseName("ix_deliveries_failure_check");
                 // The oldest delivery still in flight, across tenants (pipeline health, M49-0b): the (tenant_id, status, created_at) index can't answer it.
-                e.HasIndex(x => x.CreatedAt).HasFilter("status IN ('Pending', 'Sending', 'Retrying')").HasDatabaseName("ix_deliveries_in_flight");
+                e.HasIndex(x => x.CreatedAt).HasFilter("status IN ('Pending', 'Sending', 'Retrying') AND NOT tenant_held").HasDatabaseName("ix_deliveries_in_flight");
+                // On (next_at, created_at), not next_at alone: EF keeps one index per column list, and next_at alone is the generic ix_deliveries_due.
+                e.HasIndex(x => new { x.NextAt, x.CreatedAt }).HasFilter("tenant_held AND status IN ('Pending', 'Sending', 'Retrying')").HasDatabaseName("ix_deliveries_tenant_held");
                 e.HasOne<Integration>().WithMany().HasForeignKey(x => new { x.TenantId, x.IntegrationId }).OnDelete(DeleteBehavior.Restrict);
             });
 

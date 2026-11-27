@@ -65,8 +65,12 @@ namespace Juice.Notifications.IntegrationTests
                 {
                     Assert.Null(await IndexAsync(table));
                 }
-                // The rows stay through the down: the health read counts the same rows without the index.
-                Assert.Equal(1, (await ReadAsync()).Stages["dispatcher"].Failing);
+                // The rows stay through the down: the same rows count without the index. Counted in SQL: the health read's send queries use columns
+                // (tenant_held, M52) that the schema this far down doesn't have yet.
+                await using (var down = _database.Context())
+                {
+                    Assert.Equal(1, await down.Database.SqlQuery<int>($"SELECT count(*)::int AS \"Value\" FROM notifications.deliveries WHERE step_failures > 0 AND next_at IS NOT NULL").SingleAsync(Ct));
+                }
 
                 await using (var db = _database.Context())
                 {

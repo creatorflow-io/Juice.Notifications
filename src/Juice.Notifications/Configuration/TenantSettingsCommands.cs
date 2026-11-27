@@ -7,17 +7,21 @@ namespace Juice.Notifications.Configuration
 {
     /// <summary>A tenant's settings as the API shows them: null fields take the deployment's defaults (shown beside them).</summary>
     public sealed record TenantSettingsView(int? StormThreshold, int DefaultStormThreshold, int? RequestRetentionDays, int DefaultRequestRetentionDays,
-        int? ContentRetentionDays, int DefaultContentRetentionDays, DateTimeOffset? UpdatedAt);
+        int? ContentRetentionDays, int DefaultContentRetentionDays, DateTimeOffset? UpdatedAt, int Version);
 
-    /// <summary>Sets a tenant's settings (phase-4-plan §4): the storm threshold (I43); a null field returns to the deployment's default.</summary>
-    public sealed record PutTenantSettings(Guid NotificationTenantId, int? StormThreshold, int? RequestRetentionDays = null, int? ContentRetentionDays = null)
+    /// <summary>
+    /// Sets a tenant's settings (phase-4-plan §4): the storm threshold (I43); a null field returns to the deployment's default. With an
+    /// <paramref name="ExpectedVersion"/> (M52), a save over another version is a conflict; without one it is written as before.
+    /// </summary>
+    public sealed record PutTenantSettings(Guid NotificationTenantId, int? StormThreshold, int? RequestRetentionDays = null, int? ContentRetentionDays = null,
+        int? ExpectedVersion = null)
         : MessageBase, ITenantCommand, IRequest<Outcome<TenantSettingsView>>;
 
     internal static class TenantSettingsViews
     {
         public static TenantSettingsView View(TenantSettings? row, Storms.StormOptions storms, Retention.RetentionOptions retention)
             => new(row?.StormThreshold, storms.Threshold, row?.RequestRetentionDays, retention.RequestDays, row?.ContentRetentionDays, retention.ContentDays,
-                row?.UpdatedAt);
+                row?.UpdatedAt, row?.Version ?? 0);
     }
 
     public sealed class TenantSettingsReader(NotificationsDbContext db, Microsoft.Extensions.Options.IOptions<Storms.StormOptions> storms,
@@ -60,6 +64,10 @@ namespace Juice.Notifications.Configuration
                     [new FieldError("/contentRetentionDays", "Days rendered content is kept, 1 to the request retention, or null for the default.")]);
             }
             var row = await db.TenantSettings.SingleOrDefaultAsync(s => s.TenantId == r.NotificationTenantId, ct);
+            if (r.ExpectedVersion is { } expected && expected != (row?.Version ?? 0))
+            {
+                return Outcome<TenantSettingsView>.Conflict(ErrorCodes.ConcurrentChange, "The settings changed since they were read. Read them again.");
+            }
             if (row is null)
             {
                 row = new TenantSettings { TenantId = r.NotificationTenantId };
@@ -69,6 +77,7 @@ namespace Juice.Notifications.Configuration
             row.RequestRetentionDays = r.RequestRetentionDays;
             row.ContentRetentionDays = r.ContentRetentionDays;
             row.UpdatedAt = clock.UtcNow();
+            row.Version++; // the concurrency token: a save that read an older version loses (RowGone)
             return Outcome<TenantSettingsView>.Ok(TenantSettingsViews.View(row, storms.Value, retention.Value));
         }
     }
