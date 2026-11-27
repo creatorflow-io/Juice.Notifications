@@ -3,6 +3,7 @@ using Juice.Notifications.Api.Contracts;
 using Juice.Notifications.Delivering;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using static Juice.Notifications.IntegrationTests.DeliveryTests;
 
@@ -69,6 +70,46 @@ namespace Juice.Notifications.IntegrationTests
             var delivered = Assert.Single((await DeliveredAsync(client, id)).Deliveries);
             Assert.Equal((DeliveryStatus.Delivered, 1), (delivered.Status, delivered.Attempts));
             Assert.Single(receiver.Requests);
+        }
+
+        /// <summary>M52 (#55): what the gate holds on purpose isn't undelivered; the flag is cleared by the step that sends it.</summary>
+        [Fact]
+        public async Task A_delivery_the_gate_holds_isnt_undelivered_and_the_next_step_clears_its_flag()
+        {
+            LocalStack.RequireAvailable();
+            await using var receiver = await Receiver.StartAsync(200);
+            using var admin = _app.Client(await LocalStack.AdminTokenAsync());
+            using var client = _app.Client(await LocalStack.ProducerTokenAsync());
+            var target = "hook-" + Short();
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [receiver.Port]), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/hooks/targets/{target}", new PutTargetBody(receiver.Url, null, null), Ct));
+
+            _gate.Active = false;
+            var id = await SendThroughRouteAsync(admin, client, "hooks", target, """{ "webhook": "passthrough" }""");
+            for (var i = 0; i < 100 && !await HeldAsync(id); i++)
+            {
+                await Task.Delay(100, Ct);
+            }
+            Assert.True(await HeldAsync(id), "the dispatcher never held the delivery");
+            await using (var db = _app.Database.Context())
+            {
+                // The default TenantHold of 5 minutes, not this host's 0.3 seconds: the hold hasn't lapsed.
+                var health = await new Juice.Notifications.Stages.NotificationsPipelineHealth(db, new(), new(true), TimeProvider.System,
+                    Microsoft.Extensions.Options.Options.Create(new Juice.Notifications.Providers.DeliveryOptions())).ReadAsync(Ct);
+                Assert.Null(health.Sends.OldestUndelivered);
+            }
+
+            _gate.Active = true;
+            Assert.Equal(DeliveryStatus.Delivered, Assert.Single((await DeliveredAsync(client, id)).Deliveries).Status);
+            Assert.False(await HeldAsync(id));
+        }
+
+        /// <summary>Whether a delivery in this test's own database is held (the other test's delivery is final).</summary>
+        private async Task<bool> HeldAsync(Guid notificationId)
+        {
+            await using var db = _app.Database.Context();
+            return await db.Deliveries.AsNoTracking().AnyAsync(d => d.TenantHeld, Ct);
         }
     }
 }

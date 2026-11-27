@@ -655,6 +655,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("template_version");
 
+                    b.Property<bool>("TenantHeld")
+                        .HasColumnType("boolean")
+                        .HasColumnName("tenant_held");
+
                     b.Property<int>("Version")
                         .IsConcurrencyToken()
                         .HasColumnType("integer")
@@ -665,7 +669,7 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
 
                     b.HasIndex("CreatedAt")
                         .HasDatabaseName("ix_deliveries_in_flight")
-                        .HasFilter("status IN ('Pending', 'Sending', 'Retrying')");
+                        .HasFilter("status IN ('Pending', 'Sending', 'Retrying') AND NOT tenant_held");
 
                     b.HasIndex("Id")
                         .HasDatabaseName("ix_deliveries_failure_check")
@@ -678,6 +682,10 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasIndex("StepFailures")
                         .HasDatabaseName("ix_deliveries_failing")
                         .HasFilter("step_failures > 0 AND next_at IS NOT NULL");
+
+                    b.HasIndex("NextAt", "CreatedAt")
+                        .HasDatabaseName("ix_deliveries_tenant_held")
+                        .HasFilter("tenant_held AND status IN ('Pending', 'Sending', 'Retrying')");
 
                     b.HasIndex("Priority", "NextAt")
                         .IsDescending(true, false)
@@ -2748,6 +2756,13 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("version");
 
                     b.HasKey("TenantId")
                         .HasName("pk_tenant_settings");

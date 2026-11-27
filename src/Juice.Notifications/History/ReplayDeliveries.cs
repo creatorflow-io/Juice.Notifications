@@ -101,6 +101,7 @@ namespace Juice.Notifications.History
                 replayed += await db.Deliveries.Where(d => d.TenantId == tenant && chunk.Contains(d.Id) && d.Status == DeliveryStatus.Failed)
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(d => d.Status, DeliveryStatus.Pending)
+                        .SetProperty(d => d.TenantHeld, false)
                         .SetProperty(d => d.FailureCategory, (FailureCategory?)null)
                         .SetProperty(d => d.LastError, (string?)null)
                         .SetProperty(d => d.ProviderMessageId, (string?)null)

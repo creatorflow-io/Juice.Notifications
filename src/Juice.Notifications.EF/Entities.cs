@@ -363,6 +363,8 @@ namespace Juice.Notifications.Data
         /// <summary>Days deliveries keep their rendered content (14 by default); then it is cleared, and they can't be retried.</summary>
         public int? ContentRetentionDays { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
+        /// <summary>Optimistic-concurrency version (M52): 0 for a row from before it existed, +1 on every save.</summary>
+        public int Version { get; set; }
     }
 
     public sealed class ContactVerification
@@ -834,6 +836,8 @@ namespace Juice.Notifications.Data
         public NotificationPriority Priority { get; init; }
         public bool Mandatory { get; init; }
         public DeliveryStatus Status { get; set; }
+        /// <summary>True only between a tenant-gate hold and the next dispatcher step on the row.</summary>
+        public bool TenantHeld { get; set; }
         public FailureCategory? FailureCategory { get; set; }
         public string? LastError { get; set; }
         public int Attempts { get; set; }

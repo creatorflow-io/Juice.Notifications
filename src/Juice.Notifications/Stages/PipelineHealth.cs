@@ -37,7 +37,8 @@ namespace Juice.Notifications.Stages
     /// rows are backing off after a failed step (<c>step_failures &gt; 0</c>, through <c>ix_&lt;table&gt;_failing</c>, counted up to 1000).
     /// A row that fails every step moves its next_at ahead, so it is never due for long: <see cref="StageHealth.Failing"/> is what shows it.
     /// </summary>
-    internal sealed class NotificationsPipelineHealth(NotificationsDbContext db, StagePasses passes, StagesRunning running, TimeProvider clock)
+    internal sealed class NotificationsPipelineHealth(NotificationsDbContext db, StagePasses passes, StagesRunning running, TimeProvider clock,
+        Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions>? delivery = null)
         : INotificationsPipelineHealth
     {
         public async ValueTask<PipelineHealth> ReadAsync(CancellationToken cancellationToken = default)
@@ -63,13 +64,23 @@ namespace Juice.Notifications.Stages
         private static readonly AttemptOutcome[] Succeeded = [AttemptOutcome.Delivered, AttemptOutcome.Accepted];
         private static readonly AttemptOutcome[] Failed = [AttemptOutcome.RetryableFailure, AttemptOutcome.PermanentFailure, AttemptOutcome.Unknown];
         /// <summary>
-        /// When the oldest delivery in flight was created. The statuses are constants, not a parameter, so the SQL says
+        /// When the oldest delivery in flight, not held by its tenant's gate, was created. The statuses are constants, not a parameter, so the SQL says
         /// <c>status IN ('Pending', 'Sending', 'Retrying')</c> as the partial index <c>ix_deliveries_in_flight</c> does: with a parameter, a
         /// generic or auto-prepared plan can't prove the index's filter and scans the table (357 ms against 0.06 ms on QA's 2,000,000 rows).
         /// </summary>
         internal static IQueryable<DateTimeOffset?> OldestInFlight(IQueryable<Delivery> deliveries) => deliveries
-            .Where(d => d.Status == DeliveryStatus.Pending || d.Status == DeliveryStatus.Sending || d.Status == DeliveryStatus.Retrying)
+            .Where(d => (d.Status == DeliveryStatus.Pending || d.Status == DeliveryStatus.Sending || d.Status == DeliveryStatus.Retrying) && !d.TenantHeld)
             .OrderBy(d => d.CreatedAt).Select(d => (DateTimeOffset?)d.CreatedAt);
+
+        /// <summary>
+        /// When the delivery a gate holds whose hold has lapsed (its <c>next_at</c> at or before <paramref name="lapsedBefore"/>, so nobody has
+        /// looked at it again for a whole <c>TenantHold</c>) and that was held longest was created, through <c>ix_deliveries_tenant_held</c>. The
+        /// statuses and the flag are literals for the same reason as in <see cref="OldestInFlight"/>.
+        /// </summary>
+        internal static IQueryable<DateTimeOffset?> OldestLapsedHold(IQueryable<Delivery> deliveries, DateTimeOffset lapsedBefore) => deliveries
+            .Where(d => d.TenantHeld && (d.Status == DeliveryStatus.Pending || d.Status == DeliveryStatus.Sending || d.Status == DeliveryStatus.Retrying)
+                && d.NextAt <= lapsedBefore)
+            .OrderBy(d => d.NextAt).Select(d => (DateTimeOffset?)d.CreatedAt);
 
         /// <summary>
         /// The attempts of the last <see cref="SendHealth.DefaultWindow"/> (through <c>ix_delivery_attempts_at</c>, each count capped), and the oldest
@@ -82,6 +93,8 @@ namespace Juice.Notifications.Stages
             var succeeded = await window.Where(a => Succeeded.Contains(a.Outcome)).Take(SendHealth.MaxCount).CountAsync(ct);
             var failed = await window.Where(a => Failed.Contains(a.Outcome)).Take(SendHealth.MaxCount).CountAsync(ct);
             var oldest = await OldestInFlight(db.Deliveries.AsNoTracking()).FirstOrDefaultAsync(ct);
+            var lapsed = await OldestLapsedHold(db.Deliveries.AsNoTracking(), now - (delivery?.Value ?? new Providers.DeliveryOptions()).TenantHold).FirstOrDefaultAsync(ct);
+            oldest = oldest is { } a && lapsed is { } b ? (a < b ? a : b) : oldest ?? lapsed;
             return new SendHealth
             {
                 Window = SendHealth.DefaultWindow,
