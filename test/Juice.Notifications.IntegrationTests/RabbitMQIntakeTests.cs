@@ -169,7 +169,12 @@ namespace Juice.Notifications.IntegrationTests
         }
     }
 
+    /// <summary>Runs alone: a sampling ActivityListener in another class would make RabbitMQ.Client rewrite traceparent (deferred #42).</summary>
+    [CollectionDefinition(Name, DisableParallelization = true)]
+    public sealed class RabbitMQTraceCollection { public const string Name = "rabbitmq-trace"; }
+
     /// <summary>The RabbitMQ intake (phase-1-plan M2, p1-05): <c>NotificationRequested</c> sends the same command as the HTTP API.</summary>
+    [Collection(RabbitMQTraceCollection.Name)]
     public sealed class RabbitMQIntakeTests(RabbitMQIntakeApp intake) : IClassFixture<RabbitMQIntakeApp>
     {
         private static readonly string Type = $"{RabbitMQIntakeApp.Key}.queued";
@@ -311,6 +316,20 @@ namespace Juice.Notifications.IntegrationTests
             var request = await AcceptedAsync(key);
             Assert.NotNull(request.TraceParent);
             Assert.Equal(trace.ToString(), request.TraceParent.Split('-')[1]);
+        }
+
+        /// <summary>No listener and no ambient Activity (an uninstrumented producer): the header is kept as the producer wrote it.</summary>
+        [Fact]
+        public async Task A_traceparent_header_from_an_uninstrumented_producer_is_kept_as_sent()
+        {
+            LocalStack.RequireAvailable();
+            // This class runs alone (see RabbitMQTraceCollection), so no listener samples the publisher: the client leaves the header
+            // as written and the intake keeps it as sent.
+            var sent = $"00-{System.Diagnostics.ActivityTraceId.CreateRandom()}-{System.Diagnostics.ActivitySpanId.CreateRandom()}-01";
+            var key = "q-" + Short();
+            await PublishAsync(intake.Producer, intake.Producer, Message(key), new Dictionary<string, object?> { ["traceparent"] = sent });
+            // The intake continues the producer's trace in its own span, so the trace id is the contract (span id and flags are the consumer's).
+            Assert.Equal(sent.Split('-')[1], (await AcceptedAsync(key)).TraceParent!.Split('-')[1]);
         }
 
         [Fact]
