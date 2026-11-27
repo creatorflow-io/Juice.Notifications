@@ -114,6 +114,7 @@ namespace Juice.Notifications.IntegrationTests
             (int Carried, int Accepted) seen = (0, 0);
             Dictionary<Guid, (int Deliveries, int Requests, int Carried)> byTarget = [];
             string? gaveUp = null;
+            var lastPending = int.MaxValue;
             while (true)
             {
                 await using var db = App.Database.Context();
@@ -140,6 +141,12 @@ namespace Juice.Notifications.IntegrationTests
                     {
                         break;
                     }
+                    // The recipients still draining are progress too: not a stall while the count falls.
+                    if (pending < lastPending)
+                    {
+                        lastProgress = clock.Elapsed;
+                    }
+                    lastPending = pending;
                 }
                 if (clock.Elapsed - lastProgress > noProgress || clock.Elapsed > hardCap)
                 {
