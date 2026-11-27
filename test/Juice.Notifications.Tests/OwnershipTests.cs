@@ -43,6 +43,27 @@ namespace Juice.Notifications.Tests
             }
         }
 
+        // A target put under an integration: the alias's configuration must own the integration, so it can't leave a target under one that
+        // was handed back (webhooks-alias). Other callers keep the target's own check.
+        [Theory]
+        [InlineData(ManagedBy.WebhooksAlias, ManagedBy.AliasConfig, ErrorCodes.ManagedByAlias)]
+        [InlineData(ManagedBy.Api, ManagedBy.AliasConfig, ErrorCodes.ManagedByApi)]
+        [InlineData(ManagedBy.Configuration, ManagedBy.AliasConfig, ErrorCodes.ManagedByConfiguration)]
+        [InlineData(ManagedBy.AliasConfig, ManagedBy.AliasConfig, null)]
+        [InlineData(ManagedBy.WebhooksAlias, ManagedBy.WebhooksAlias, null)]
+        [InlineData(ManagedBy.WebhooksAlias, null, null)]
+        [InlineData(ManagedBy.Configuration, null, null)]
+        [InlineData(ManagedBy.AliasConfig, ManagedBy.Configuration, null)]
+        public void A_target_write_needs_the_alias_configuration_to_own_the_integration(string owner, string? caller, string? refused)
+        {
+            var outcome = ConfigurationHandlers.OwnedIntegrationOfTarget<TargetView>(owner, caller, "hook");
+            Assert.Equal(refused, outcome?.Code);
+            if (outcome is not null)
+            {
+                Assert.Equal(OutcomeKind.Conflict, outcome.Kind);
+            }
+        }
+
         [Fact]
         public void A_command_names_only_an_in_process_owner()
         {

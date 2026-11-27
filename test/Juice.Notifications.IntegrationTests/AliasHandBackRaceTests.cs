@@ -252,6 +252,45 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         [Fact]
+        public async Task Race_TargetPutLoadedBeforeHandBack_FailsConcurrentChange_NoAliasConfigTargetUnderAliasIntegration()
+        {
+            LocalStack.RequireAvailable();
+            await SeedEndpointAsync("hook");
+
+            // The alias's configuration (an old-file replica) runs its target put up to the save...
+            await using var stale = App.Database.Context();
+            var put = await HandlersOn(stale).Handle(new PutTarget(Tenant, "hook", "hook-t3", "c@example.com", null, true) { ManagedBy = AC }, Ct);
+            Assert.Contains(put.Kind, new[] { OutcomeKind.Ok, OutcomeKind.Created });
+
+            // ...a hand-back commits first...
+            Assert.Equal(new HandBackView("hook", 1, 2, 1), (await HandBackAsync("hook")).Value);
+
+            // ...so the save fails as a concurrent change and the new target never lands.
+            var conflict = await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => stale.SaveChangesAsync(Ct));
+            Assert.NotNull(DbConflicts.Classify(conflict));
+            await using var check = App.Database.Context();
+            var integration = await check.Integrations.AsNoTracking().SingleAsync(i => i.TenantId == Tenant && i.Key == "hook", Ct);
+            var targets = await check.IntegrationTargets.AsNoTracking().Where(t => t.TenantId == Tenant && t.IntegrationId == integration.Id).ToListAsync(Ct);
+            Assert.Equal(Alias, integration.ManagedBy);
+            Assert.Equal(2, targets.Count);
+            Assert.DoesNotContain(targets, t => t.ManagedBy == AC);
+        }
+
+        [Fact]
+        public async Task TargetPut_AfterHandBack_ByAliasConfig_RefusedManagedByAlias_NothingWritten()
+        {
+            LocalStack.RequireAvailable();
+            await SeedEndpointAsync("hook");
+            await HandBackAsync("hook");
+            var put = await SendAsync(new PutTarget(Tenant, "hook", "hook-t3", "c@example.com", null, true) { ManagedBy = AC });
+            Assert.Equal((OutcomeKind.Conflict, ErrorCodes.ManagedByAlias), (put.Kind, put.Code));
+            await using var check = App.Database.Context();
+            Assert.Equal(2, await check.IntegrationTargets.CountAsync(t => t.TenantId == Tenant, Ct));
+            // The alias's API may still add targets to what it now owns.
+            Assert.Contains((await SendAsync(new PutTarget(Tenant, "hook", "hook-t3", "c@example.com", null, true) { ManagedBy = Alias })).Kind, new[] { OutcomeKind.Ok, OutcomeKind.Created });
+        }
+
+        [Fact]
         public async Task Race_OwnerChangedUnderHandBack_FailsWholeHandBack_NothingPartlyMoved()
         {
             LocalStack.RequireAvailable();

@@ -322,13 +322,23 @@ namespace Juice.Notifications.Configuration
         /// delete a row <paramref name="owner"/> keeps (phase-5 decision G1); null when it may. Each owner keeps to its own rows; configuration
         /// also takes over the API's, as the provisioning file always has. The service's own rows are refused by their own check.
         /// </summary>
-        internal static Outcome<T>? Owned<T>(string? owner, string? caller, string what)
+        internal static Outcome<T>? Owned<T>(string? owner, string? caller, string what) => Owned<T>(owner, caller, what, takeover: true);
+
+        /// <summary>
+        /// A write under another row: the integration of a target. Where the alias's configuration is the caller it must own the integration
+        /// itself: the takeover of the alias's API rows is for the definition of an endpoint (its PutIntegration), not for a target put under an
+        /// integration just handed back (<c>webhooks-alias</c>). Other callers keep the target's own check.
+        /// </summary>
+        internal static Outcome<T>? OwnedIntegrationOfTarget<T>(string? integrationOwner, string? caller, string integrationKey)
+            => Caller(caller) == ManagedBy.AliasConfig ? Owned<T>(integrationOwner, caller, "integration " + integrationKey, takeover: false) : null;
+
+        private static Outcome<T>? Owned<T>(string? owner, string? caller, string what, bool takeover)
         {
             var by = Caller(caller);
             // Configuration takes over the API's rows, as the provisioning file always has; the alias's configuration takes over the alias's (an
             // endpoint first made through the producer's API, then declared in its configuration), as legacy's provisioning took over its API rows.
             if (owner is null || owner == by || owner == ManagedBy.Service || owner == ManagedBy.Api && by == ManagedBy.Configuration
-                || owner == ManagedBy.WebhooksAlias && by == ManagedBy.AliasConfig)
+                || takeover && owner == ManagedBy.WebhooksAlias && by == ManagedBy.AliasConfig)
             {
                 return null;
             }
@@ -522,7 +532,9 @@ namespace Juice.Notifications.Configuration
             {
                 return Invalid<TargetView>(new FieldError("/key", "A key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
             }
-            var integration = await db.Integrations.AsNoTracking().SingleOrDefaultAsync(i => i.TenantId == r.NotificationTenantId && i.Key == r.IntegrationKey, ct);
+            // Tracked, and its owner fenced below: a hand-back that commits between this read and the save changes the integration's ManagedBy
+            // (a concurrency token), so the save fails concurrent_change instead of leaving this caller's target under the new owner.
+            var integration = await db.Integrations.SingleOrDefaultAsync(i => i.TenantId == r.NotificationTenantId && i.Key == r.IntegrationKey, ct);
             if (integration is null)
             {
                 return Outcome<TargetView>.NotFound($"There is no integration '{r.IntegrationKey}'.");
@@ -530,6 +542,10 @@ namespace Juice.Notifications.Configuration
             if (integration.ManagedBy == ManagedBy.Service)
             {
                 return ServiceManaged<TargetView>();
+            }
+            if (OwnedIntegrationOfTarget<TargetView>(integration.ManagedBy, r.ManagedBy, integration.Key) is { } integrationOwned)
+            {
+                return integrationOwned;
             }
             var existing = await db.IntegrationTargets.SingleOrDefaultAsync(t => t.TenantId == r.NotificationTenantId && t.Key == r.Key, ct);
             if (existing is not null && existing.IntegrationId != integration.Id)
@@ -596,6 +612,12 @@ namespace Juice.Notifications.Configuration
                 {
                     return Invalid<TargetView>(integrationOutOfReach);
                 }
+            }
+            if (Caller(r.ManagedBy) == ManagedBy.AliasConfig)
+            {
+                // Writes the integration's owner back as read, with the read value as the concurrency check: the row is compared in this save,
+                // so a hand-back committed since the read fails it (DbUpdateConcurrencyException -> concurrent_change).
+                db.Entry(integration).Property(i => i.ManagedBy).IsModified = true;
             }
             var now = clock.UtcNow();
             var managedBy = Caller(r.ManagedBy);
