@@ -105,6 +105,38 @@ namespace Juice.Notifications.IntegrationTests
             Assert.False(await HeldAsync(id));
         }
 
+        /// <summary>M52 (#55): a held delivery whose request expires while the tenant is still inactive is expired by the next step, flag cleared.</summary>
+        [Fact]
+        public async Task A_held_delivery_that_expires_while_the_tenant_is_inactive_has_its_flag_cleared()
+        {
+            LocalStack.RequireAvailable();
+            await using var receiver = await Receiver.StartAsync(200);
+            using var admin = _app.Client(await LocalStack.AdminTokenAsync());
+            using var client = _app.Client(await LocalStack.ProducerTokenAsync());
+            var target = "hook-" + Short();
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/allowlist", new PutAllowlistBody(receiver.Address.ToString(), [receiver.Port]), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/hooks", new PutIntegrationBody("webhook", "webhook", null, TestHooks.SecretRef, null, null), Ct));
+            await Ok(admin.PutAsJsonAsync($"{Tenant}/integrations/hooks/targets/{target}", new PutTargetBody(receiver.Url, null, null), Ct));
+
+            _gate.Active = false;
+            var id = await SendThroughRouteAsync(admin, client, "hooks", target, """{ "webhook": "passthrough" }""");
+            for (var i = 0; i < 100 && !await HeldAsync(id); i++)
+            {
+                await Task.Delay(100, Ct);
+            }
+            Assert.True(await HeldAsync(id), "the dispatcher never held the delivery");
+
+            // The request's expiry passes while the gate still says inactive.
+            await using (var db = _app.Database.Context())
+            {
+                await db.Database.ExecuteSqlRawAsync("UPDATE notifications.requests SET expires_at = now() - interval '1 minute'", Ct);
+            }
+            var expired = Assert.Single((await DeliveredAsync(client, id)).Deliveries);
+            Assert.Equal(DeliveryStatus.Expired, expired.Status);
+            Assert.False(await HeldAsync(id));
+            Assert.Empty(receiver.Requests);
+        }
+
         /// <summary>Whether a delivery in this test's own database is held (the other test's delivery is final).</summary>
         private async Task<bool> HeldAsync(Guid notificationId)
         {
