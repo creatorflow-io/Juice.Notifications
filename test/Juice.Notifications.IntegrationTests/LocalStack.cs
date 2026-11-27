@@ -90,7 +90,13 @@ namespace Juice.Notifications.IntegrationTests
         public static string Secret(string name) => Env.Value[name];
 
         public static string ServerConnectionString(string database)
-            => $"Host=127.0.0.1;Port=5434;Database={database};Username=notifications;Password={Env.Value["POSTGRES_PASSWORD"]}";
+            => $"Host=127.0.0.1;Port=5434;Database={database};Username=notifications;Password={Env.Value["POSTGRES_PASSWORD"]};Maximum Pool Size={MaxPoolSize}";
+
+        /// <summary>
+        /// Every test host and scratch database has its own pool, and a full run builds hundreds of them against a server that allows 300
+        /// connections (and is shared with other runs): the default of 100 each can exhaust it ("too many clients", 53300, deferred #56).
+        /// </summary>
+        public const int MaxPoolSize = 30;
 
         /// <summary>A client-credentials token from the local Keycloak.</summary>
         public static async Task<string> TokenAsync(string clientId, string secretName)
@@ -235,8 +241,12 @@ namespace Juice.Notifications.IntegrationTests
             {
                 return;
             }
-            // Pooled connections to the scratch database would hold it open; FORCE ends them, clearing the pools stops them coming back.
-            NpgsqlConnection.ClearAllPools();
+            // Pooled connections to the scratch database would hold it open; FORCE ends them, clearing its pool stops them coming back.
+            // Only this database's pool: ClearAllPools is process-wide and would drop the idle connections of every class running beside it.
+            using (var own = new NpgsqlConnection(ConnectionString))
+            {
+                NpgsqlConnection.ClearPool(own);
+            }
             await using var connection = new NpgsqlConnection(LocalStack.ServerConnectionString("notifications"));
             await connection.OpenAsync();
             await using var command = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{Name}\" WITH (FORCE)", connection);
