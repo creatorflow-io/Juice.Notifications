@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Juice.MediatR;
 using Juice.Notifications.Correlations;
 using Juice.Notifications.Data;
+using Juice.Notifications.Hosting;
 using Juice.Notifications.Intake;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -43,15 +44,15 @@ namespace Juice.Notifications.Embedded
         }
 
         public Task<CorrelationState> AcknowledgeAsync(string correlationKey, string? by = null, CancellationToken cancellationToken = default)
-            => CorrelationAsync((lifecycle, application) => lifecycle.AcknowledgeAsync(options.TenantId, application, correlationKey, by, cancellationToken),
+            => CorrelationAsync(correlationKey, (lifecycle, application) => lifecycle.AcknowledgeAsync(options.TenantId, application, correlationKey, by, cancellationToken),
                 cancellationToken);
 
         public Task<CorrelationState> ResolveAsync(string correlationKey, string? outcome = null, string? by = null, CancellationToken cancellationToken = default)
-            => CorrelationAsync((lifecycle, application) => lifecycle.ResolveAsync(options.TenantId, application, correlationKey, outcome, by, cancellationToken),
+            => CorrelationAsync(correlationKey, (lifecycle, application) => lifecycle.ResolveAsync(options.TenantId, application, correlationKey, outcome, by, cancellationToken),
                 cancellationToken);
 
         public Task<CorrelationState> CancelAsync(string correlationKey, string? by = null, CancellationToken cancellationToken = default)
-            => CorrelationAsync((lifecycle, application) => lifecycle.CancelAsync(options.TenantId, application, correlationKey, by, cancellationToken),
+            => CorrelationAsync(correlationKey, (lifecycle, application) => lifecycle.CancelAsync(options.TenantId, application, correlationKey, by, cancellationToken),
                 cancellationToken);
 
         public Task<CorrelationHold> HoldAsync(string correlationKey, string reason, string? by = null, CancellationToken cancellationToken = default)
@@ -62,9 +63,38 @@ namespace Juice.Notifications.Embedded
             => HoldChangeAsync((lifecycle, application) => lifecycle.ReleaseAsync(options.TenantId, application, correlationKey, by, cancellationToken),
                 cancellationToken);
 
-        private Task<CorrelationState> CorrelationAsync(Func<CorrelationLifecycle, Guid, Task<Outcome<CorrelationView>>> change, CancellationToken cancellationToken)
-            => ConcurrentAsync(() => InHostTransactionAsync(async (services, _, application) =>
-                Value(await change(services.GetRequiredService<CorrelationLifecycle>(), application.Id)).State, cancellationToken));
+        /// <summary>
+        /// An acknowledge, resolve or cancel in the host's transaction. With the host's inbox (M54), the people with an item of the correlation are told
+        /// once the host commits (never before: they would read the old state), as the service tells them after its own commit; a host that can't say
+        /// when leaves them to reload.
+        /// </summary>
+        private Task<CorrelationState> CorrelationAsync(string correlationKey, Func<CorrelationLifecycle, Guid, Task<Outcome<CorrelationView>>> change,
+            CancellationToken cancellationToken)
+            => ConcurrentAsync(() => InHostTransactionAsync(async (services, db, application) =>
+            {
+                var state = Value(await change(services.GetRequiredService<CorrelationLifecycle>(), application.Id)).State;
+                if (services.GetRequiredService<NotificationsHosting>().Inbox)
+                {
+                    var items = await db.InboxItems.AsNoTracking()
+                        .Where(i => i.TenantId == options.TenantId && db.Correlations.Any(c => c.TenantId == i.TenantId && c.Id == i.CorrelationId
+                            && c.ApplicationId == application.Id && c.Key == correlationKey))
+                        .Select(i => new { i.SubscriberId, i.Id }).ToListAsync(cancellationToken);
+                    if (items.Count > 0)
+                    {
+                        var inbox = services.GetRequiredService<Inbox.IInboxEvents>();
+                        transaction!.OnCommitted(() =>
+                        {
+                            // Told, not waited for: the host's commit isn't held up, and the hub's own failure is its own (it never throws).
+                            foreach (var person in items.GroupBy(i => i.SubscriberId))
+                            {
+                                _ = inbox.PublishAsync(new Inbox.InboxChange(options.TenantId, person.Key, Inbox.InboxChange.Changed, [.. person.Select(i => i.Id)]),
+                                    CancellationToken.None);
+                            }
+                        });
+                    }
+                }
+                return state;
+            }, cancellationToken));
 
         /// <summary>
         /// A hold or release in the host's transaction. A release that resumed parked escalations wakes the escalation stage, and counts them,
