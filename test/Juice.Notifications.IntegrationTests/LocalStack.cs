@@ -17,17 +17,68 @@ namespace Juice.Notifications.IntegrationTests
 
         private static readonly Lazy<Dictionary<string, string>> Env = new(() =>
         {
-            for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+            var folder = ResolveDeployFolder(AppContext.BaseDirectory, Environment.GetEnvironmentVariable, GitCommonDir);
+            return folder is null ? [] : File.ReadAllLines(Path.Combine(folder, ".env")).Select(l => l.Trim())
+                .Where(l => l.Length > 0 && !l.StartsWith('#') && l.Contains('='))
+                .Select(l => l.Split('=', 2)).ToDictionary(p => p[0], p => p[1]);
+        });
+
+        /// <summary>Names the folder to use for <c>deploy/local</c> (with <c>.env</c> and <c>secrets/</c>) instead of the checkout's own one.</summary>
+        public const string DeployFolderVariable = "JUICE_LOCAL_DEPLOY_NOTIFICATIONS";
+
+        /// <summary>
+        /// The <c>deploy/local</c> folder that holds <c>.env</c>: the checkout's own, else the folder <see cref="DeployFolderVariable"/> names,
+        /// else the main worktree's (so a new git worktree needs no copies). Null when none has one, as before.
+        /// </summary>
+        public static string? ResolveDeployFolder(string startDir, Func<string, string?> getVariable, Func<string, string?> gitCommonDir)
+        {
+            static bool Has(string? folder) => !string.IsNullOrWhiteSpace(folder) && File.Exists(Path.Combine(folder, ".env"));
+
+            for (var dir = new DirectoryInfo(startDir); dir is not null; dir = dir.Parent)
             {
-                var file = Path.Combine(dir.FullName, "deploy", "local", ".env");
-                if (File.Exists(file))
+                var own = Path.Combine(dir.FullName, "deploy", "local");
+                if (Has(own))
                 {
-                    return File.ReadAllLines(file).Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('#') && l.Contains('='))
-                        .Select(l => l.Split('=', 2)).ToDictionary(p => p[0], p => p[1]);
+                    return own;
                 }
             }
-            return [];
-        });
+            var named = getVariable(DeployFolderVariable);
+            if (Has(named))
+            {
+                return named;
+            }
+            var common = gitCommonDir(startDir);
+            if (!string.IsNullOrWhiteSpace(common))
+            {
+                // The main worktree's checkout holds the .git folder the worktrees share.
+                var main = Path.GetDirectoryName(Path.GetFullPath(common).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                var candidate = main is null ? null : Path.Combine(main, "deploy", "local");
+                if (Has(candidate))
+                {
+                    return candidate;
+                }
+            }
+            return null;
+        }
+
+        private static string? GitCommonDir(string startDir)
+        {
+            try
+            {
+                var info = new System.Diagnostics.ProcessStartInfo("git", "rev-parse --path-format=absolute --git-common-dir")
+                {
+                    WorkingDirectory = startDir, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+                };
+                using var process = System.Diagnostics.Process.Start(info);
+                var output = process?.StandardOutput.ReadToEnd().Trim();
+                process?.WaitForExit(5000);
+                return process?.ExitCode == 0 ? output : null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
 
         private static readonly Lazy<bool> Up = new(() =>
         {
