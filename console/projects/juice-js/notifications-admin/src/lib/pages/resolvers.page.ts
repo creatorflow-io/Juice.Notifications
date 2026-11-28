@@ -9,7 +9,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { NotificationsAdminApi } from '../core/api.service';
 import { Resolver } from '../core/models';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, KEY_PATTERN, Pending, SECRET_REF_HINT, managedNote, rowAction, submit, whenChanged } from '../shared/forms';
+import { FormErrors, FormErrorsComponent, NaFieldError, Pending, SECRET_REF_HINT, keyIssue, managedNote, rowAction, submit, validateAll, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { problemText } from '../shared/ui';
 
@@ -30,7 +30,7 @@ const KIND_HINTS: Record<string, string> = {
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, JsonPipe, FormsModule, MatButtonModule, MatCheckboxModule, MatFormFieldModule, MatInputModule, MatProgressBarModule,
-    MatSelectModule, FieldErrorsComponent, FormErrorsComponent],
+    MatSelectModule, NaFieldError, FormErrorsComponent],
   template: `
     <div class="na-head"><h1>Resolvers</h1><span class="na-spacer"></span>
       @if (!editing()) {
@@ -43,38 +43,46 @@ const KIND_HINTS: Record<string, string> = {
         <h2>{{ e.isNew ? 'New resolver' : 'Resolver ' + draft.key }}</h2>
         <!-- Made afresh on each edit: ngModel writes nothing to a select whose model value is unchanged. -->
         @for (g of [generation()]; track g) {
-        <div class="na-filters">
+        <div class="na-form-grid">
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Key</mat-label>
-            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required [pattern]="keyPattern" data-testid="resolver-key">
-            <mat-hint>Requests name it.</mat-hint></mat-form-field>
-          <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Kind</mat-label>
-            <mat-select name="kind" [(ngModel)]="draft.kind" (ngModelChange)="kindChanged()" [disabled]="!e.isNew" required data-testid="resolver-kind">
+            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required data-testid="resolver-key" [naError]="errors" naPointer="/key">
+            <mat-hint>Requests name it.</mat-hint>
+            @for (m of errors.of('/key'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
+          <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Kind</mat-label>
+            <mat-select name="kind" [(ngModel)]="draft.kind" (ngModelChange)="kindChanged()" [disabled]="!e.isNew" required data-testid="resolver-kind"
+              [naError]="errors" naPointer="/kind">
               @for (k of kindOptions(); track k.kind) {
                 <mat-option [value]="k.kind">{{ k.kind }}@if (k.unlisted) { <span class="na-muted"> (not in this deployment)</span> }</mat-option>
               }
             </mat-select>
-            @if (!e.isNew) { <mat-hint>Fixed: another kind is another resolver.</mat-hint> }</mat-form-field>
+            @if (!e.isNew) { <mat-hint>Fixed: another kind is another resolver.</mat-hint> }
+            @for (m of errors.of('/kind'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
           <mat-checkbox name="enabled" [(ngModel)]="draft.enabled" data-testid="resolver-enabled">Enabled</mat-checkbox>
         </div>
         }
         @if (kindHint()) { <p class="na-hint">{{ kindHint() }}</p> }
-        <na-field-errors [messages]="errors.at('/key')" pointer="/key" />
-        <na-field-errors [messages]="errors.at('/kind')" pointer="/kind" />
-        <div class="na-filters" data-testid="resolver-handles">
+        <div class="na-actions" data-testid="resolver-handles">
           <span class="na-small">Handles</span>
           @for (h of handleOptions(); track h) {
             <mat-checkbox [name]="'handles-' + h" [ngModel]="draft.handles.includes(h)" (ngModelChange)="toggle(h, $event)" [attr.data-handle]="h">{{ h }}</mat-checkbox>
           } @empty { <span class="na-muted na-small">Pick a kind.</span> }
         </div>
-        <na-field-errors [messages]="errors.at('/handles')" pointer="/handles" />
-        <mat-form-field subscriptSizing="dynamic"><mat-label>Settings (JSON)</mat-label>
-          <textarea matInput name="settings" [(ngModel)]="draft.settings" rows="4" spellcheck="false" data-testid="resolver-settings"></textarea>
-        </mat-form-field>
-        <na-field-errors [messages]="errors.at('/settings')" pointer="/settings" />
-        <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Secret reference</mat-label>
-          <input matInput name="secretRef" [(ngModel)]="draft.secretRef" autocomplete="off" spellcheck="false" data-testid="resolver-secret-ref"></mat-form-field>
-        <p class="na-hint">Only if the kind needs one. {{ secretHint }}</p>
-        <na-field-errors [messages]="errors.at('/secretRef')" pointer="/secretRef" />
+        @for (m of errors.of('/handles'); track $index) { <div class="na-error na-small" data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</div> }
+        <div class="na-form-grid">
+          <mat-form-field subscriptSizing="dynamic" class="na-field-full"><mat-label>Settings (JSON)</mat-label>
+            <textarea matInput name="settings" [(ngModel)]="draft.settings" rows="4" spellcheck="false" data-testid="resolver-settings"
+              [naError]="errors" naPointer="/settings"></textarea>
+            @for (m of errors.of('/settings'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
+          <mat-form-field subscriptSizing="dynamic" class="na-field-full"><mat-label>Secret reference</mat-label>
+            <input matInput name="secretRef" [(ngModel)]="draft.secretRef" autocomplete="off" spellcheck="false" data-testid="resolver-secret-ref"
+              [naError]="errors" naPointer="/secretRef">
+            <mat-hint>Only if the kind needs one. {{ secretHint }}</mat-hint>
+            @for (m of errors.of('/secretRef'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
+        </div>
         <na-form-errors [errors]="errors" [shown]="shown" [reload]="reloadFn" />
         <div class="na-actions">
           <button mat-flat-button type="submit" [disabled]="busy()" data-testid="resolver-save">{{ e.isNew ? 'Create' : 'Save' }}</button>
@@ -123,7 +131,6 @@ export class ResolversPage {
   protected readonly kinds = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.resolverKinds(params) });
   protected readonly error = computed(() => problemText(this.resolvers.error()));
   protected readonly kindsError = computed(() => problemText(this.kinds.error()));
-  protected readonly keyPattern = KEY_PATTERN;
   protected readonly secretHint = SECRET_REF_HINT;
   protected readonly example = '{ "kind": "user", "id": "ann", "resolver": "people" }';
   protected readonly shown = ['/key', '/kind', '/handles', '/settings', '/secretRef'];
@@ -212,44 +219,35 @@ export class ResolversPage {
   protected save(): void {
     const e = this.editing();
     const key = this.draft.key.trim();
-    if (!key) {
-      // Sent empty, the PUT would go to the resolvers collection, which takes none.
-      this.errors.local('/key', 'Give the resolver a key.');
-      return;
-    }
-    // A PUT creates or replaces: a new resolver is checked against the list, which must have been read.
-    if (e?.isNew && !this.resolvers.hasValue()) {
-      this.errors.local('/key', "The resolvers couldn't be read, so this key can't be checked as new: refresh first.");
-      return;
-    }
-    if (e?.isNew && this.resolvers.value()?.some(r => r.key === key)) {
-      this.errors.local('/key', `There is a resolver ${key} already: edit it instead.`);
-      return;
-    }
-    if (!this.draft.kind) {
-      this.errors.local('/kind', 'Pick what kind of resolver it is.');
-      return;
-    }
-    if (this.draft.handles.length === 0) {
-      this.errors.local('/handles', 'A resolver handles at least one recipient kind.');
-      return;
-    }
+    const isNew = !!e?.isNew;
     let settings: unknown;
-    try {
-      settings = this.draft.settings.trim() ? JSON.parse(this.draft.settings) : {};
-    } catch (err) {
-      this.errors.local('/settings', `The settings aren't JSON: ${(err as Error).message}`);
-      return;
-    }
-    // The API takes an object only; a null would read as "left out" and keep the stored settings without a word.
-    if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
-      this.errors.local('/settings', 'Settings are a JSON object: { "name": value, … }.');
-      return;
-    }
     // Left out (null), the stored reference stays: an emptied field would look removed and not be.
     const secretRef = this.draft.secretRef.trim();
-    if (!secretRef && e?.stored?.secretRef) {
-      this.errors.local('/secretRef', 'A secret reference can be changed but not removed: the stored one stays. Point it at another, or create a resolver without one.');
+    const issues = validateAll([
+      // Sent empty, the PUT would go to the resolvers collection, which takes none.
+      () => isNew ? keyIssue(key, 'resolver') : null,
+      // A PUT creates or replaces: a new resolver is checked against the list, which must have been read.
+      () => isNew && key && !this.resolvers.hasValue()
+        ? { pointer: '/key', message: "Key: the resolvers couldn't be read, so this key can't be checked as new; refresh first." } : null,
+      () => isNew && key && this.resolvers.value()?.some(r => r.key === key)
+        ? { pointer: '/key', message: 'Key: there is a resolver with this key already; edit it instead.' } : null,
+      () => this.draft.kind ? null : { pointer: '/kind', message: 'Kind: pick what kind of resolver it is.' },
+      () => this.draft.handles.length ? null : { pointer: '/handles', message: 'Handles: a resolver handles at least one recipient kind.' },
+      () => {
+        try {
+          settings = this.draft.settings.trim() ? JSON.parse(this.draft.settings) : {};
+        } catch (err) {
+          return { pointer: '/settings', message: `Settings: not JSON (${(err as Error).message}).` };
+        }
+        // The API takes an object only; a null would read as "left out" and keep the stored settings without a word.
+        return typeof settings !== 'object' || settings === null || Array.isArray(settings)
+          ? { pointer: '/settings', message: 'Settings: a JSON object, { "name": value, … }.' } : null;
+      },
+      () => !secretRef && e?.stored?.secretRef
+        ? { pointer: '/secretRef', message: 'Secret reference: can be changed but not removed, the stored one stays. Point it at another, or create a resolver without one.' } : null,
+    ]);
+    if (issues.length) {
+      this.errors.localAll(issues);
       return;
     }
     // In the order the kind lists them, as the API stores them.

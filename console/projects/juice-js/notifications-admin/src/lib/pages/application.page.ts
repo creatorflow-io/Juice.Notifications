@@ -11,10 +11,10 @@ import { AccessService, sameId } from '../core/access.service';
 import { NotificationsAdminApi } from '../core/api.service';
 import { Application } from '../core/models';
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, rowAction, submit, whenChanged } from '../shared/forms';
+import { FormErrors, FormErrorsComponent, NaFieldError, Pending, rowAction, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { problemText } from '../shared/ui';
-import { SERVICE_APPLICATION } from './applications.page';
+import { SERVICE_APPLICATION, applicationIssues } from './applications.page';
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -30,7 +30,7 @@ function blank() {
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, FormsModule, RouterLink, MatButtonModule, MatCheckboxModule, MatFormFieldModule, MatInputModule, MatProgressBarModule,
-    FieldErrorsComponent, FormErrorsComponent],
+    NaFieldError, FormErrorsComponent],
   styles: `:host { display: block; padding: 16px; }`,
   template: `
     <div class="na-head">
@@ -60,17 +60,24 @@ function blank() {
         @if (a.key !== serviceApp) {
           <form class="na-card na-form" (ngSubmit)="save(a)" (input)="saved.set(false)" data-testid="application-form">
             <h2>Details</h2>
-            <div class="na-filters">
+            <div class="na-form-grid">
               <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Name</mat-label>
-                <input matInput name="name" [(ngModel)]="draft.name" required maxlength="200" data-testid="application-name"></mat-form-field>
+                <input matInput name="name" [(ngModel)]="draft.name" required data-testid="application-name" [naError]="errors" naPointer="/name">
+                @for (e of errors.of('/name'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+              </mat-form-field>
               <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Client id</mat-label>
-                <input matInput name="clientId" [(ngModel)]="draft.clientId" required spellcheck="false" data-testid="application-client-id"></mat-form-field>
+                <input matInput name="clientId" [(ngModel)]="draft.clientId" required spellcheck="false" data-testid="application-client-id"
+                  [naError]="errors" naPointer="/clientId">
+                @for (e of errors.of('/clientId'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+              </mat-form-field>
               <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Broker user</mat-label>
-                <input matInput name="brokerUser" [(ngModel)]="draft.brokerUser" spellcheck="false" data-testid="application-broker-user">
-                <mat-hint>Empty: it sends over HTTP only.</mat-hint></mat-form-field>
+                <input matInput name="brokerUser" [(ngModel)]="draft.brokerUser" spellcheck="false" data-testid="application-broker-user"
+                  [naError]="errors" naPointer="/brokerUser">
+                <mat-hint>Empty: it sends over HTTP only.</mat-hint>
+                @for (e of errors.of('/brokerUser'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+              </mat-form-field>
               <mat-checkbox name="enabled" [(ngModel)]="draft.enabled" (change)="saved.set(false)" data-testid="application-enabled">Enabled</mat-checkbox>
             </div>
-            @for (p of fields; track p) { <na-field-errors [messages]="errors.at(p)" [pointer]="p" /> }
             <na-form-errors [errors]="errors" [shown]="fields" [reload]="reloadFn" />
             <div class="na-actions">
               <button mat-flat-button type="submit" [disabled]="busy()" data-testid="application-save">Save</button>
@@ -85,17 +92,18 @@ function blank() {
         <p class="na-hint">The application sends for these; each is administered here once linked. A link stays once the application has sent for
           the tenant: disable the application to stop it.</p>
         @if (a.key !== serviceApp) {
-          <form class="na-filters" (ngSubmit)="link(a)" data-testid="tenant-link-form">
+          <form class="na-form-grid" (ngSubmit)="link(a)" data-testid="tenant-link-form">
             <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Tenant id</mat-label>
               <input matInput name="tenant" [(ngModel)]="tenantDraft" spellcheck="false" list="na-known-tenants" placeholder="0193f0aa-…"
-                data-testid="tenant-link-id">
-              <mat-hint>From the tenants directory; a tenant still being set up can be linked too.</mat-hint></mat-form-field>
+                data-testid="tenant-link-id" [naError]="linkErrors" naPointer="/tenantId">
+              <mat-hint>From the tenants directory; a tenant still being set up can be linked too.</mat-hint>
+              @for (e of linkErrors.of('/tenantId'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+            </mat-form-field>
             <datalist id="na-known-tenants">
               @for (t of unlinked(); track t.id) { <option [value]="t.id">{{ t.name ?? t.id }}</option> }
             </datalist>
             <button mat-flat-button type="submit" [disabled]="busy() || !tenantDraft.trim()" data-testid="tenant-link">Link</button>
           </form>
-          <na-field-errors [messages]="linkErrors.at('/tenantId')" pointer="/tenantId" />
           <na-form-errors [errors]="linkErrors" [shown]="['/tenantId']" [reload]="reloadFn" />
         }
         <table class="na-table">
@@ -207,16 +215,9 @@ export class ApplicationPage {
     const name = this.draft.name.trim();
     const clientId = this.draft.clientId.trim();
     const brokerUser = this.draft.brokerUser.trim();
-    if (!name) {
-      this.errors.local('/name', 'Give the application a name.');
-      return;
-    }
-    if (!/^[\x21-\x7E]{1,200}$/.test(clientId)) {
-      this.errors.local('/clientId', 'The client id is 1–200 printable characters without spaces.');
-      return;
-    }
-    if (brokerUser && !/^[\x21-\x7E]{1,200}$/.test(brokerUser)) {
-      this.errors.local('/brokerUser', 'The broker user is 1–200 printable characters without spaces; empty for none.');
+    const issues = applicationIssues({ name, clientId, brokerUser });
+    if (issues.length) {
+      this.errors.localAll(issues);
       return;
     }
     const body: { name?: string; clientId?: string; enabled?: boolean; brokerUser?: string } = {};
@@ -236,11 +237,11 @@ export class ApplicationPage {
     this.confirming.set(null);
     const id = this.tenantDraft.trim().toLowerCase();
     if (!GUID.test(id) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(id)) {
-      this.linkErrors.local('/tenantId', "A tenant's id is a GUID such as 0193f0aa-0000-7000-8000-0000000000a1.");
+      this.linkErrors.local('/tenantId', "Tenant id: a GUID such as 0193f0aa-0000-7000-8000-0000000000a1.");
       return;
     }
     if (a.tenants.some(t => sameId(t, id))) {
-      this.linkErrors.local('/tenantId', 'The application sends for this tenant already.');
+      this.linkErrors.local('/tenantId', 'Tenant id: the application sends for this tenant already.');
       return;
     }
     this.pending.track(submit(this.api.linkTenant(a.key, id), this.busy, this.linkErrors, () => {

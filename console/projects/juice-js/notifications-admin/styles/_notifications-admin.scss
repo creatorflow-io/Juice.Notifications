@@ -53,17 +53,29 @@
 
   .na-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px;
     h1 { margin: 0; font-size: 22px; font-weight: 500; } }
-  .na-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; @include mat.form-field-density(-1); }
-  .na-field-sm { width: 160px; }
-  .na-field-md { width: 220px; }
-  .na-field-lg { width: 420px; max-width: 100%; }
-  .na-field-full { width: 100%; }
+  // A form's fields (and a list's filters) on one grid: as many columns of at least 200px as fit (one at 390px), every field the same
+  // way up (start), so an error under one never moves a neighbour's top edge. Whatever isn't a field (a checkbox, a button, a note) sits
+  // centred in its cell.
+  .na-form-grid, .na-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 8px 12px;
+    align-items: start; margin-bottom: 12px; @include mat.form-field-density(-1);
+    > * { min-width: 0; }
+    > :not(mat-form-field) { align-self: center; }
+    > mat-form-field { width: 100%; } }
+  // Width scale, in columns: sm and md one, lg two (the whole row where the grid is narrower than two columns), full the whole row.
+  .na-field-sm, .na-field-md { grid-column: span 1; }
+  .na-field-lg { grid-column: 1 / -1; }
+  .na-field-full { grid-column: 1 / -1; width: 100%; }
+  @container na-form (min-width: 420px) { .na-field-lg { grid-column: span 2; } }
+  // The errors under a field wrap inside it, and a label never loses its tail to the field's width.
+  mat-form-field.mat-mdc-form-field { max-width: 100%;
+    .mat-mdc-form-field-error-wrapper, .mat-mdc-form-field-subscript-wrapper { overflow-wrap: anywhere; }
+    .mat-mdc-form-field-error { font-size: 12px; } }
   .na-code { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; }
   .na-pre { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; margin: 0;
     max-height: 480px; overflow: auto; }
   .na-preview-part { margin-bottom: 12px; }
   .na-preview-html { width: 100%; min-height: 180px; border: 1px solid var(--na-border); border-radius: 4px; background: #fff; }
-  .na-form { display: flex; flex-direction: column; gap: 4px; @include mat.form-field-density(-1);
+  .na-form { display: flex; flex-direction: column; gap: 4px; container: na-form / inline-size; @include mat.form-field-density(-1);
     textarea { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; } }
   .na-hint { color: var(--na-muted); font-size: 12px; margin: 0 0 4px; }
   .na-confirm { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; }

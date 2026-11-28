@@ -12,7 +12,7 @@ import { MatSelectModule } from '@angular/material/select';
 import { AccessService, hasPage } from '../core/access.service';
 import { NotificationsAdminApi } from '../core/api.service';
 import { ESCALATION_RECIPIENT_KINDS, EscalationPolicy, EscalationRecipient, EscalationStep } from '../core/models';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, KEY_PATTERN, isBlankNumber, managedNote, rowAction, submit, whenChanged } from '../shared/forms';
+import { FieldIssue, FormErrors, FormErrorsComponent, NaFieldError, isBlankNumber, keyIssue, managedNote, rowAction, submit, validateAll, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { problemText } from '../shared/ui';
 import { tenantRights } from '../shared/rights';
@@ -28,7 +28,7 @@ interface StepDraft { afterMinutes: number | null; recipients: RecipientDraft[];
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, FormsModule, MatButtonModule, MatCheckboxModule, MatFormFieldModule, MatIconModule, MatInputModule, MatProgressBarModule,
-    MatSelectModule, FieldErrorsComponent, FormErrorsComponent],
+    MatSelectModule, NaFieldError, FormErrorsComponent],
   template: `
     <div class="na-head"><h1>Escalation policies</h1><span class="na-spacer"></span>
       @if (!editing()) { @if (can.configure()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!policies.hasValue()" data-testid="policy-new">New policy</button> } }
@@ -36,58 +36,68 @@ interface StepDraft { afterMinutes: number | null; recipients: RecipientDraft[];
     @if (editing(); as e) {
       <form class="na-form na-card" (ngSubmit)="save()" data-testid="policy-form">
         <h2>{{ e.isNew ? 'New policy' : 'Policy ' + draft.key }}</h2>
-        <div class="na-filters">
+        <div class="na-form-grid">
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Key</mat-label>
-            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required [pattern]="keyPattern" data-testid="policy-key"></mat-form-field>
+            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required data-testid="policy-key" [naError]="errors" naPointer="/key">
+            @for (m of errors.of('/key'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
           <mat-checkbox name="stopOnAcknowledge" [(ngModel)]="draft.stopOnAcknowledge" data-testid="policy-stop-on-ack">Acknowledging stops it</mat-checkbox>
         </div>
-        <na-field-errors [messages]="errors.at('/key')" pointer="/key" />
-        <na-field-errors [messages]="errors.exactly('/steps')" pointer="/steps" />
         @for (step of draft.steps; track $index; let s = $index) {
           <div class="na-card" data-testid="policy-step">
-            <div class="na-filters">
+            <div class="na-form-grid">
               <strong>Step {{ s + 1 }}</strong>
-              <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>After (minutes)</mat-label>
-                <input matInput type="number" min="0" [name]="'after-' + s" [(ngModel)]="step.afterMinutes" data-testid="step-after"></mat-form-field>
-              <span class="na-muted na-small">{{ s === 0 ? 'after the notification' : 'after step ' + s }}</span>
-              <span class="na-spacer"></span>
+              <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>After (minutes)</mat-label>
+                <input matInput type="number" min="0" [name]="'after-' + s" [(ngModel)]="step.afterMinutes" data-testid="step-after"
+                  [naError]="errors" [naPointer]="'/steps/' + s + '/afterMinutes'">
+                <mat-hint>{{ s === 0 ? 'After the notification' : 'After step ' + s }}.</mat-hint>
+                @for (m of errors.of('/steps/' + s + '/afterMinutes'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+              </mat-form-field>
               <button mat-icon-button type="button" (click)="draft.steps.splice(s, 1)" aria-label="Remove the step"><mat-icon>delete</mat-icon></button>
             </div>
-            <na-field-errors [messages]="errors.at('/steps/' + s + '/afterMinutes')" />
-            <na-field-errors [messages]="errors.exactly('/steps/' + s)" />
-            <na-field-errors [messages]="errors.exactly('/steps/' + s + '/recipients')" />
             @for (r of step.recipients; track $index; let j = $index) {
-              <div class="na-filters" data-testid="step-recipient">
-                <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Recipient</mat-label>
-                  <mat-select [name]="'kind-' + s + '-' + j" [(ngModel)]="r.kind" (ngModelChange)="kindChanged(r)" data-testid="recipient-kind">
+              <div class="na-form-grid" data-testid="step-recipient">
+                <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Recipient</mat-label>
+                  <mat-select [name]="'kind-' + s + '-' + j" [(ngModel)]="r.kind" (ngModelChange)="kindChanged(r)" data-testid="recipient-kind"
+                    [naError]="errors" [naPointer]="kindPointers(s, j, r)">
                     @for (k of kinds(); track k) { <mat-option [value]="k">{{ k === 'route' ? "the route's targets" : k }}</mat-option> }
-                  </mat-select></mat-form-field>
+                  </mat-select>
+                  @for (m of errors.of(kindPointers(s, j, r)); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+                </mat-form-field>
                 @if (r.kind === 'topic') {
                   <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Topic key</mat-label>
-                    <input matInput [name]="'key-' + s + '-' + j" [(ngModel)]="r.key" data-testid="recipient-key"></mat-form-field>
+                    <input matInput [name]="'key-' + s + '-' + j" [(ngModel)]="r.key" data-testid="recipient-key"
+                      [naError]="errors" [naPointer]="namePointers(s, j)">
+                    @for (m of errors.of(namePointers(s, j)); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+                  </mat-form-field>
                 } @else if (r.kind !== 'route') {
                   <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>{{ r.kind }} id</mat-label>
-                    <input matInput [name]="'id-' + s + '-' + j" [(ngModel)]="r.id" data-testid="recipient-id"></mat-form-field>
+                    <input matInput [name]="'id-' + s + '-' + j" [(ngModel)]="r.id" data-testid="recipient-id"
+                      [naError]="errors" [naPointer]="namePointers(s, j)">
+                    @for (m of errors.of(namePointers(s, j)); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+                  </mat-form-field>
                 }
                 @if (r.kind !== 'route') {
-                  <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Resolver</mat-label>
-                    <mat-select [name]="'resolver-' + s + '-' + j" [(ngModel)]="r.resolver" data-testid="recipient-resolver">
+                  <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Resolver</mat-label>
+                    <mat-select [name]="'resolver-' + s + '-' + j" [(ngModel)]="r.resolver" data-testid="recipient-resolver"
+                      [naError]="errors" [naPointer]="'/steps/' + s + '/recipients/' + j + '/resolver'">
                       @for (v of resolversFor(r.kind); track v.key) { <mat-option [value]="v.key">{{ v.key }} ({{ v.kind }})</mat-option> }
                       <!-- As stored, though not usable now: shown, so the select never hides what would be saved. -->
                       @if (r.resolver && !usable(r)) {
                         <mat-option [value]="r.resolver">{{ r.resolver }} <span class="na-muted">(disabled, missing or not for {{ r.kind }})</span></mat-option>
                       }
-                    </mat-select></mat-form-field>
+                    </mat-select>
+                    @for (m of errors.of('/steps/' + s + '/recipients/' + j + '/resolver'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+                  </mat-form-field>
                 }
                 <button mat-icon-button type="button" (click)="step.recipients.splice(j, 1)" aria-label="Remove the recipient"><mat-icon>close</mat-icon></button>
               </div>
-              <na-field-errors [messages]="errors.at('/steps/' + s + '/recipients/' + j)" />
             }
             <button mat-button type="button" (click)="step.recipients.push(recipient())" data-testid="step-add-recipient">Add a recipient</button>
           </div>
         }
         <div><button mat-stroked-button type="button" (click)="draft.steps.push(step())" data-testid="policy-add-step">Add a step</button></div>
-        <na-form-errors [errors]="errors" [shown]="['/key', '/steps']" [reload]="reloadFn" />
+        <na-form-errors [errors]="errors" [shown]="placed" [reload]="reloadFn" />
         <div class="na-actions">
           <button mat-flat-button type="submit" [disabled]="busy()" data-testid="policy-save">{{ e.isNew ? 'Create' : 'Save' }}</button>
           <button mat-button type="button" (click)="editing.set(null)">Cancel</button>
@@ -141,7 +151,6 @@ export class EscalationPoliciesPage {
   protected readonly error = computed(() => problemText(this.policies.error()));
   protected readonly resolversError = computed(() => problemText(this.resolvers.error()));
   protected readonly kinds = computed(() => this.hasPeople() ? ESCALATION_RECIPIENT_KINDS : ESCALATION_RECIPIENT_KINDS.filter(k => k === 'route'));
-  protected readonly keyPattern = KEY_PATTERN;
   protected readonly errors = new FormErrors();
   protected readonly editing = signal<{ isNew: boolean } | null>(null);
   protected readonly busy = signal(false);
@@ -196,6 +205,42 @@ export class EscalationPoliciesPage {
     if (!this.usable(r)) r.resolver = this.resolversFor(r.kind)[0]?.key ?? '';
   }
 
+  /** What a recipient lacks for its kind: the topic key or the person's id, and the resolver that reaches them. */
+  private recipientIssues(r: RecipientDraft, step: number, recipient: number): FieldIssue[] {
+    if (r.kind === 'route') return [];
+    const at = `/steps/${step}/recipients/${recipient}`;
+    const who = `Step ${step + 1}, recipient ${recipient + 1}`;
+    const issues: FieldIssue[] = [];
+    if (r.kind === 'topic' ? !r.key.trim() : !r.id.trim()) issues.push({ pointer: at, message: `${who}: give the ${r.kind === 'topic' ? 'topic key' : r.kind + ' id'}.` });
+    if (!r.resolver) issues.push({ pointer: `${at}/resolver`, message: `${who}: choose the resolver that reaches them.` });
+    return issues;
+  }
+
+  /** Where a recipient's kind shows its errors: its own, and (a route has no id field) those for the recipient as a whole. */
+  protected kindPointers(step: number, recipient: number, r: RecipientDraft): string {
+    const at = `/steps/${step}/recipients/${recipient}`;
+    return r.kind === 'route' ? `${at}$|${at}/kind` : `${at}/kind`;
+  }
+
+  /** Where a recipient's topic key or id shows its errors. */
+  protected namePointers(step: number, recipient: number): string {
+    const at = `/steps/${step}/recipients/${recipient}`;
+    return `${at}$|${at}/id|${at}/key`;
+  }
+
+  /** Whether a field of the form shows this pointer's error; the rest are listed above the buttons. */
+  protected readonly placed = (pointer: string): boolean => {
+    if (pointer === '/key' || pointer.startsWith('/key/')) return true;
+    const step = /^\/steps\/(\d+)\/(afterMinutes|recipients\/(\d+)(\/(kind|id|key|resolver))?)$/.exec(pointer);
+    if (!step) return false;
+    const s = this.draft.steps[Number(step[1])];
+    if (!s) return false;
+    if (step[3] === undefined) return true;
+    const r = s.recipients[Number(step[3])];
+    // A route recipient has no id, key or resolver field.
+    return !!r && (r.kind !== 'route' || step[5] === undefined || step[5] === 'kind');
+  };
+
   protected recipientsText(step: EscalationStep): string {
     return step.recipients.map(r => r.kind === 'route' ? "the route's targets"
       : r.kind === 'topic' ? `topic ${r.key} (${r.resolver})` : `${r.kind} ${r.id} (${r.resolver})`).join(', ');
@@ -220,24 +265,24 @@ export class EscalationPoliciesPage {
 
   protected save(): void {
     const key = this.draft.key.trim();
-    if (!key) {
+    const isNew = !!this.editing()?.isNew;
+    const issues = validateAll([
       // Sent empty, the PUT would go to the policies collection, which takes none.
-      this.errors.local('/key', 'Give the policy a key.');
-      return;
-    }
-    // A PUT creates or replaces: a new policy is checked against the list, which must have been read.
-    if (this.editing()?.isNew && !this.policies.hasValue()) {
-      this.errors.local('/key', "The policies couldn't be read, so this key can't be checked as new: refresh first.");
-      return;
-    }
-    if (this.editing()?.isNew && this.policies.value()?.some(p => p.key === key)) {
-      this.errors.local('/key', `There is a policy ${key} already: edit it instead.`);
-      return;
-    }
-    // A cleared field reads null, which Number() would send as 0: escalating at once, not what was meant.
-    const blank = this.draft.steps.findIndex(s => isBlankNumber(s.afterMinutes));
-    if (blank >= 0) {
-      this.errors.local(`/steps/${blank}/afterMinutes`, 'Say how many minutes this step waits (0 for at once).');
+      () => isNew ? keyIssue(key, 'policy') : null,
+      // A PUT creates or replaces: a new policy is checked against the list, which must have been read.
+      () => isNew && key && !this.policies.hasValue()
+        ? { pointer: '/key', message: "Key: the policies couldn't be read, so this key can't be checked as new; refresh first." } : null,
+      () => isNew && key && this.policies.value()?.some(p => p.key === key)
+        ? { pointer: '/key', message: 'Key: there is a policy with this key already; edit it instead.' } : null,
+      () => this.draft.steps.length ? null : { pointer: '/steps', message: 'Steps: add at least one step.' },
+      // A cleared field reads null, which Number() would send as 0: escalating at once, not what was meant.
+      () => this.draft.steps.flatMap((s, i) => (isBlankNumber(s.afterMinutes) || Number(s.afterMinutes) < 0 || !Number.isInteger(Number(s.afterMinutes))
+        ? [{ pointer: `/steps/${i}/afterMinutes`, message: `Step ${i + 1}, After: a whole number of minutes, 0 or more (0 for at once).` }] : [])),
+      () => this.draft.steps.flatMap((s, i) => s.recipients.length ? s.recipients.flatMap((r, j) => this.recipientIssues(r, i, j))
+        : [{ pointer: `/steps/${i}/recipients`, message: `Step ${i + 1}: add at least one recipient.` }]),
+    ]);
+    if (issues.length) {
+      this.errors.localAll(issues);
       return;
     }
     // Each recipient with only the fields its kind takes: the API refuses any other.

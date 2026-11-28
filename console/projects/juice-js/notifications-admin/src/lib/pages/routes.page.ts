@@ -11,8 +11,8 @@ import { RouterLink } from '@angular/router';
 import { NotificationsAdminApi } from '../core/api.service';
 import { Route } from '../core/models';
 import {
-  FieldErrorsComponent, FormErrors, FormErrorsComponent, KEY_PATTERN, MatchDraft, MatchEditorComponent, managedNote, matchDraft, matchOf, matchProblem,
-  matchText, rowAction, submit, whenChanged,
+  FormErrors, FormErrorsComponent, MatchDraft, MatchEditorComponent, NaFieldError, isBlankNumber, keyIssue, managedNote, matchDraft, matchIssues,
+  matchOf, matchText, rowAction, submit, validateAll, whenChanged,
 } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
@@ -25,7 +25,7 @@ import { tenantRights } from '../shared/rights';
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, FormsModule, RouterLink, MatButtonModule, MatCheckboxModule, MatFormFieldModule, MatInputModule, MatProgressBarModule,
-    MatSelectModule, Badge, TenantLinkPipe, FieldErrorsComponent, FormErrorsComponent, MatchEditorComponent],
+    MatSelectModule, Badge, TenantLinkPipe, NaFieldError, FormErrorsComponent, MatchEditorComponent],
   template: `
     <div class="na-head"><h1>Routes</h1><span class="na-spacer"></span>
       @if (!editing()) { @if (can.configure()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!routes.hasValue()" data-testid="route-new">New route</button> } }
@@ -33,29 +33,33 @@ import { tenantRights } from '../shared/rights';
     @if (editing(); as e) {
       <form class="na-form na-card" (ngSubmit)="save()" data-testid="route-form">
         <h2>{{ e.isNew ? 'New route' : 'Route ' + draft.key }}</h2>
-        <div class="na-filters">
+        <div class="na-form-grid">
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Key</mat-label>
-            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required [pattern]="keyPattern" data-testid="route-key"></mat-form-field>
+            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required data-testid="route-key" [naError]="errors" naPointer="/key">
+            @for (e of errors.of('/key'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
+          <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Digest window</mat-label>
+            <input matInput type="number" name="digestSeconds" [(ngModel)]="draft.digestSeconds" min="0" max="3600" step="1" data-testid="route-digest"
+              [naError]="errors" naPointer="/digestSeconds">
+            <mat-hint>Seconds, 0 to 3600. 0 sends each at once; more sends what reaches the route within the window as one digest per type.</mat-hint>
+            @for (e of errors.of('/digestSeconds'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
           <mat-checkbox name="enabled" [(ngModel)]="draft.enabled" data-testid="route-enabled">Enabled</mat-checkbox>
         </div>
-        <na-field-errors [messages]="errors.at('/key')" pointer="/key" />
-        <div class="na-filters">
-          <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Digest window (seconds)</mat-label>
-            <input matInput type="number" name="digestSeconds" [(ngModel)]="draft.digestSeconds" min="0" max="3600" step="1" data-testid="route-digest"></mat-form-field>
-          <span class="na-hint">0 sends each at once; up to 3600 sends what reaches the route within the window as one digest per type.</span>
-        </div>
-        <na-field-errors [messages]="errors.at('/digestSeconds')" pointer="/digestSeconds" />
         <p class="na-hint">Matches: what the route takes. Leave everything empty for every notification.</p>
         <na-match-editor [draft]="draft.match" [errors]="errors" />
-        <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Targets</mat-label>
-          <mat-select name="targets" [(ngModel)]="draft.targets" multiple required data-testid="route-targets">
-            @for (t of targets(); track t.key) {
-              <mat-option [value]="t.key">{{ t.key }} <span class="na-muted">({{ t.integration }}, {{ t.channel }}{{ t.enabled ? '' : ', disabled' }})</span></mat-option>
-            }
-            <!-- A target the route names that no integration lists (or that couldn't be read): an option still, so toggling another keeps it. -->
-            @for (k of unlisted(); track k) { <mat-option [value]="k">{{ k }} <span class="na-muted">(not found)</span></mat-option> }
-          </mat-select></mat-form-field>
-        <na-field-errors [messages]="errors.at('/targets')" pointer="/targets" />
+        <div class="na-form-grid">
+          <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Targets</mat-label>
+            <mat-select name="targets" [(ngModel)]="draft.targets" multiple required data-testid="route-targets" [naError]="errors" naPointer="/targets">
+              @for (t of targets(); track t.key) {
+                <mat-option [value]="t.key">{{ t.key }} <span class="na-muted">({{ t.integration }}, {{ t.channel }}{{ t.enabled ? '' : ', disabled' }})</span></mat-option>
+              }
+              <!-- A target the route names that no integration lists (or that couldn't be read): an option still, so toggling another keeps it. -->
+              @for (k of unlisted(); track k) { <mat-option [value]="k">{{ k }} <span class="na-muted">(not found)</span></mat-option> }
+            </mat-select>
+            @for (e of errors.of('/targets'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
+        </div>
         @if (integrations.error()) {
           <p class="na-error" data-testid="route-targets-error">The targets couldn't be read: {{ targetsError() }}</p>
         } @else if (!targets().length && !integrations.isLoading()) {
@@ -117,7 +121,6 @@ export class RoutesPage {
     const listed = new Set(this.targets().map(t => t.key));
     return this.draft.targets.filter(k => !listed.has(k));
   }
-  protected readonly keyPattern = KEY_PATTERN;
   protected readonly shown = ['/key', '/match', '/targets', '/digestSeconds'];
   protected readonly errors = new FormErrors();
   protected readonly editing = signal<{ isNew: boolean } | null>(null);
@@ -161,28 +164,23 @@ export class RoutesPage {
 
   protected save(): void {
     const key = this.draft.key.trim();
-    if (!key) {
+    const isNew = !!this.editing()?.isNew;
+    const digest = Number(this.draft.digestSeconds);
+    const issues = validateAll([
       // Sent empty, the PUT would go to the routes collection, which takes none.
-      this.errors.local('/key', 'Give the route a key.');
-      return;
-    }
-    // A PUT creates or replaces: a new route is checked against the list, which must have been read.
-    if (this.editing()?.isNew && !this.routes.hasValue()) {
-      this.errors.local('/key', "The routes couldn't be read, so this key can't be checked as new: refresh first.");
-      return;
-    }
-    if (this.editing()?.isNew && this.routes.value()?.some(r => r.key === key)) {
-      this.errors.local('/key', `There is a route ${key} already: edit it instead.`);
-      return;
-    }
-    const digest = Number(this.draft.digestSeconds ?? 0);
-    if (!Number.isInteger(digest) || digest < 0 || digest > 3600) {
-      this.errors.local('/digestSeconds', 'The digest window is 0 to 3600 whole seconds.');
-      return;
-    }
-    const problem = matchProblem(this.draft.match);
-    if (problem) {
-      this.errors.local(problem.pointer, problem.message);
+      () => isNew ? keyIssue(key, 'route') : null,
+      // A PUT creates or replaces: a new route is checked against the list, which must have been read.
+      () => isNew && key && !this.routes.hasValue()
+        ? { pointer: '/key', message: "Key: the routes couldn't be read, so this key can't be checked as new; refresh first." } : null,
+      () => isNew && key && this.routes.value()?.some(r => r.key === key)
+        ? { pointer: '/key', message: 'Key: there is a route with this key already; edit it instead.' } : null,
+      () => isBlankNumber(this.draft.digestSeconds) || !Number.isInteger(digest) || digest < 0 || digest > 3600
+        ? { pointer: '/digestSeconds', message: 'Digest window: a whole number of seconds, 0 to 3600.' } : null,
+      () => matchIssues(this.draft.match),
+      () => this.draft.targets.length ? null : { pointer: '/targets', message: 'Targets: choose at least one.' },
+    ]);
+    if (issues.length) {
+      this.errors.localAll(issues);
       return;
     }
     submit(this.api.putRoute(this.tenantId(), key, { match: matchOf(this.draft.match), targets: this.draft.targets, enabled: this.draft.enabled,

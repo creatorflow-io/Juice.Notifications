@@ -8,7 +8,7 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { NotificationsAdminApi } from '../core/api.service';
 import { Topic } from '../core/models';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, rowAction, submit, whenChanged } from '../shared/forms';
+import { FormErrors, FormErrorsComponent, NaFieldError, Pending, rowAction, submit, validateAll, whenChanged } from '../shared/forms';
 import { MembersComponent, MembersOf } from '../shared/people';
 import { apiResource } from '../shared/resource';
 import { problemText } from '../shared/ui';
@@ -22,7 +22,7 @@ const TOPIC_KEY_PATTERN = '[A-Za-z0-9][A-Za-z0-9._:\\-]{0,199}';
  */
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, FormsModule, MatButtonModule, MatCheckboxModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, FieldErrorsComponent,
+  imports: [DatePipe, FormsModule, MatButtonModule, MatCheckboxModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, NaFieldError,
     FormErrorsComponent, MembersComponent],
   template: `
     <div class="na-head"><h1>Topics</h1><span class="na-spacer"></span>
@@ -33,16 +33,19 @@ const TOPIC_KEY_PATTERN = '[A-Za-z0-9][A-Za-z0-9._:\\-]{0,199}';
     @if (editing(); as e) {
       <form class="na-form na-card" (ngSubmit)="save()" data-testid="topic-form">
         <h2>{{ e.isNew ? 'New topic' : 'Topic ' + draft.key }}</h2>
-        <div class="na-filters">
+        <div class="na-form-grid">
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Key</mat-label>
-            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required [pattern]="keyPattern" spellcheck="false" data-testid="topic-key">
-            <mat-hint>Such as billing.service:alerts.</mat-hint></mat-form-field>
+            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required spellcheck="false" data-testid="topic-key"
+              [naError]="errors" naPointer="/key">
+            <mat-hint>Such as billing.service:alerts.</mat-hint>
+            @for (m of errors.of('/key'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Name</mat-label>
-            <input matInput name="name" [(ngModel)]="draft.name" required maxlength="200" data-testid="topic-name"></mat-form-field>
+            <input matInput name="name" [(ngModel)]="draft.name" required data-testid="topic-name" [naError]="errors" naPointer="/name">
+            @for (m of errors.of('/name'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
           <mat-checkbox name="selfService" [(ngModel)]="draft.selfService" data-testid="topic-self-service">People join and leave it themselves</mat-checkbox>
         </div>
-        <na-field-errors [messages]="errors.at('/key')" pointer="/key" />
-        <na-field-errors [messages]="errors.at('/name')" pointer="/name" />
         <na-form-errors [errors]="errors" [shown]="['/key', '/name']" [reload]="reloadFn" />
         <div class="na-actions">
           <button mat-flat-button type="submit" [disabled]="busy()" data-testid="topic-save">{{ e.isNew ? 'Add' : 'Save' }}</button>
@@ -87,7 +90,6 @@ export class TopicsPage {
 
   protected readonly topics = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.topics(params) });
   protected readonly error = computed(() => problemText(this.topics.error()));
-  protected readonly keyPattern = TOPIC_KEY_PATTERN;
   protected readonly example = '{ "kind": "topic", "key": "billing.service:alerts", "resolver": "…" }';
   protected readonly errors = new FormErrors();
   protected readonly editing = signal<{ isNew: boolean } | null>(null);
@@ -143,23 +145,22 @@ export class TopicsPage {
   protected save(): void {
     const key = this.draft.key.trim();
     const isNew = this.editing()?.isNew;
-    if (!key) {
-      // Sent empty, the PUT would go to the topics collection, which takes none.
-      this.errors.local('/key', 'Give the topic a key.');
-      return;
-    }
-    // A PUT adds or changes: a new topic is checked against the list, which must have been read.
-    if (isNew && !this.topics.hasValue()) {
-      this.errors.local('/key', "The topics couldn't be read, so this key can't be checked as new: refresh first.");
-      return;
-    }
-    if (isNew && this.topics.value()?.some(t => t.key === key)) {
-      this.errors.local('/key', `There is a topic ${key} already: edit it instead.`);
-      return;
-    }
     const name = this.draft.name.trim();
-    if (!name) {
-      this.errors.local('/name', 'Give the topic a name.');
+    const issues = validateAll([
+      // Sent empty, the PUT would go to the topics collection, which takes none.
+      () => !key ? { pointer: '/key', message: 'Key: give the topic a key, such as billing.service:alerts (letters, digits and . _ : -, up to 200).' }
+        : isNew && !new RegExp(`^(?:${TOPIC_KEY_PATTERN})$`).test(key)
+          ? { pointer: '/key', message: 'Key: letters, digits and . _ : - only, starting with a letter or digit, up to 200 characters.' } : null,
+      // A PUT adds or changes: a new topic is checked against the list, which must have been read.
+      () => isNew && key && !this.topics.hasValue()
+        ? { pointer: '/key', message: "Key: the topics couldn't be read, so this key can't be checked as new; refresh first." } : null,
+      () => isNew && key && this.topics.value()?.some(t => t.key === key)
+        ? { pointer: '/key', message: 'Key: there is a topic with this key already; edit it instead.' } : null,
+      () => name ? (name.length > 200 ? { pointer: '/name', message: `Name: up to 200 characters (${name.length} typed).` } : null)
+        : { pointer: '/name', message: 'Name: give the topic a name, up to 200 characters.' },
+    ]);
+    if (issues.length) {
+      this.errors.localAll(issues);
       return;
     }
     this.pending.track(submit(this.api.putTopic(this.tenantId(), key, { name, selfService: this.draft.selfService }), this.busy, this.errors, () => {

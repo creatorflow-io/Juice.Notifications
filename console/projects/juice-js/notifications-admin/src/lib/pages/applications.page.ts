@@ -7,9 +7,22 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { Router, RouterLink } from '@angular/router';
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
 import { NotificationsAdminApi } from '../core/api.service';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, submit } from '../shared/forms';
+import { FieldIssue, FormErrors, FormErrorsComponent, NaFieldError, Pending, submit, validateAll } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { problemText } from '../shared/ui';
+
+/** What an application's name, client id and broker user must be (the API's rules, said on their fields before anything is sent). */
+export function applicationIssues(d: { name: string; clientId: string; brokerUser: string }): FieldIssue[] {
+  const printable = /^[\x21-\x7E]{1,200}$/;
+  const issues: FieldIssue[] = [];
+  if (!d.name) issues.push({ pointer: '/name', message: 'Name: give the application a name, up to 200 characters.' });
+  else if (d.name.length > 200) issues.push({ pointer: '/name', message: `Name: up to 200 characters (${d.name.length} typed).` });
+  if (!printable.test(d.clientId)) issues.push({ pointer: '/clientId', message: 'Client id: 1–200 printable characters without spaces.' });
+  if (d.brokerUser && !printable.test(d.brokerUser)) {
+    issues.push({ pointer: '/brokerUser', message: 'Broker user: 1–200 printable characters without spaces; empty for none.' });
+  }
+  return issues;
+}
 
 /** An application's key, as the API takes it: its types' namespace. */
 export const APPLICATION_KEY_PATTERN = '[a-z][a-z0-9\\-]{1,62}';
@@ -23,7 +36,7 @@ export const SERVICE_APPLICATION = 'notifications';
  */
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, RouterLink, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, FieldErrorsComponent,
+  imports: [FormsModule, RouterLink, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, NaFieldError,
     FormErrorsComponent],
   styles: `:host { display: block; padding: 16px; }`,
   template: `
@@ -35,20 +48,29 @@ export const SERVICE_APPLICATION = 'notifications';
     @if (adding()) {
       <form class="na-form na-card" (ngSubmit)="add()" data-testid="application-form">
         <h2>New application</h2>
-        <div class="na-filters">
+        <div class="na-form-grid">
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Key</mat-label>
-            <input matInput name="key" [(ngModel)]="draft.key" required [pattern]="keyPattern" spellcheck="false" data-testid="application-key">
-            <mat-hint>Lowercase: its types' namespace. Fixed once added.</mat-hint></mat-form-field>
+            <input matInput name="key" [(ngModel)]="draft.key" required spellcheck="false" data-testid="application-key" [naError]="errors" naPointer="/key">
+            <mat-hint>Lowercase: its types' namespace. Fixed once added.</mat-hint>
+            @for (e of errors.of('/key'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Name</mat-label>
-            <input matInput name="name" [(ngModel)]="draft.name" required maxlength="200" data-testid="application-name"></mat-form-field>
+            <input matInput name="name" [(ngModel)]="draft.name" required data-testid="application-name" [naError]="errors" naPointer="/name">
+            @for (e of errors.of('/name'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Client id</mat-label>
-            <input matInput name="clientId" [(ngModel)]="draft.clientId" required spellcheck="false" data-testid="application-client-id">
-            <mat-hint>The OAuth client it signs in as.</mat-hint></mat-form-field>
+            <input matInput name="clientId" [(ngModel)]="draft.clientId" required spellcheck="false" data-testid="application-client-id"
+              [naError]="errors" naPointer="/clientId">
+            <mat-hint>The OAuth client it signs in as.</mat-hint>
+            @for (e of errors.of('/clientId'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Broker user</mat-label>
-            <input matInput name="brokerUser" [(ngModel)]="draft.brokerUser" spellcheck="false" data-testid="application-broker-user">
-            <mat-hint>Optional: the RabbitMQ user it publishes as.</mat-hint></mat-form-field>
+            <input matInput name="brokerUser" [(ngModel)]="draft.brokerUser" spellcheck="false" data-testid="application-broker-user"
+              [naError]="errors" naPointer="/brokerUser">
+            <mat-hint>Optional: the RabbitMQ user it publishes as.</mat-hint>
+            @for (e of errors.of('/brokerUser'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
         </div>
-        @for (p of fields; track p) { <na-field-errors [messages]="errors.at(p)" [pointer]="p" /> }
         <na-form-errors [errors]="errors" [shown]="fields" [reload]="reloadFn" />
         <div class="na-actions">
           <button mat-flat-button type="submit" [disabled]="busy()" data-testid="application-save">Add</button>
@@ -82,7 +104,6 @@ export class ApplicationsPage {
 
   protected readonly apps = apiResource({ params: () => true, stream: () => this.api.applications() });
   protected readonly error = computed(() => problemText(this.apps.error()));
-  protected readonly keyPattern = APPLICATION_KEY_PATTERN;
   protected readonly serviceApp = SERVICE_APPLICATION;
   protected readonly fields = ['/key', '/name', '/clientId', '/brokerUser'];
   protected readonly errors = new FormErrors();
@@ -115,24 +136,14 @@ export class ApplicationsPage {
   protected add(): void {
     const d = { key: this.draft.key.trim(), name: this.draft.name.trim(), clientId: this.draft.clientId.trim(), brokerUser: this.draft.brokerUser.trim() };
     // The API names no field in its refusals of these: each is said on its own field first.
-    if (!new RegExp(`^${APPLICATION_KEY_PATTERN}$`).test(d.key)) {
-      this.errors.local('/key', 'The key is 2–63 lowercase letters, digits or hyphens, starting with a letter.');
-      return;
-    }
-    if (this.apps.value()?.some(a => a.key === d.key)) {
-      this.errors.local('/key', `There is an application ${d.key} already.`);
-      return;
-    }
-    if (!d.name) {
-      this.errors.local('/name', 'Give the application a name.');
-      return;
-    }
-    if (!/^[\x21-\x7E]{1,200}$/.test(d.clientId)) {
-      this.errors.local('/clientId', 'The client id is 1–200 printable characters without spaces.');
-      return;
-    }
-    if (d.brokerUser && !/^[\x21-\x7E]{1,200}$/.test(d.brokerUser)) {
-      this.errors.local('/brokerUser', 'The broker user is 1–200 printable characters without spaces; empty for none.');
+    const issues = validateAll([
+      () => !new RegExp(`^${APPLICATION_KEY_PATTERN}$`).test(d.key)
+        ? { pointer: '/key', message: 'Key: 2–63 lowercase letters, digits or hyphens, starting with a letter.' } : null,
+      () => this.apps.value()?.some(a => a.key === d.key) ? { pointer: '/key', message: 'Key: there is an application with this key already.' } : null,
+      () => applicationIssues(d),
+    ]);
+    if (issues.length) {
+      this.errors.localAll(issues);
       return;
     }
     this.pending.track(submit(this.api.createApplication({ ...d, brokerUser: d.brokerUser || null }), this.busy, this.errors, a => {

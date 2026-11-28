@@ -8,7 +8,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { map } from 'rxjs';
 import { NotificationsAdminApi } from '../core/api.service';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, submit, whenChanged } from '../shared/forms';
+import { FormErrors, FormErrorsComponent, NaFieldError, Pending, submit, validateAll, whenChanged } from '../shared/forms';
 import { LOCAL_SOURCE, personName } from '../shared/people';
 import { cursorList } from '../shared/resource';
 import { TenantLinkPipe, problemText } from '../shared/ui';
@@ -26,7 +26,7 @@ const LOCAL_ID_PATTERN = '[A-Za-z0-9][A-Za-z0-9._@+\\-]{0,199}';
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, FormsModule, RouterLink, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, TenantLinkPipe,
-    FieldErrorsComponent, FormErrorsComponent],
+    NaFieldError, FormErrorsComponent],
   template: `
     <div class="na-head"><h1>Subscribers</h1><span class="na-spacer"></span>
       @if (!adding()) { <button mat-flat-button type="button" (click)="startAdding()" data-testid="local-user-new">New local user</button> }
@@ -36,17 +36,25 @@ const LOCAL_ID_PATTERN = '[A-Za-z0-9][A-Za-z0-9._@+\\-]{0,199}';
         <h2>New local user</h2>
         <p class="na-hint">Someone the tenant keeps itself (no identity directory): requests name them as <code>{{ example }}</code> through a
           <code>local</code> resolver.</p>
-        <div class="na-filters">
+        <div class="na-form-grid">
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Id</mat-label>
-            <input matInput name="id" [(ngModel)]="draft.id" required [pattern]="idPattern" spellcheck="false" data-testid="local-user-id"></mat-form-field>
+            <input matInput name="id" [(ngModel)]="draft.id" required spellcheck="false" data-testid="local-user-id" [naError]="errors" naPointer="/id">
+            @for (e of errors.of('/id'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Name</mat-label>
-            <input matInput name="name" [(ngModel)]="draft.name" maxlength="200" data-testid="local-user-name"></mat-form-field>
-          <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Locale</mat-label>
-            <input matInput name="locale" [(ngModel)]="draft.locale" maxlength="35" placeholder="en" data-testid="local-user-locale"></mat-form-field>
+            <input matInput name="name" [(ngModel)]="draft.name" data-testid="local-user-name" [naError]="errors" naPointer="/name">
+            @for (e of errors.of('/name'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
+          <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Locale</mat-label>
+            <input matInput name="locale" [(ngModel)]="draft.locale" placeholder="en" data-testid="local-user-locale" [naError]="errors" naPointer="/locale">
+            @for (e of errors.of('/locale'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Time zone</mat-label>
-            <input matInput name="timeZone" [(ngModel)]="draft.timeZone" maxlength="64" placeholder="Asia/Ho_Chi_Minh" data-testid="local-user-time-zone"></mat-form-field>
+            <input matInput name="timeZone" [(ngModel)]="draft.timeZone" placeholder="Asia/Ho_Chi_Minh" data-testid="local-user-time-zone"
+              [naError]="errors" naPointer="/timeZone">
+            @for (e of errors.of('/timeZone'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
         </div>
-        @for (p of fields; track p) { <na-field-errors [messages]="errors.at(p)" [pointer]="p" /> }
         <na-form-errors [errors]="errors" [shown]="fields" />
         <div class="na-actions">
           <button mat-flat-button type="submit" [disabled]="busy()" data-testid="local-user-save">Add</button>
@@ -145,15 +153,24 @@ export class SubscribersPage {
   /** A new local user: the PUT would change one already there, so the id is looked up first. Then their page. */
   protected add(): void {
     const id = this.draft.id.trim();
-    if (!id) {
-      this.errors.local('/id', 'Give the local user an id: requests name them by it.');
+    const d = this.draft;
+    const issues = validateAll([
+      () => !id ? { pointer: '/id', message: 'Id: give the local user an id, as requests name them.' }
+        : !new RegExp(`^(?:${LOCAL_ID_PATTERN})$`).test(id)
+          ? { pointer: '/id', message: 'Id: letters, digits and . _ @ + - only, starting with a letter or digit, up to 200 characters.' } : null,
+      () => d.name.trim().length > 200 ? { pointer: '/name', message: `Name: up to 200 characters (${d.name.trim().length} typed).` } : null,
+      () => d.locale.trim().length > 35 ? { pointer: '/locale', message: `Locale: up to 35 characters (${d.locale.trim().length} typed).` } : null,
+      () => d.timeZone.trim().length > 64 ? { pointer: '/timeZone', message: `Time zone: up to 64 characters (${d.timeZone.trim().length} typed).` } : null,
+    ]);
+    if (issues.length) {
+      this.errors.localAll(issues);
       return;
     }
     const tenantId = this.tenantId();
     // At most two match: the local user, and a subscriber their identity is linked to (who comes first when the local user is merged in).
     this.pending.track(submit(this.api.subscribers(tenantId, { source: LOCAL_SOURCE, externalId: id, limit: 2 }), this.busy, this.errors, found => {
       if (found.some(s => s.source === LOCAL_SOURCE && s.externalId === id)) {
-        this.errors.local('/id', `There is a local user ${id} already: open them to change their details.`);
+        this.errors.local('/id', 'Id: there is a local user with this id already; open them to change their details.');
         return;
       }
       // Linked to someone as an alias: requests naming it reach them, and the API keeps it theirs.
@@ -162,7 +179,6 @@ export class SubscribersPage {
         this.errors.local('/id', `${LOCAL_SOURCE}:${id} is linked to ${personName(linked)}, who receives for it: unlink it on their page first.`);
         return;
       }
-      const d = this.draft;
       this.pending.track(submit(this.api.putLocalUser(tenantId, id, { name: d.name.trim() || null, locale: d.locale.trim() || null,
         timeZone: d.timeZone.trim() || null }), this.busy, this.errors, s => {
         this.adding.set(false);

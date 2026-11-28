@@ -11,7 +11,7 @@ import { map } from 'rxjs';
 import { NotificationsAdminApi } from '../core/api.service';
 import { Integration, Target } from '../core/models';
 import { NOTIFICATIONS_ADMIN_OPTIONS, under } from '../core/options';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, KEY_PATTERN, KIND_HINTS, SECRET_REF_HINT, managedNote, rowAction, submit, whenChanged } from '../shared/forms';
+import { FormErrors, FormErrorsComponent, KIND_HINTS, NaFieldError, SECRET_REF_HINT, keyIssue, managedNote, rowAction, submit, validateAll, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { Badge, TenantLinkPipe, problemText } from '../shared/ui';
 import { tenantRights } from '../shared/rights';
@@ -25,7 +25,7 @@ import { IntegrationForm } from './integration-form';
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, JsonPipe, FormsModule, RouterLink, MatButtonModule, MatCheckboxModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, Badge,
-    TenantLinkPipe, FieldErrorsComponent, FormErrorsComponent, IntegrationForm],
+    TenantLinkPipe, NaFieldError, FormErrorsComponent, IntegrationForm],
   template: `
     <div class="na-head">
       <a [routerLink]="['integrations'] | naTenant: tenantId()">Integrations</a><span class="na-muted">/</span>
@@ -75,19 +75,27 @@ import { IntegrationForm } from './integration-form';
           <p class="na-hint">Shared destinations routes name. {{ targetHint() }}</p>
           @if (editing(); as e) {
             <form class="na-form na-card" (ngSubmit)="saveTarget()" data-testid="target-form">
-              <div class="na-filters">
+              <div class="na-form-grid">
                 <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Key</mat-label>
-                  <input matInput name="targetKey" [(ngModel)]="target.key" [disabled]="!e.isNew" required [pattern]="keyPattern" data-testid="target-key"></mat-form-field>
+                  <input matInput name="targetKey" [(ngModel)]="target.key" [disabled]="!e.isNew" required data-testid="target-key"
+                    [naError]="targetErrors" naPointer="/key">
+                  @for (m of targetErrors.of('/key'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+                </mat-form-field>
                 <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Address</mat-label>
-                  <input matInput name="address" [(ngModel)]="target.address" spellcheck="false" data-testid="target-address"></mat-form-field>
+                  <input matInput name="address" [(ngModel)]="target.address" spellcheck="false" data-testid="target-address"
+                    [naError]="targetErrors" naPointer="/address">
+                  @for (m of targetErrors.of('/address'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+                </mat-form-field>
                 <mat-checkbox name="targetEnabled" [(ngModel)]="target.enabled" data-testid="target-enabled">Enabled</mat-checkbox>
               </div>
-              <na-field-errors [messages]="targetErrors.at('/key')" pointer="/key" />
-              <na-field-errors [messages]="targetErrors.at('/address')" pointer="/address" />
-              <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Or an address reference</mat-label>
-                <input matInput name="addressRef" [(ngModel)]="target.addressRef" autocomplete="off" spellcheck="false" data-testid="target-address-ref"></mat-form-field>
-              <p class="na-hint">For an address that is itself a secret (a webhook URL with a token in it). {{ secretRefHint }}</p>
-              <na-field-errors [messages]="targetErrors.at('/addressRef')" pointer="/addressRef" />
+              <div class="na-form-grid">
+                <mat-form-field subscriptSizing="dynamic" class="na-field-full"><mat-label>Or an address reference</mat-label>
+                  <input matInput name="addressRef" [(ngModel)]="target.addressRef" autocomplete="off" spellcheck="false" data-testid="target-address-ref"
+                    [naError]="targetErrors" naPointer="/addressRef">
+                  <mat-hint>For an address that is itself a secret (a webhook URL with a token in it). {{ secretRefHint }}</mat-hint>
+                  @for (m of targetErrors.of('/addressRef'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+                </mat-form-field>
+              </div>
               <na-form-errors [errors]="targetErrors" [shown]="['/key', '/address', '/addressRef']" [reload]="reloadFn" />
               <div class="na-actions">
                 <button mat-flat-button type="submit" [disabled]="busy()" data-testid="target-save">{{ e.isNew ? 'Add' : 'Save' }}</button>
@@ -145,7 +153,6 @@ export class IntegrationPage {
   protected readonly managed = computed(() => managedNote(this.integration.value()?.managedBy));
   protected readonly targetHint = computed(() => KIND_HINTS[this.integration.value()?.kind ?? '']?.target ?? '');
   protected readonly error = computed(() => problemText(this.integration.error() ?? this.providers.error()));
-  protected readonly keyPattern = KEY_PATTERN;
   protected readonly secretRefHint = SECRET_REF_HINT;
   protected readonly reloadFn = () => this.reload();
 
@@ -208,20 +215,23 @@ export class IntegrationPage {
   protected saveTarget(): void {
     const key = this.target.key.trim();
     const isNew = this.editing()?.isNew;
-    if (!key) {
-      // Sent empty, the PUT would go to the targets collection, which takes none.
-      this.targetErrors.local('/key', 'Give the target a key.');
-      return;
-    }
-    if (isNew && this.integration.value()?.targets.some(t => t.key === key)) {
-      this.targetErrors.local('/key', `This integration has a target ${key} already: edit it instead.`);
-      return;
-    }
     const address = this.target.address.trim();
     const addressRef = this.target.addressRef.trim();
-    // Neither sent keeps the stored address (the API's PUT keeps what isn't named): both emptied, the save would change nothing there.
-    if (!isNew && !address && !addressRef) {
-      this.targetErrors.local('/address', 'A target keeps an address: give one, or an address reference, to replace it.');
+    const kind = this.integration.value()?.kind;
+    const issues = validateAll([
+      // Sent empty, the PUT would go to the targets collection, which takes none.
+      () => isNew ? keyIssue(key, 'target') : null,
+      () => isNew && key && this.integration.value()?.targets.some(t => t.key === key)
+        ? { pointer: '/key', message: 'Key: this integration has a target with this key already; edit it instead.' } : null,
+      // Neither sent keeps the stored address (the API's PUT keeps what isn't named): both emptied, the save would change nothing there.
+      () => !address && !addressRef
+        ? { pointer: '/address', message: isNew ? 'Address: give an address, or an address reference.'
+          : 'Address: a target keeps an address; give one, or an address reference, to replace it.' } : null,
+      () => kind === 'webhook' && address && !/^https?:\/\/\S+$/i.test(address)
+        ? { pointer: '/address', message: 'Address: a webhook target is an http(s) URL, without spaces.' } : null,
+    ]);
+    if (issues.length) {
+      this.targetErrors.localAll(issues);
       return;
     }
     submit(this.api.putTarget(this.tenantId(), this.key(), key, { address: address || null, addressRef: addressRef || null, enabled: this.target.enabled }),

@@ -8,7 +8,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { RouterLink } from '@angular/router';
 import { NotificationsAdminApi } from '../core/api.service';
 import { TenantSettings } from '../core/models';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, submit, whenChanged } from '../shared/forms';
+import { FieldIssue, FormErrors, FormErrorsComponent, NaFieldError, Pending, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { TenantLinkPipe, problemText } from '../shared/ui';
 import { tenantRights } from '../shared/rights';
@@ -38,7 +38,7 @@ function drafted(s: TenantSettings): Draft {
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, FormsModule, RouterLink, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, TenantLinkPipe,
-    FieldErrorsComponent, FormErrorsComponent],
+    NaFieldError, FormErrorsComponent],
   template: `
     <div class="na-head"><h1>Settings</h1><span class="na-spacer"></span>
       <button mat-stroked-button type="button" (click)="reload()" data-testid="refresh">Refresh</button></div>
@@ -47,30 +47,32 @@ function drafted(s: TenantSettings): Draft {
     @if (settings.value(); as s) {
       <form class="na-form na-card" (ngSubmit)="save(s)" (input)="saved.set(false)" data-testid="settings-form">
         <h2>Storms</h2>
-        <div class="na-filters">
-          <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Storm threshold</mat-label>
+        <div class="na-form-grid">
+          <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Storm threshold</mat-label>
             <input matInput name="stormThreshold" [(ngModel)]="draft.stormThreshold" inputmode="numeric" [placeholder]="'' + s.defaultStormThreshold"
-              data-testid="settings-storm-threshold">
+              data-testid="settings-storm-threshold" [naError]="errors" naPointer="/stormThreshold">
             <mat-hint>Notifications a route takes in a minute before it storms; 0 never. Empty: the default, {{ s.defaultStormThreshold }}.</mat-hint>
+            @for (e of errors.of('/stormThreshold'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
           </mat-form-field>
         </div>
-        <na-field-errors [messages]="errors.at('/stormThreshold')" pointer="/stormThreshold" />
         <p class="na-hint">A storming route sends a digest instead of each notification. <a [routerLink]="['storms'] | naTenant: tenantId()">Storms</a>
           lists the current and past ones.</p>
 
         <h2>Retention</h2>
-        <div class="na-filters">
-          <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Requests and deliveries (days)</mat-label>
+        <div class="na-form-grid">
+          <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Requests and deliveries (days)</mat-label>
             <input matInput name="requestRetentionDays" [(ngModel)]="draft.requestRetentionDays" inputmode="numeric"
-              [placeholder]="'' + s.defaultRequestRetentionDays" data-testid="settings-request-days">
-            <mat-hint>Empty: the default, {{ s.defaultRequestRetentionDays }}.</mat-hint></mat-form-field>
-          <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Rendered content (days)</mat-label>
+              [placeholder]="'' + s.defaultRequestRetentionDays" data-testid="settings-request-days" [naError]="errors" naPointer="/requestRetentionDays">
+            <mat-hint>Empty: the default, {{ s.defaultRequestRetentionDays }}.</mat-hint>
+            @for (e of errors.of('/requestRetentionDays'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
+          <mat-form-field subscriptSizing="dynamic" class="na-field-lg"><mat-label>Rendered content (days)</mat-label>
             <input matInput name="contentRetentionDays" [(ngModel)]="draft.contentRetentionDays" inputmode="numeric"
-              [placeholder]="'' + s.defaultContentRetentionDays" data-testid="settings-content-days">
-            <mat-hint data-testid="settings-content-hint">{{ contentHint(s) }}</mat-hint></mat-form-field>
+              [placeholder]="'' + s.defaultContentRetentionDays" data-testid="settings-content-days" [naError]="errors" naPointer="/contentRetentionDays">
+            <mat-hint data-testid="settings-content-hint">{{ contentHint(s) }}</mat-hint>
+            @for (e of errors.of('/contentRetentionDays'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+          </mat-form-field>
         </div>
-        <na-field-errors [messages]="errors.at('/requestRetentionDays')" pointer="/requestRetentionDays" />
-        <na-field-errors [messages]="errors.at('/contentRetentionDays')" pointer="/contentRetentionDays" />
         <p class="na-hint">Older requests and deliveries are removed with their history; content (the rendered subject and body) goes first, so
           a delivery can be investigated after what it said is gone.</p>
         <na-form-errors [errors]="errors" [shown]="pointers" [reload]="reloadFn" />
@@ -144,27 +146,31 @@ export class SettingsPage {
 
   protected save(s: TenantSettings): void {
     this.saved.set(false);
-    const read = (f: Field, min: number, max: number, message: string): number | null | undefined => {
+    const issues: FieldIssue[] = [];
+    // Empty is the default (null); a number in range is itself; anything else is undefined, with its issue named for its field.
+    const read = (f: Field, label: string, min: number, max: number, rule: string): number | null | undefined => {
       const text = this.draft[f].trim();
       if (!text) return null;
       const n = Number(text);
       if (!/^\d+$/.test(text) || n < min || n > max) {
-        this.errors.local(`/${f}`, message);
+        issues.push({ pointer: `/${f}`, message: `${label}: ${rule}; empty for the default.` });
         return undefined;
       }
       return n;
     };
-    const stormThreshold = read('stormThreshold', 0, MAX_STORM_THRESHOLD,
-      `A whole number of notifications a minute, 0 (never storms) to ${MAX_STORM_THRESHOLD}; empty for the default.`);
-    if (stormThreshold === undefined) return;
-    const requestRetentionDays = read('requestRetentionDays', 1, MAX_RETENTION_DAYS, `Whole days, 1 to ${MAX_RETENTION_DAYS}; empty for the default.`);
-    if (requestRetentionDays === undefined) return;
+    const stormThreshold = read('stormThreshold', 'Storm threshold', 0, MAX_STORM_THRESHOLD,
+      `a whole number of notifications a minute, 0 (never storms) to ${MAX_STORM_THRESHOLD}`);
+    const requestRetentionDays = read('requestRetentionDays', 'Requests and deliveries', 1, MAX_RETENTION_DAYS, `whole days, 1 to ${MAX_RETENTION_DAYS}`);
     // Content goes no later than its request: at most the requests' days, as they will be (typed, or the default).
     const requestDays = requestRetentionDays ?? s.defaultRequestRetentionDays;
-    const contentRetentionDays = read('contentRetentionDays', 1, Math.min(requestDays, MAX_RETENTION_DAYS),
-      `Whole days, 1 to the requests' ${requestDays}; empty for the default.`);
-    if (contentRetentionDays === undefined) return;
-    this.pending.track(submit(this.api.putSettings(this.tenantId(), { stormThreshold, requestRetentionDays, contentRetentionDays }), this.busy,
+    const contentRetentionDays = read('contentRetentionDays', 'Rendered content', 1, Math.min(requestDays, MAX_RETENTION_DAYS),
+      `whole days, 1 to the requests' ${requestDays}`);
+    if (issues.length) {
+      this.errors.localAll(issues);
+      return;
+    }
+    this.pending.track(submit(this.api.putSettings(this.tenantId(), { stormThreshold: stormThreshold ?? null,
+      requestRetentionDays: requestRetentionDays ?? null, contentRetentionDays: contentRetentionDays ?? null }), this.busy,
       this.errors, () => {
         this.saved.set(true);
         this.settings.reload();
