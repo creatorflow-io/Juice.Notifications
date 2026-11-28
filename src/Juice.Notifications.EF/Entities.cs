@@ -509,6 +509,19 @@ namespace Juice.Notifications.Data
         public DateTimeOffset UpdatedAt { get; set; }
     }
 
+    /// <summary>
+    /// A role a signed-in person's token carried, seen at <see cref="SeenAt"/> (M54, an embedded host's inbox): only roles the host allowlists
+    /// are kept, and one not seen within the host's <c>RoleTtl</c> stops counting. Written by the inbox's sign-in, never audited (it moves with
+    /// each sign-in, and holds no setup).
+    /// </summary>
+    public sealed class SubscriberRole
+    {
+        public Guid TenantId { get; init; }
+        public Guid SubscriberId { get; init; }
+        public required string Role { get; init; }
+        public DateTimeOffset SeenAt { get; set; }
+    }
+
     public sealed class LocalGroupMember : Juice.Domain.IAuditable
     {
         public Guid TenantId { get; init; }
