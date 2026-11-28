@@ -30,15 +30,6 @@ namespace Juice.Notifications.Providers
         public string? ApiKeyVaultPrefix { get; set; }
 
         /// <summary>
-        /// A secret reference a producer's compatibility alias writes (rows <see cref="ManagedBy.WebhooksAlias"/>: phase-5 M46-3) may name only
-        /// environment variables with this prefix. The host sets it to its legacy API's own limits (Observability's <c>Webhooks:*</c>); unset
-        /// refuses them, and the API's limits never apply to alias rows, nor these to the API's.
-        /// </summary>
-        public string? AliasSecretEnvPrefix { get; set; }
-        /// <summary>A secret reference an alias writes may name only files directly in this folder; unset refuses files.</summary>
-        public string? AliasSecretDirectory { get; set; }
-
-        /// <summary>
         /// The SMTP servers email integrations may use, by name. Servers are part of the deployment: an integration names one, so the API can't
         /// point a connection at an arbitrary host.
         /// </summary>
@@ -118,46 +109,6 @@ namespace Juice.Notifications.Providers
             }
             return InFolder(reference[5..], directory);
         }
-
-        /// <summary>
-        /// A reference a producer's compatibility alias writes (M46-3): an environment variable with <see cref="DeliveryOptions.AliasSecretEnvPrefix"/>,
-        /// or a file directly in <see cref="DeliveryOptions.AliasSecretDirectory"/>, as its legacy API allowed. Nothing when they are unset, and
-        /// never a vault: legacy had none.
-        /// </summary>
-        public static bool IsAllowedFromAlias(string reference, DeliveryOptions options)
-        {
-            if (!IsLocal(reference))
-            {
-                return false;
-            }
-            if (reference.StartsWith("env:", StringComparison.Ordinal))
-            {
-                return options.AliasSecretEnvPrefix is { Length: > 0 } prefix && reference[4..].StartsWith(prefix, StringComparison.Ordinal)
-                    && reference.Length > 4 + prefix.Length;
-            }
-            return options.AliasSecretDirectory is { Length: > 0 } directory && InFolder(reference[5..], directory);
-        }
-
-        /// <summary>
-        /// Why the API's and the alias's secret limits overlap, or null when they don't (M46-3 review): one env prefix starting with the other (ignoring case: Windows env names do), or
-        /// the same folder, would let one writer name the other's secrets (an API admin, the alias's). The host fails to start on it.
-        /// </summary>
-        public static string? ScopeOverlap(DeliveryOptions options)
-        {
-            if (options.ApiSecretEnvPrefix is { Length: > 0 } api && options.AliasSecretEnvPrefix is { Length: > 0 } alias
-                && (api.StartsWith(alias, StringComparison.OrdinalIgnoreCase) || alias.StartsWith(api, StringComparison.OrdinalIgnoreCase)))
-            {
-                return $"Delivery:ApiSecretEnvPrefix ({api}) and Delivery:AliasSecretEnvPrefix ({alias}) overlap: one starts with the other, so one writer could name the other's secrets. Give them distinct prefixes.";
-            }
-            if (options.ApiSecretDirectory is { Length: > 0 } apiFolder && options.AliasSecretDirectory is { Length: > 0 } aliasFolder
-                && string.Equals(Folder(apiFolder), Folder(aliasFolder), StringComparison.OrdinalIgnoreCase))
-            {
-                return $"Delivery:ApiSecretDirectory and Delivery:AliasSecretDirectory are the same folder ({apiFolder}), so one writer could name the other's secrets. Give them distinct folders.";
-            }
-            return null;
-        }
-
-        private static string Folder(string directory) => Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
         private static bool InFolder(string path, string directory)
             => Path.IsPathRooted(path) && !path.Contains("..", StringComparison.Ordinal)

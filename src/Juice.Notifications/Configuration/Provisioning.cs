@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Juice.EF.Extensions;
 using Juice.MediatR;
 using Juice.Notifications.Data;
+using Juice.Notifications.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -74,7 +75,7 @@ namespace Juice.Notifications.Configuration
     /// </list>
     /// </summary>
     public sealed class ConfigurationProvisioner(IServiceScopeFactory scopes, IOptions<ProvisioningOptions> options, TimeProvider clock,
-        ILogger<ConfigurationProvisioner> logger) : IHostedService
+        ILogger<ConfigurationProvisioner> logger, NotificationsHosting? hosting = null) : IHostedService
     {
         /// <summary>Who provisioned changes are recorded as.</summary>
         public const string Actor = "deployment-config";
@@ -96,7 +97,13 @@ namespace Juice.Notifications.Configuration
             await using (var scope = scopes.CreateAsyncScope())
             {
                 var db = scope.ServiceProvider.GetRequiredService<NotificationsDbContext>();
-                owning = await db.Integrations.Where(i => i.ManagedBy == ManagedBy.Configuration).Select(i => i.TenantId)
+                // A schema not migrated (Database:Migrate off, nothing migrated it) is said in words, not as a missing table.
+                if ((await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToList() is { Count: > 0 } pending)
+                {
+                    throw new InvalidOperationException($"The notifications schema isn't migrated ({pending.Count} migration(s) pending, the next is {pending[0]}): "
+                        + "set Database:Migrate, or migrate it before the host starts. Nothing was provisioned.");
+                }
+                owning =await db.Integrations.Where(i => i.ManagedBy == ManagedBy.Configuration).Select(i => i.TenantId)
                     .Union(db.IntegrationTargets.Where(t => t.ManagedBy == ManagedBy.Configuration).Select(t => t.TenantId))
                     .Union(db.Routes.Where(r => r.ManagedBy == ManagedBy.Configuration).Select(r => r.TenantId))
                     .Union(db.Allowlist.Where(a => a.ManagedBy == ManagedBy.Configuration).Select(a => a.TenantId))
@@ -115,6 +122,12 @@ namespace Juice.Notifications.Configuration
                 return;
             }
             var listed = Load(options.Value.Path).Tenants ?? [];
+            // An embedded host has one tenant: a file naming another is refused before anything is written, never half-applied or skipped.
+            if (hosting is { Mode: NotificationsMode.Embedded, EmbeddedTenantId: { } own } && listed.Keys.Where(k => k != own).Order().ToList() is { Count: > 0 } foreign)
+            {
+                throw new InvalidOperationException($"Provisioning:Path '{options.Value.Path}' names tenant {foreign[0]}, but this embedded host's tenant is {own}; "
+                    + "the file may name only the host's tenant. Nothing was provisioned.");
+            }
             // Tenants the file lists, and tenants it no longer lists that still have rows it owned.
             HashSet<Guid> tenants = [.. listed.Keys, .. owning];
             var changes = 0;

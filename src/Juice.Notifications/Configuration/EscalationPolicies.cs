@@ -217,7 +217,7 @@ namespace Juice.Notifications.Configuration
                 };
                 db.EscalationPolicies.Add(existing);
             }
-            // A change of owner is a change too (a takeover: alias-config over webhooks-alias, configuration over api), as for the other kinds.
+            // A change of owner is a change too (a takeover: configuration over api), as for the other kinds.
             else if ((existing.DefinitionHash, existing.ManagedBy) != (hash, managedBy))
             {
                 (existing.Steps, existing.StopOnAcknowledge, existing.DefinitionHash, existing.UpdatedAt) = (steps, stop, hash, now);

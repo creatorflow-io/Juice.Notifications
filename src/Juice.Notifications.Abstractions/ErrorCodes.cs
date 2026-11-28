@@ -54,12 +54,7 @@ namespace Juice.Notifications
         public const string InvalidConfiguration = "invalid_configuration";
         /// <summary>The row comes from the deployment's configuration (ManagedBy = config); change it there.</summary>
         public const string ManagedByConfiguration = "managed_by_configuration";
-        /// <summary>
-        /// The row belongs to a producer's compatibility alias (ManagedBy = webhooks-alias, phase 5 M46) until cutover; change it through the
-        /// producer's own API.
-        /// </summary>
-        public const string ManagedByAlias = "managed_by_alias";
-        /// <summary>The row was made through the API; the webhooks alias (phase 5 M46) leaves it alone.</summary>
+        /// <summary>The row was made through the API; the deployment's configuration takes it over, nothing else changes it.</summary>
         public const string ManagedByApi = "managed_by_api";
         /// <summary>Deliveries went through the integration; disable it instead of deleting it.</summary>
         public const string IntegrationInUse = "integration_in_use";

@@ -98,14 +98,14 @@ namespace Juice.Notifications.IntegrationTests
             Assert.False(dry);
         }
 
-        /// <summary>The webhooks alias's rows (ManagedBy.WebhooksAlias, phase 5 M46) fit every table that records who owns a row (six: the five widened to 20, and escalation policies).</summary>
+        /// <summary>A configuration-owned row fits every table that records who owns a row (six: the five widened to 20, and escalation policies).</summary>
         [Fact]
-        public async Task A_row_owned_by_the_webhooks_alias_is_stored_and_read_in_every_owned_table()
+        public async Task A_row_owned_by_the_configuration_is_stored_and_read_in_every_owned_table()
         {
             LocalStack.RequireAvailable();
             var ct = TestContext.Current.CancellationToken;
             var (tenant, suffix) = (TwoTenantDatabase.TenantA, Guid.NewGuid().ToString("N")[..8]);
-            var alias = ManagedBy.WebhooksAlias;
+            var alias = ManagedBy.Configuration;
             var integration = Seed.Integration(tenant, "alias-" + suffix);
             integration.ManagedBy = alias;
             await using (var db = fixture.Database.Context())

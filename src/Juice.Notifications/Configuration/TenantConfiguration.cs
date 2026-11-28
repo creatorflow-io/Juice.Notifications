@@ -25,19 +25,18 @@ namespace Juice.Notifications.Configuration
     public sealed record AllowlistView(string Destination, IReadOnlyList<int> Ports, string ManagedBy, DateTimeOffset UpdatedAt);
 
     // The Put commands come from the API, where a field left out keeps its stored value, or from an in-process owner (ManagedBy): configuration
-    // provisioning, where the file states the whole definition, may change a row the file owns and takes over one the API made; the webhooks alias
-    // (phase 5 M46) writes through the API's rules but owns its rows. A Put that changes nothing leaves the row as it was: no new UpdatedAt, no
+    // provisioning, where the file states the whole definition, may change a row the file owns and takes over one the API made. A Put that changes nothing leaves the row as it was: no new UpdatedAt, no
     // audit record.
 
     /// <summary>
     /// A setup write and who makes it (phase-5 decision G1). <see cref="ManagedBy"/> is set only by an in-process caller: the API builds its
     /// commands field by field and never sets it, so null is the API. Each owner changes and deletes only its own rows (configuration also takes
-    /// over the API's); another owner's row is refused with <see cref="ErrorCodes.ManagedByConfiguration"/>, <see cref="ErrorCodes.ManagedByAlias"/>
+    /// over the API's); another owner's row is refused with <see cref="ErrorCodes.ManagedByConfiguration"/>
     /// or <see cref="ErrorCodes.ManagedByApi"/>.
     /// </summary>
     public interface IOwnedSetupWrite
     {
-        /// <summary><see cref="Notifications.ManagedBy.Configuration"/>, <see cref="Notifications.ManagedBy.WebhooksAlias"/>, or null for the API.</summary>
+        /// <summary><see cref="Notifications.ManagedBy.Configuration"/>, or null for the API.</summary>
         string? ManagedBy { get; }
     }
 
@@ -50,7 +49,7 @@ namespace Juice.Notifications.Configuration
         internal bool Provisioned => ManagedBy == Notifications.ManagedBy.Configuration;
 
         /// <summary>
-        /// The id a new integration takes (phase-5 M46-2): an in-process caller's, as the webhooks alias keeps a legacy endpoint's id. The API
+        /// The id a new integration takes (phase-5 M46-2): an in-process caller's, to keep an id it already holds. The API
         /// never sets it; null makes a new one. Only a create takes it: an existing integration keeps its own, and a different one is refused, as
         /// is one another integration of the tenant has.
         /// </summary>
@@ -125,13 +124,11 @@ namespace Juice.Notifications.Configuration
             => provisioned ? IsProvisionedSecretRef(value) : IsSecretRef(value, options);
 
         /// <summary>
-        /// A secret named by whoever writes the row (M46-3): the deployment's configuration any, a producer's compatibility alias only within the
-        /// alias limits (<see cref="Providers.SecretReferences.IsAllowedFromAlias"/>), and the API, or anyone else, only within the API's.
+        /// A secret named by whoever writes the row: the deployment's configuration any, the API, or anyone else, only within the API's.
         /// </summary>
         internal static bool IsSecretRef(string? value, Providers.DeliveryOptions options, string? owner) => owner switch
         {
             ManagedBy.Configuration => IsProvisionedSecretRef(value),
-            ManagedBy.WebhooksAlias or ManagedBy.AliasConfig => value is null || value.Length <= 500 && !value.Contains('\0') && Providers.SecretReferences.IsAllowedFromAlias(value, options),
             _ => IsSecretRef(value, options),
         };
 
@@ -149,10 +146,7 @@ namespace Juice.Notifications.Configuration
             => IsSecretRef(reference, options, owner) ? null : new FieldError(pointer, $"{what} is one only the deployment may name: {remedy}");
 
         internal static string SecretRefRule(string what, Providers.DeliveryOptions options, string? owner)
-            => owner is ManagedBy.WebhooksAlias or ManagedBy.AliasConfig
-                ? $"{what} is named, never sent: " + (options.AliasSecretEnvPrefix is { Length: > 0 } p ? $"env:{p}NAME" : "no environment variable")
-                    + (options.AliasSecretDirectory is { Length: > 0 } ? ", or file: in the alias's secret folder" : "") + " (the alias's limits, Delivery:AliasSecret*)."
-                : SecretRefRule(what, options, owner == ManagedBy.Configuration);
+            => SecretRefRule(what, options, owner == ManagedBy.Configuration);
 
         internal static string SecretRefRule(string what, Providers.DeliveryOptions options, bool provisioned)
             => provisioned ? $"{what} is named: env:NAME, file:/path, vault:path#field or keyvault:name."
@@ -322,33 +316,17 @@ namespace Juice.Notifications.Configuration
         /// delete a row <paramref name="owner"/> keeps (phase-5 decision G1); null when it may. Each owner keeps to its own rows; configuration
         /// also takes over the API's, as the provisioning file always has. The service's own rows are refused by their own check.
         /// </summary>
-        internal static Outcome<T>? Owned<T>(string? owner, string? caller, string what) => Owned<T>(owner, caller, what, takeover: true);
-
-        /// <summary>
-        /// A write under another row: the integration of a target. Where the alias's configuration is the caller it must own the integration
-        /// itself: the takeover of the alias's API rows is for the definition of an endpoint (its PutIntegration), not for a target put under an
-        /// integration just handed back (<c>webhooks-alias</c>). Other callers keep the target's own check.
-        /// </summary>
-        internal static Outcome<T>? OwnedIntegrationOfTarget<T>(string? integrationOwner, string? caller, string integrationKey)
-            => Caller(caller) == ManagedBy.AliasConfig ? Owned<T>(integrationOwner, caller, "integration " + integrationKey, takeover: false) : null;
-
-        private static Outcome<T>? Owned<T>(string? owner, string? caller, string what, bool takeover)
+        internal static Outcome<T>? Owned<T>(string? owner, string? caller, string what)
         {
             var by = Caller(caller);
-            // Configuration takes over the API's rows, as the provisioning file always has; the alias's configuration takes over the alias's (an
-            // endpoint first made through the producer's API, then declared in its configuration), as legacy's provisioning took over its API rows.
-            if (owner is null || owner == by || owner == ManagedBy.Service || owner == ManagedBy.Api && by == ManagedBy.Configuration
-                || takeover && owner == ManagedBy.WebhooksAlias && by == ManagedBy.AliasConfig)
+            // Configuration takes over the API's rows, as the provisioning file always has.
+            if (owner is null || owner == by || owner == ManagedBy.Service || owner == ManagedBy.Api && by == ManagedBy.Configuration)
             {
                 return null;
             }
             return owner switch
             {
                 ManagedBy.Configuration => ConfigManaged<T>(what),
-                ManagedBy.AliasConfig => Outcome<T>.Conflict(ErrorCodes.ManagedByConfiguration,
-                    $"The {what} comes from the producer's deployment configuration (the webhooks alias's); change it there."),
-                ManagedBy.WebhooksAlias => Outcome<T>.Conflict(ErrorCodes.ManagedByAlias,
-                    $"The {what} belongs to the webhooks alias until cutover; change it through /webhooks."),
                 _ => Outcome<T>.Conflict(ErrorCodes.ManagedByApi, $"The {what} was made through the API; it isn't {by}'s to change."),
             };
         }
@@ -357,8 +335,8 @@ namespace Juice.Notifications.Configuration
         internal static string Caller(string? managedBy) => managedBy switch
         {
             null or ManagedBy.Api => ManagedBy.Api,
-            ManagedBy.Configuration or ManagedBy.WebhooksAlias or ManagedBy.AliasConfig => managedBy,
-            _ => throw new ArgumentException($"A setup write is made by the API (null), {ManagedBy.Configuration}, {ManagedBy.WebhooksAlias} or {ManagedBy.AliasConfig}, not '{managedBy}'.", nameof(managedBy)),
+            ManagedBy.Configuration => managedBy,
+            _ => throw new ArgumentException($"A setup write is made by the API (null) or {ManagedBy.Configuration}, not '{managedBy}'.", nameof(managedBy)),
         };
         private static Outcome<T> ServiceManaged<T>()
             => Outcome<T>.Conflict(ErrorCodes.ManagedByService, $"The integration {Inbox.InboxIntegrations.Key} is the service's own (the inbox); it can't be changed or deleted, and it has no targets.");
@@ -543,10 +521,6 @@ namespace Juice.Notifications.Configuration
             {
                 return ServiceManaged<TargetView>();
             }
-            if (OwnedIntegrationOfTarget<TargetView>(integration.ManagedBy, r.ManagedBy, integration.Key) is { } integrationOwned)
-            {
-                return integrationOwned;
-            }
             var existing = await db.IntegrationTargets.SingleOrDefaultAsync(t => t.TenantId == r.NotificationTenantId && t.Key == r.Key, ct);
             if (existing is not null && existing.IntegrationId != integration.Id)
             {
@@ -604,20 +578,11 @@ namespace Juice.Notifications.Configuration
                         integration.ManagedBy switch
                         {
                             ManagedBy.Configuration => $"its targets are set in the deployment's configuration, under {integration.Key}",
-                            // An alias row isn't the API's to give a secret: its targets come from the producer's own API (M46-3 review).
-                            ManagedBy.WebhooksAlias => $"its targets are set through the producer's own API, which manages {integration.Key}",
-                            ManagedBy.AliasConfig => $"its targets are set in the producer's deployment configuration, under {integration.Key}",
                             _ => $"give {integration.Key} a secret of yours first (its secretRef), then its targets",
                         }) is { } integrationOutOfReach)
                 {
                     return Invalid<TargetView>(integrationOutOfReach);
                 }
-            }
-            if (Caller(r.ManagedBy) == ManagedBy.AliasConfig)
-            {
-                // Writes the integration's owner back as read, with the read value as the concurrency check: the row is compared in this save,
-                // so a hand-back committed since the read fails it (DbUpdateConcurrencyException -> concurrent_change).
-                db.Entry(integration).Property(i => i.ManagedBy).IsModified = true;
             }
             var now = clock.UtcNow();
             var managedBy = Caller(r.ManagedBy);
