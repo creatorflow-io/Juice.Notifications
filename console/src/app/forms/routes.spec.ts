@@ -22,7 +22,7 @@ describe('route form', () => {
     await submitForm(f, 'route-form');
     expect(putRoute).not.toHaveBeenCalled();
     const errors = fieldErrors(f);
-    expect(errors.map(e => e.pointer).sort()).toEqual(['/digestSeconds', '/key', '/match/labels/#1', '/targets']);
+    expect(errors.map(e => e.pointer).sort()).toEqual(['/digestSeconds', '/key', '/match/labels//1', '/targets']);
     expect(errors.every(e => e.inField && e.tag === 'mat-error')).toBe(true);
     // The digest window's own message says what and how much.
     expect(errors.find(e => e.pointer === '/digestSeconds')!.text).toBe('Digest window: a whole number of seconds, 0 to 3600.');
@@ -61,7 +61,7 @@ describe('route form', () => {
     expect(errors.length).toBeGreaterThan(0);
     // One message, on the second row only (counted once, shown once).
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({ pointer: '/match/labels/#2', inField: true });
+    expect(errors[0]).toMatchObject({ pointer: '/match/labels//2', inField: true });
   });
 
   it('RouteForm_NamelessRows_EachKeepsItsOwnError_UntilItsOwnEdit', async () => {
@@ -71,13 +71,55 @@ describe('route form', () => {
     inner(f)['draft'].match.labels.push({ name: '', matcher: 'a' }, { name: '', matcher: 'b' });
     f.detectChanges();
     await submitForm(f, 'route-form');
-    expect(fieldErrors(f).map(e => e.pointer)).toEqual(['/match/labels/#1', '/match/labels/#2']);
+    expect(fieldErrors(f).map(e => e.pointer)).toEqual(['/match/labels//1', '/match/labels//2']);
     const names = (f.nativeElement as HTMLElement).querySelectorAll<HTMLInputElement>('[data-testid="match-label-name"]');
     names[0].value = 'env';
     names[0].dispatchEvent(new Event('input', { bubbles: true }));
     await settle(f);
-    expect(fieldErrors(f).map(e => e.pointer)).toEqual(['/match/labels/#2']);
+    expect(fieldErrors(f).map(e => e.pointer)).toEqual(['/match/labels//2']);
     expect(putRoute).not.toHaveBeenCalled();
+  });
+
+  it('RouteForm_RemovingARow_TakesTheRowErrorsAway_NothingCountedUnrendered', async () => {
+    const { f } = await open();
+    await type(f, 'route-key', 'all');
+    inner(f)['draft'].targets = ['ops'];
+    inner(f)['draft'].match.labels.push({ name: '', matcher: 'a' }, { name: '', matcher: 'b' });
+    f.detectChanges();
+    await submitForm(f, 'route-form');
+    expect(fieldErrors(f)).toHaveLength(2);
+    (f.nativeElement as HTMLElement).querySelectorAll<HTMLElement>('[aria-label="Remove the label matcher"]')[0].click();
+    await settle(f);
+    // The rows moved up; their positions' errors are gone, not left on the wrong row or counted unseen.
+    expect(fieldErrors(f)).toHaveLength(0);
+    expect(formError(f)).toBeNull();
+  });
+
+  it('RouteForm_ALabelNamedLikeARowPointer_DoesNotCollide', async () => {
+    const put = vi.fn(() => throwError(() => refused([{ pointer: '/match/labels/%231', message: 'API says: bad matcher for #1.' }])));
+    const { f } = await open(put);
+    await type(f, 'route-key', 'all');
+    inner(f)['draft'].targets = ['ops'];
+    inner(f)['draft'].match.labels.push({ name: '#1', matcher: 'a' }, { name: '', matcher: 'b' });
+    f.detectChanges();
+    // Locally: the nameless second row is the only one refused, on its own row.
+    await submitForm(f, 'route-form');
+    expect(fieldErrors(f).map(e => e.pointer)).toEqual(['/match/labels//2']);
+  });
+
+  it('ApiProblem_ErrorAtALabelName_ShowsOnThatRow_CountedOnce', async () => {
+    const put = vi.fn(() => throwError(() => refused([{ pointer: '/match/labels/env', message: 'Not a matcher.' }])));
+    const { f } = await open(put);
+    await type(f, 'route-key', 'all');
+    inner(f)['draft'].targets = ['ops'];
+    inner(f)['draft'].match.labels.push({ name: 'env', matcher: '=~(' });
+    f.detectChanges();
+    await submitForm(f, 'route-form');
+    const errors = fieldErrors(f);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ pointer: '/match/labels/env', text: 'Not a matcher.', inField: true });
+    expect(byId(f, 'match-label-name').closest('mat-form-field')!.contains((f.nativeElement as HTMLElement).querySelector('[data-testid="field-error"]'))).toBe(true);
+    expect(formError(f)!.textContent!.trim()).toBe('Fix the 1 marked field.');
   });
 
   it('ApiProblem_MatchErrors_EveryCountedFieldIsRendered_SummaryEqualsRenderedFields', async () => {

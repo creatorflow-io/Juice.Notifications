@@ -308,6 +308,12 @@ export function matchOf(draft: MatchDraft): Match {
  * What {@link matchOf} can't send as typed: a label matcher without a name, or one name twice (an object keeps one of them, so the other
  * condition would vanish without a word). Every such row, in one list; empty when the draft is fine.
  */
+/**
+ * The form's own pointer for a label row: under `/match/labels/` and then an empty segment, which no label name (so no API pointer) can
+ * be, so a label named "1" or "#1" never collides with it.
+ */
+const ROW_POINTER = '/match/labels//';
+
 export function matchIssues(draft: MatchDraft): FieldIssue[] {
   const issues: FieldIssue[] = [];
   const seen = new Set<string>();
@@ -315,10 +321,10 @@ export function matchIssues(draft: MatchDraft): FieldIssue[] {
     const name = label.name.trim();
     if (!name && !label.matcher.trim()) return;
     if (!name) {
-      issues.push({ pointer: `/match/labels/#${i + 1}`, message: `Label matcher ${i + 1} needs a label name: each matcher names its label.` });
+      issues.push({ pointer: `${ROW_POINTER}${i + 1}`, message: `Label matcher ${i + 1} needs a label name: each matcher names its label.` });
     } else if (seen.has(name)) {
       // Its own pointer, by row: it is shown on that row, and typing in another row leaves it be.
-      issues.push({ pointer: `/match/labels/#${i + 1}`,
+      issues.push({ pointer: `${ROW_POINTER}${i + 1}`,
         message: `The label ${name} is matched twice (matcher ${i + 1}): one matcher per label (in(a,b) takes several values).` });
     }
     seen.add(name);
@@ -385,7 +391,7 @@ export function matchText(match: Match | null | undefined): string {
           <input matInput [name]="name() + '-matcher-' + i" [(ngModel)]="label.matcher" [disabled]="disabled()" placeholder="prod, !=dev, in(high,critical)"
             data-testid="match-label-matcher"></mat-form-field>
         @if (!disabled()) {
-          <button mat-icon-button type="button" (click)="draft().labels.splice(i, 1)" aria-label="Remove the label matcher"><mat-icon>close</mat-icon></button>
+          <button mat-icon-button type="button" (click)="removeLabel(i)" aria-label="Remove the label matcher"><mat-icon>close</mat-icon></button>
         }
       </div>
     }
@@ -405,13 +411,19 @@ export class MatchEditorComponent {
   readonly name = input('match');
   protected readonly priorities = PRIORITIES;
 
+  /** Removes a row; the form's own row errors go (they are by position: the rows after it moved), the next submit finds them again. */
+  protected removeLabel(i: number): void {
+    this.draft().labels.splice(i, 1);
+    this.errors().drop([ROW_POINTER.slice(0, -1)]);
+  }
+
   /** Errors under `/match` no field here shows (the labels as a whole, a label no row has, a part this editor lacks): listed, never only counted. */
   protected orphans(): { pointer: string; message: string }[] {
     const names = new Set(this.draft().labels.map(l => pointerSegment(l.name.trim())));
     return this.errors().of('/match').filter(e => {
       const p = e.pointer;
       if (p === '/match' || p === '/match/type' || p.startsWith('/match/type/') || p === '/match/minPriority' || p.startsWith('/match/minPriority/')) return false;
-      if (p.startsWith('/match/labels/#')) return false;
+      if (p.startsWith(ROW_POINTER)) return false;
       const label = /^\/match\/labels\/([^/]+)/.exec(p);
       return !label || !names.has(label[1]);
     });
@@ -420,7 +432,7 @@ export class MatchEditorComponent {
   /** Where a label row's errors are: the form's own for this row, and the API's under the row's label name. */
   protected labelPointer(label: { name: string; matcher: string }, row: number): string {
     const name = label.name.trim();
-    return `/match/labels/#${row + 1}$` + (name ? '|/match/labels/' + pointerSegment(name) : '');
+    return `${ROW_POINTER}${row + 1}$` + (name ? '|/match/labels/' + pointerSegment(name) : '');
   }
 }
 
