@@ -83,10 +83,13 @@ namespace Juice.Notifications.IntegrationTests
             }
         }
 
-        /// <summary>The host's own access: its tenant only; a client's own token is no person; the person is the token's subject, name and roles.</summary>
-        private sealed class HeaderInboxAccess(HostProbe probe) : SingleTenantInboxAccess(Tenant)
+        /// <summary>
+        /// The host's own access, faulty on purpose: it names the person in any tenant it is asked about, so the embedded tenant check is the only thing
+        /// that keeps another tenant out. A client's own token is no person; the person is the token's subject, name and roles.
+        /// </summary>
+        private sealed class HeaderInboxAccess(HostProbe probe) : INotificationsInboxAccess
         {
-            protected override ValueTask<InboxAccessResult> PersonAsync(ClaimsPrincipal user, CancellationToken ct)
+            public ValueTask<InboxAccessResult> PersonAsync(ClaimsPrincipal user, Guid tenantId, CancellationToken ct = default)
             {
                 probe.Count();
                 if (user.FindFirst("client_id") is { } client && client.Value == user.FindFirst("azp")?.Value)
