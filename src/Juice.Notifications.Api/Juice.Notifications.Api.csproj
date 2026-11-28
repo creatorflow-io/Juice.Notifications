@@ -30,6 +30,7 @@
     <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
     <ProjectReference Include="..\Juice.Notifications.Api.Contracts\Juice.Notifications.Api.Contracts.csproj" />
     <ProjectReference Include="..\Juice.Notifications.Admin\Juice.Notifications.Admin.csproj" />
+    <ProjectReference Include="..\Juice.Notifications.Inbox\Juice.Notifications.Inbox.csproj" />
   </ItemGroup>
 
   <ItemGroup>

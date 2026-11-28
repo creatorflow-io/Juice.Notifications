@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The person's inbox API and its SignalR hub (M54): mapped by the service under /api/v1, or by a host that embeds the pipeline under its own
+       prefix and its own authentication. ASP.NET Core and SignalR only: no JwtBearer, Redis, Juice.MultiTenant or Juice.Audit. -->
+  <PropertyGroup>
+    <Description>Juice Notifications inbox: the signed-in person's inbox API and hub, for the service or a host that embeds the pipeline.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Microsoft.AspNetCore.Builder" />
+    <Using Include="Microsoft.AspNetCore.Http" />
+    <Using Include="Microsoft.AspNetCore.Routing" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Juice.Notifications\Juice.Notifications.csproj" />
+    <ProjectReference Include="..\Juice.Notifications.Api.Contracts\Juice.Notifications.Api.Contracts.csproj" />
+    <ProjectReference Include="..\Juice.Notifications.Admin\Juice.Notifications.Admin.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Juice.Notifications.Api" />
+    <InternalsVisibleTo Include="Juice.Notifications.Tests" />
+    <InternalsVisibleTo Include="Juice.Notifications.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

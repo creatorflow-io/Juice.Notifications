@@ -6,6 +6,7 @@ using Juice.Notifications.Configuration;
 using Juice.Notifications.Data;
 using Juice.Notifications.Delivering;
 using Juice.Notifications.Hosting;
+using Juice.Notifications.Inbox;
 using Juice.Notifications.Planning;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -104,9 +105,9 @@ namespace Juice.Notifications.Api
             services.AddSingleton<Admin.IAdminPlatformRole, PlatformAdminRole>();
             // Display groups and the inbox (phase-2-plan M15).
             services.AddScoped<Inbox.DisplayGroupReader>();
-            services.AddScoped<Inbox.PersonInboxReader>();
-            services.AddScoped<Inbox.PersonInboxEditor>();
             services.AddScoped<Inbox.DisplayGroupEditor>();
+            // The person's inbox (Juice.Notifications.Inbox, also an embedded host's) asks the tenant pattern who is a person.
+            services.AddScoped<Inbox.INotificationsInboxAccess, TenantInboxAccess>();
             // Provider callbacks (phase-4-plan I40): anonymous, verified per provider, limited per integration.
             services.Configure<Callbacks.CallbackOptions>(configuration.GetSection(Callbacks.CallbackOptions.Section));
             services.AddScoped<Callbacks.ProviderCallbacks>();
@@ -225,10 +226,11 @@ namespace Juice.Notifications.Api
             app.MapCorrelationHoldEndpoints();
             app.MapPeopleEndpoints();
             app.MapMeEndpoints();
+            // The person's inbox and its hub, at the root as before the inbox package: the same routes and answers (M54). A session ends when its
+            // token does (a person removed from the tenant gets no new one), and reconnects with a fresh one.
+            app.MapJuiceNotificationsInbox("");
             app.MapDisplayGroupEndpoints();
             app.MapCallbackEndpoints();
-            // A session ends when its token does (a person removed from the tenant gets no new one), and reconnects with a fresh one.
-            app.MapHub<InboxHub>(InboxHub.Path, options => options.CloseOnAuthenticationExpiration = true);
             return app;
         }
     }

@@ -34,7 +34,7 @@ namespace Juice.Notifications.Api
                 http.Items[MeKey] = subscriberId;
                 return await next(context);
             });
-            me.MapInboxEndpoints();
+            // The inbox (…/me/inbox) is Juice.Notifications.Inbox's, mapped beside this group (MapJuiceNotifications) with the same person resolution.
 
             me.MapGet("", async (Guid tenantId, HttpContext http, SubscriberReader reader, CancellationToken ct)
                 => await reader.GetAsync(tenantId, Me(http), ct) is { } s
@@ -136,29 +136,6 @@ namespace Juice.Notifications.Api
 
         private static DeviceResponse ToResponse(DeviceView v) => new(v.Id, v.Platform, v.AppId, v.Locale, v.CreatedAt, v.LastSeenAt);
 
-        /// <summary>
-        /// The person's subscriber when it is known and needs nothing written (one read): their identity's alias, or their own subscriber with the
-        /// name the token gives (or none). Null sends them through the upsert, which creates them or refreshes the name.
-        /// </summary>
-        private static async Task<Guid?> KnownAsync(NotificationsDbContext db, Guid tenantId, ResolvedPerson person, CancellationToken ct)
-        {
-            var known = await db.Subscribers.AsNoTracking()
-                .Where(s => s.TenantId == tenantId && s.Source == person.Source && s.ExternalId == person.ExternalId)
-                .Select(s => new
-                {
-                    s.Id, s.MergedInto, s.Name,
-                    Alias = db.SubscriberAliases.Where(a => a.TenantId == tenantId && a.Source == person.Source && a.ExternalId == person.ExternalId)
-                        .Select(a => (Guid?)a.SubscriberId).FirstOrDefault(),
-                })
-                .SingleOrDefaultAsync(ct);
-            return known switch
-            {
-                { Alias: { } linked } => linked,
-                { } own when person.Name is null || person.Name == own.Name => own.MergedInto ?? own.Id,
-                _ => null,
-            };
-        }
-
         private static IResult NotAMember() => ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotTenantMember, "The caller isn't a member of this tenant.");
 
         /// <summary>
@@ -168,25 +145,35 @@ namespace Juice.Notifications.Api
         internal static async Task<(Guid? Person, IResult Refusal)> PersonAsync(System.Security.Claims.ClaimsPrincipal user, Guid tenantId,
             IServiceProvider services, CancellationToken ct)
         {
-            if (Producers.ActingClient(user, services.GetRequiredService<Microsoft.Extensions.Options.IOptions<AuthOptions>>().Value) is not null)
-            {
-                // A service account given the tenant claim would otherwise become a subscriber and follow topics.
-                return (null, ApiResults.Problem(StatusCodes.Status403Forbidden, ErrorCodes.NotAPerson, "The person's API takes a person's token, not a client's own."));
-            }
-            var subject = user.FindFirst("sub")?.Value;
-            if (subject is null || !RequestRules.IsRecipientId(subject) || !await services.GetRequiredService<ITenantAccess>().IsMemberAsync(user, tenantId, ct))
-            {
-                return (null, NotAMember());
-            }
-            var db = services.GetRequiredService<NotificationsDbContext>();
-            var clock = services.GetRequiredService<TimeProvider>();
-            var name = user.FindFirst("preferred_username")?.Value ?? user.FindFirst("name")?.Value;
-            var person = SubscriberDirectory.Fit(new ResolvedPerson(OidcSource, subject, name));
-            return (await KnownAsync(db, tenantId, person, ct)
-                ?? (await SubscriberDirectory.MapAsync(db, tenantId, [person], clock.GetUtcNow(), ct))[(OidcSource, subject)], null!);
+            var (person, refusal) = await Inbox.InboxPeople.ResolveAsync(user, tenantId, services, ct);
+            return (person, refusal!);
         }
 
         /// <summary>The signed-in person's subscriber id, which the group's filter found.</summary>
         internal static Guid Me(HttpContext http) => (Guid)http.Items[MeKey]!;
+    }
+
+    /// <summary>
+    /// Who is a person of a tenant, in the service (phase-2-plan I16): a client's own token is no person's (deferred #27: a service account given the
+    /// tenant claim would otherwise become a subscriber and follow topics), and a person outside the tenant isn't its member
+    /// (<see cref="ITenantAccess.IsMemberAsync"/>). The roles are none: the service has its own people (the <c>signed-in</c> resolver is the
+    /// embedded inbox's).
+    /// </summary>
+    internal sealed class TenantInboxAccess(ITenantAccess access, Microsoft.Extensions.Options.IOptions<AuthOptions> auth) : Inbox.INotificationsInboxAccess
+    {
+        public async ValueTask<Inbox.InboxAccessResult> PersonAsync(System.Security.Claims.ClaimsPrincipal user, Guid tenantId, CancellationToken ct = default)
+        {
+            if (Producers.ActingClient(user, auth.Value) is not null)
+            {
+                return Inbox.InboxAccessResult.NotAPerson;
+            }
+            var subject = user.FindFirst("sub")?.Value;
+            if (subject is null || !RequestRules.IsRecipientId(subject) || !await access.IsMemberAsync(user, tenantId, ct))
+            {
+                return Inbox.InboxAccessResult.NotAMember;
+            }
+            var name = user.FindFirst("preferred_username")?.Value ?? user.FindFirst("name")?.Value;
+            return Inbox.InboxAccessResult.Of(new Inbox.InboxPerson(subject, name, []));
+        }
     }
 }
