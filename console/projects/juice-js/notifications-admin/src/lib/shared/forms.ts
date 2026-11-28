@@ -212,7 +212,8 @@ export function pointerSegment(name: string): string {
   selector: '[naError]',
   providers: [{ provide: ErrorStateMatcher, useExisting: forwardRef(() => NaFieldError) }],
   // Material leaves `aria-invalid` off an empty required input (a pristine field isn't invalid); a refused one is, empty or not.
-  host: { '(input)': 'edited()', '(selectionChange)': 'edited()', '(change)': 'edited()', '[attr.aria-invalid]': 'invalid() ? "true" : null' },
+  // Not `change`: it fires on blur, when the focus leaves for the first marked field after a submit, and would take the errors it just showed.
+  host: { '(input)': 'edited()', '(selectionChange)': 'edited()', '[attr.aria-invalid]': 'invalid() ? "true" : null' },
 })
 export class NaFieldError extends ErrorStateMatcher {
   readonly naError = input.required<FormErrors>();
@@ -314,7 +315,7 @@ export function matchIssues(draft: MatchDraft): FieldIssue[] {
     const name = label.name.trim();
     if (!name && !label.matcher.trim()) return;
     if (!name) {
-      issues.push({ pointer: '/match/labels', message: `Label matcher ${i + 1} ("${label.matcher.trim()}") needs a label name: each matcher names its label.` });
+      issues.push({ pointer: '/match/labels', message: `Label matcher ${i + 1} needs a label name: each matcher names its label.` });
     } else if (seen.has(name)) {
       issues.push({ pointer: '/match/labels/' + pointerSegment(name),
         message: `The label ${name} is matched twice (matcher ${i + 1}): one matcher per label (in(a,b) takes several values).` });

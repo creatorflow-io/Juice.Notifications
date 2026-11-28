@@ -130,6 +130,18 @@ describe('integration form', () => {
     expect(document.activeElement).toBe(byId(f, 'integration-key'));
   });
 
+  it('Errors_SurviveTheBlurOfAFieldTypedBeforeTheSubmit', async () => {
+    // The browser fires `change` on blur: the focus moving to the first marked field must not take another field's error away.
+    const { f } = await form();
+    inner(f)['draft'].channel = 'webhook';
+    inner(f)['draft'].kind = 'webhook';
+    await type(f, 'integration-priority', '-9');
+    await submitForm(f, 'integration-form');
+    byId(f, 'integration-priority').dispatchEvent(new Event('change', { bubbles: true }));
+    await settle(f);
+    expect(fieldErrors(f).map(e => e.pointer).sort()).toEqual(['/key', '/priority']);
+  });
+
   it('Validate_ErrorsClearOnEdit_ReSubmitSendsOnce', async () => {
     const put = vi.fn(() => of(integration));
     const { f } = await form(put);
