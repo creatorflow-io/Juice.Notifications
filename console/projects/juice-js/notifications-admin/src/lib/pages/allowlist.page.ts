@@ -22,7 +22,9 @@ export function destinationIssue(destination: string): FieldIssue | null {
   const [address, prefix, ...extra] = destination.split('/');
   if (destination.includes('://') || extra.length) return issue('a host name, address or network only, not a URL; ports go in Ports.');
   const v6 = address.includes(':');
-  if (v6 ? !/^[0-9a-f:.]+$/i.test(address) : !/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(address)) {
+  // A host name may end in a dot and be an international one (letters of any script): the API trims the dot and maps it to ASCII.
+  const hostName = address.replace(/\.$/, '');
+  if (v6 ? !/^[0-9a-f:.]+$/i.test(address) : !/^[\p{L}\p{N}]([\p{L}\p{N}.-]*[\p{L}\p{N}])?$/u.test(hostName)) {
     return issue(v6 ? 'an IPv6 address has hex digits and colons only.' : 'a host name has letters, digits, dots and hyphens only; ports go in Ports.');
   }
   if (prefix !== undefined) {

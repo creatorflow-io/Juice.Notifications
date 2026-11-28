@@ -26,6 +26,15 @@ describe('settings form', () => {
     expect(fieldErrors(f)).toMatchObject([{ pointer: '/contentRetentionDays', text: "Rendered content: whole days, 1 to the requests' 10; empty for the default." }]);
   });
 
+  it('SettingsForm_RequestsInvalid_ContentIsNotCheckedAgainstTheDefaultDays', async () => {
+    const f = await render(SettingsPage, { putSettings: () => of({}) });
+    await type(f, 'settings-request-days', 'abc');
+    // 40 is above the default requests' 30 days: a second, misleading error if it were held against that.
+    await type(f, 'settings-content-days', '40');
+    await submitForm(f, 'settings-form');
+    expect(fieldErrors(f).map(e => e.pointer)).toEqual(['/requestRetentionDays']);
+  });
+
   it('SettingsForm_Valid_SendsEmptyAsTheDefault_Once', async () => {
     const putSettings = vi.fn((..._args: unknown[]) => of({}));
     const f = await render(SettingsPage, { putSettings });

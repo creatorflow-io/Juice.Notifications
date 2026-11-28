@@ -162,9 +162,10 @@ export class SettingsPage {
       `a whole number of notifications a minute, 0 (never storms) to ${MAX_STORM_THRESHOLD}`);
     const requestRetentionDays = read('requestRetentionDays', 'Requests and deliveries', 1, MAX_RETENTION_DAYS, `whole days, 1 to ${MAX_RETENTION_DAYS}`);
     // Content goes no later than its request: at most the requests' days, as they will be (typed, or the default).
-    const requestDays = requestRetentionDays ?? s.defaultRequestRetentionDays;
+    // Requests invalid: there are no requests' days to hold content against, so only its own bounds are checked.
+    const requestDays = requestRetentionDays === undefined ? MAX_RETENTION_DAYS : requestRetentionDays ?? s.defaultRequestRetentionDays;
     const contentRetentionDays = read('contentRetentionDays', 'Rendered content', 1, Math.min(requestDays, MAX_RETENTION_DAYS),
-      `whole days, 1 to the requests' ${requestDays}`);
+      requestRetentionDays === undefined ? `whole days, 1 to ${MAX_RETENTION_DAYS}` : `whole days, 1 to the requests' ${requestDays}`);
     if (issues.length) {
       this.errors.localAll(issues);
       return;
