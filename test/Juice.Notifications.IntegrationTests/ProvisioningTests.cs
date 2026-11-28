@@ -31,11 +31,24 @@ namespace Juice.Notifications.IntegrationTests
         private sealed class RaceInterceptor : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
         {
             public volatile string? Armed;
+            /// <summary>A route the provisioner is about to insert: another writer inserts the same key first (a unique violation, not a race).</summary>
+            public volatile string? ArmedDuplicate;
 
             public override async ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
                 Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData, Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
                 CancellationToken cancellationToken = default)
             {
+                var duplicate = ArmedDuplicate;
+                if (duplicate is not null && eventData.Context!.ChangeTracker.Entries<Route>().Any(e => e.State == EntityState.Added && e.Entity.Key == duplicate))
+                {
+                    ArmedDuplicate = null;
+                    var options = new DbContextOptionsBuilder<NotificationsDbContext>();
+                    NotificationsDbContext.Configure(options, eventData.Context.Database.GetConnectionString()!);
+                    await using var other = new NotificationsDbContext(options.Options);
+                    other.Routes.Add(new Route { TenantId = Tenant, Key = duplicate, Match = "{}", ManagedBy = ManagedBy.Api, DefinitionHash = "d", UpdatedAt = DateTimeOffset.UtcNow });
+                    await other.SaveChangesAsync(cancellationToken);
+                    return result;
+                }
                 var key = Interlocked.Exchange(ref Armed, null);
                 if (key is not null && eventData.Context!.ChangeTracker.Entries<Route>().Any(e => e.State == EntityState.Modified && e.Entity.Key == key))
                 {
@@ -588,6 +601,8 @@ namespace Juice.Notifications.IntegrationTests
             var lost = await Assert.ThrowsAsync<InvalidOperationException>(() => ProvisionAsync(file));
 
             Assert.Contains(ErrorCodes.ConcurrentChange, lost.Message);
+            Assert.Contains("lost a race", lost.Message);
+            Assert.NotNull(lost.InnerException);
             await using (var db = _app.Database.Context())
             {
                 Assert.False(await db.Routes.AnyAsync(r => r.TenantId == Tenant && (r.Key == "race-one" || r.Key == "race-two"), Ct));
@@ -599,6 +614,23 @@ namespace Juice.Notifications.IntegrationTests
                 Assert.Equal(2, rows.Count);
                 Assert.All(rows, r => Assert.Equal(ManagedBy.Configuration, r.ManagedBy));
             }
+        }
+
+        /// <summary>A unique violation comes from the data and recurs on every start: it is not worded as a race the next start reconciles.</summary>
+        [Fact]
+        public async Task Provisioning_UniqueViolationUnderTheStart_SaysExistingData_NotARace()
+        {
+            LocalStack.RequireAvailable();
+            var file = Initial.Replace("\"routes\": { \"all\"", "\"routes\": { \"dup-one\": { \"match\": {}, \"targets\": [\"ops\"] }, \"all\"");
+
+            _race.ArmedDuplicate = "dup-one";
+            var failed = await Assert.ThrowsAsync<InvalidOperationException>(() => ProvisionAsync(file));
+
+            Assert.Contains("conflicts with existing data", failed.Message);
+            Assert.Contains("Unique", failed.Message);
+            Assert.DoesNotContain("lost a race", failed.Message);
+            Assert.DoesNotContain("the next start reconciles", failed.Message);
+            Assert.NotNull(failed.InnerException);
         }
 
         /// <summary>
