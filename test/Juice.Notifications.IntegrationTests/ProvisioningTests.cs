@@ -7,6 +7,7 @@ using Juice.Notifications.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -25,6 +26,41 @@ namespace Juice.Notifications.IntegrationTests
 
         private readonly string _directory = Directory.CreateTempSubdirectory("notifications-provisioning-").FullName;
         private readonly NotificationsApp _app;
+
+        // Deletes a route the provisioner is about to update, once armed: the row changed between its read and its save.
+        private sealed class RaceInterceptor : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+        {
+            public volatile string? Armed;
+
+            public override async ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+                Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData, Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+                CancellationToken cancellationToken = default)
+            {
+                var key = Interlocked.Exchange(ref Armed, null);
+                if (key is not null && eventData.Context!.ChangeTracker.Entries<Route>().Any(e => e.State == EntityState.Modified && e.Entity.Key == key))
+                {
+                    await using var connection = new Npgsql.NpgsqlConnection(eventData.Context.Database.GetConnectionString());
+                    await connection.OpenAsync(cancellationToken);
+                    await using var command = new Npgsql.NpgsqlCommand("DELETE FROM notifications.routes WHERE key = @key", connection);
+                    command.Parameters.AddWithValue("key", key);
+                    await command.ExecuteNonQueryAsync(cancellationToken);
+                }
+                else if (key is not null)
+                {
+                    Armed = key; // not this save yet
+                }
+                return result;
+            }
+        }
+
+        private sealed class RaceConfiguration(RaceInterceptor interceptor) : IDbContextOptionsConfiguration<NotificationsDbContext>
+        {
+            public void Configure(IServiceProvider serviceProvider, DbContextOptionsBuilder optionsBuilder) => optionsBuilder.AddInterceptors(interceptor);
+
+            public void Configure(DbContextOptionsBuilder optionsBuilder) => optionsBuilder.AddInterceptors(interceptor);
+        }
+
+        private readonly RaceInterceptor _race = new();
 
         // Two integrations with a target each, a route naming both, an allowlist entry. The webhook's secret is a variable the API couldn't name
         // (it has no NOTIFICATIONS_SECRET_ prefix): the deployment's own configuration may.
@@ -52,7 +88,11 @@ namespace Juice.Notifications.IntegrationTests
             _app = new NotificationsApp(host =>
             {
                 host.UseSetting("Provisioning:Path", path);
-                host.ConfigureTestServices(services => services.AddSingleton<Planning.IRecipientResolver>(new FakePeopleResolver()));
+                host.ConfigureTestServices(services =>
+                {
+                    services.AddSingleton<Planning.IRecipientResolver>(new FakePeopleResolver());
+                    services.AddSingleton<IDbContextOptionsConfiguration<NotificationsDbContext>>(new RaceConfiguration(_race));
+                });
             });
         }
 
@@ -530,7 +570,39 @@ namespace Juice.Notifications.IntegrationTests
         }
 
         /// <summary>
-        /// An admin PUT races the file's takeover of the same route, 12 times over: the loser fails as a concurrent change (or, after the
+        /// Root cause of the QA flake: the provisioner saves through the context directly, so a row changed by another writer between its read
+        /// and its save surfaced as a raw <c>DbUpdateConcurrencyException</c>. Here the row is removed under the start at exactly that moment:
+        /// the start fails as <c>concurrent_change</c>, none of the tenant's changes stay, and the next start reconciles.
+        /// </summary>
+        [Fact]
+        public async Task Provisioning_RowChangedUnderTheStart_FailsAsConcurrentChange_NothingApplied_NextStartReconciles()
+        {
+            LocalStack.RequireAvailable();
+            using var admin = await AdminAsync();
+            using var made = await admin.PutAsJsonAsync($"{Url}/routes/race-one", new PutRouteBody(JsonElement.Parse("""{"type":"api.*"}"""), ["ops"], true), Ct);
+            Assert.Equal(HttpStatusCode.OK, made.StatusCode);
+            var file = Initial.Replace("\"routes\": { \"all\"",
+                "\"routes\": { \"race-two\": { \"match\": {}, \"targets\": [\"ops\"] }, \"race-one\": { \"match\": { \"type\": \"file.*\" }, \"targets\": [\"ops\"] }, \"all\"");
+
+            _race.Armed = "race-one";
+            var lost = await Assert.ThrowsAsync<InvalidOperationException>(() => ProvisionAsync(file));
+
+            Assert.Contains(ErrorCodes.ConcurrentChange, lost.Message);
+            await using (var db = _app.Database.Context())
+            {
+                Assert.False(await db.Routes.AnyAsync(r => r.TenantId == Tenant && (r.Key == "race-one" || r.Key == "race-two"), Ct));
+            }
+            await ProvisionAsync(file);
+            await using (var db = _app.Database.Context())
+            {
+                var rows = await db.Routes.AsNoTracking().Where(r => r.TenantId == Tenant && r.Key.StartsWith("race-")).ToListAsync(Ct);
+                Assert.Equal(2, rows.Count);
+                Assert.All(rows, r => Assert.Equal(ManagedBy.Configuration, r.ManagedBy));
+            }
+        }
+
+        /// <summary>
+        /// An admin PUT races the file's takeover of the same route, 40 routes over: the loser fails as a concurrent change (or, after the
         /// takeover, as managed by configuration), never silently; and the next start settles every route as the file states it.
         /// </summary>
         [Fact]
@@ -538,7 +610,7 @@ namespace Juice.Notifications.IntegrationTests
         {
             LocalStack.RequireAvailable();
             using var admin = await AdminAsync();
-            const int Rounds = 12;
+            const int Rounds = 40;
             for (var round = 0; round < Rounds; round++)
             {
                 using var made = await admin.PutAsJsonAsync($"{Url}/routes/cc-{round}", new PutRouteBody(JsonElement.Parse("""{"type":"api.*"}"""), ["ops"], true), Ct);
@@ -549,7 +621,7 @@ namespace Juice.Notifications.IntegrationTests
                 using var response = await admin.PutAsJsonAsync($"{Url}/routes/cc-{round}", new PutRouteBody(JsonElement.Parse("""{"type":"edit.*"}"""), null, null), Ct);
                 return (response.StatusCode, Code: await CodeAsync(response));
             })).ToList();
-            // One start with every route in the file, against the 12 admin edits running now.
+            // One start with every route in the file, against the admin edits running now.
             Exception? raced = null;
             try
             {
@@ -559,6 +631,8 @@ namespace Juice.Notifications.IntegrationTests
             catch (InvalidOperationException ex)
             {
                 raced = ex;
+                // Said as a lost race, never as a raw EF concurrency error escaping the provisioner.
+                Assert.Contains(ErrorCodes.ConcurrentChange, ex.Message);
             }
             foreach (var (status, code) in await Task.WhenAll(puts))
             {

@@ -1,3 +1,4 @@
+using Juice.Notifications.Data;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using static Juice.Notifications.IntegrationTests.EmbeddedHostTests;
@@ -54,6 +55,31 @@ namespace Juice.Notifications.IntegrationTests
 
             await using var db = _database.Context();
             Assert.Contains(await db.Integrations.AsNoTracking().ToListAsync(Ct), i => i.TenantId == Own && i.Key == "own");
+        }
+
+        [Fact]
+        public async Task Embedded_ForeignTenantOwnsConfigRows_LeftAloneNotPrunedOrDisabled()
+        {
+            LocalStack.RequireAvailable();
+            var file = $$"""{ "tenants": { {{Tenant(Own, "own")}} } }""";
+            await using (var first = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false, provisioning: file))
+            {
+            }
+            // Another tenant's config-owned rows are already in the database (a former deployment's); this host's file doesn't name them.
+            await using (var db = _database.Context())
+            {
+                db.Routes.Add(new Route { TenantId = Foreign, Key = "stranger", Match = "{}", ManagedBy = ManagedBy.Configuration, DefinitionHash = "d", UpdatedAt = Seed.Now });
+                await db.SaveChangesAsync(Ct);
+            }
+
+            await using (var second = await EmbeddedHost.StartAsync(_database.ConnectionString, runStages: false, provisioning: file))
+            {
+            }
+
+            await using var check = _database.Context();
+            var stranger = await check.Routes.AsNoTracking().SingleAsync(r => r.TenantId == Foreign && r.Key == "stranger", Ct);
+            Assert.Equal((ManagedBy.Configuration, true), (stranger.ManagedBy, stranger.Enabled));
+            Assert.Equal(ManagedBy.Configuration, (await check.Routes.AsNoTracking().SingleAsync(r => r.TenantId == Own && r.Key == "own", Ct)).ManagedBy);
         }
 
         [Fact]
