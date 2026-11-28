@@ -2,6 +2,7 @@ using System.Data.Common;
 using Juice.Notifications.Data;
 using Juice.Notifications.Data.PostgreSQL;
 using Juice.Notifications.Hosting;
+using Juice.Notifications.Planning;
 using Juice.Notifications.Types;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,6 +29,29 @@ namespace Juice.Notifications.Embedded
 
         /// <summary>The types, declared at start (each a new version when it changes, as a producer's declaration is).</summary>
         public List<TypeDeclaration> Types { get; } = [];
+
+        /// <summary>
+        /// The host's inbox, opt-in (M54): null (the default) leaves the host as it was. Set, people are recorded from their own sign-in to the
+        /// host's inbox (<c>Juice.Notifications.Inbox</c>, which the host maps), and a request can name <c>role</c> recipients, who are the people
+        /// recorded with that role.
+        /// </summary>
+        public EmbeddedInboxOptions? Inbox { get; set; }
+    }
+
+    /// <summary>
+    /// What an embedded host's inbox records from its people's tokens (M54): the roles worth keeping (the only ones recorded, and so the only ones a
+    /// request can reach), and how long a sign-in vouches for a role.
+    /// </summary>
+    public sealed class EmbeddedInboxOptions
+    {
+        /// <summary>The longest <see cref="RoleTtl"/>.</summary>
+        public static readonly TimeSpan MaxRoleTtl = TimeSpan.FromDays(365);
+
+        /// <summary>The roles recorded, each 1–63 lowercase letters, digits or hyphens, starting with a letter; compared as written (ordinally).</summary>
+        public List<string> Roles { get; } = [];
+
+        /// <summary>A role not seen on a sign-in within this long stops counting: someone whose role was removed drops out without signing in.</summary>
+        public TimeSpan RoleTtl { get; set; } = TimeSpan.FromDays(30);
     }
 
     public static class NotificationsEmbeddedRegistration
@@ -69,6 +93,7 @@ namespace Juice.Notifications.Embedded
                 People = false,
                 Mode = NotificationsMode.Embedded,
                 EmbeddedTenantId = options.TenantId,
+                SignedIn = options.Inbox is { } inbox ? new SignedInOptions([.. inbox.Roles], inbox.RoleTtl) : null,
                 // After the migrator and the provisioning file, before the stages: a request can't be planned before its type exists.
                 BeforeStages = s => s.AddHostedService<EmbeddedApplicationProvisioner>(),
             });
@@ -106,8 +131,33 @@ namespace Juice.Notifications.Embedded
             {
                 return "Embedded notifications: ApplicationName is 1–200 characters.";
             }
-            return o.Types.FirstOrDefault(t => t.Key?.StartsWith(o.ApplicationKey + ".", StringComparison.Ordinal) != true) is { } outside
-                ? $"Embedded notifications: the type {outside.Key} isn't under the application's key ({o.ApplicationKey}.…)."
+            if (o.Types.FirstOrDefault(t => t.Key?.StartsWith(o.ApplicationKey + ".", StringComparison.Ordinal) != true) is { } outside)
+            {
+                return $"Embedded notifications: the type {outside.Key} isn't under the application's key ({o.ApplicationKey}.…).";
+            }
+            return o.Inbox is { } inbox ? InboxProblem(inbox) : null;
+        }
+
+        /// <summary>A role as the inbox records it (\z, not $: a trailing newline isn't a role).</summary>
+        private static readonly System.Text.RegularExpressions.Regex RolePattern = new(@"^[a-z][a-z0-9-]{0,62}\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        /// <summary>What is wrong with the inbox options, or null. Never echoes a role: it came from configuration.</summary>
+        private static string? InboxProblem(EmbeddedInboxOptions inbox)
+        {
+            if (inbox.Roles.Count == 0)
+            {
+                return "Embedded notifications: Inbox.Roles names at least one role to record.";
+            }
+            if (inbox.Roles.Any(r => r is null || !RolePattern.IsMatch(r)))
+            {
+                return "Embedded notifications: an Inbox role is 1–63 lowercase letters, digits or hyphens, starting with a letter.";
+            }
+            if (inbox.Roles.Distinct(StringComparer.Ordinal).Count() != inbox.Roles.Count)
+            {
+                return "Embedded notifications: Inbox.Roles lists a role twice.";
+            }
+            return inbox.RoleTtl <= TimeSpan.Zero || inbox.RoleTtl > EmbeddedInboxOptions.MaxRoleTtl
+                ? "Embedded notifications: Inbox.RoleTtl is longer than zero and at most 365 days."
                 : null;
         }
     }

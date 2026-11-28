@@ -103,6 +103,9 @@ namespace Juice.Notifications.Embedded
                 VALUES ({app.Id}, {options.TenantId}, {now})
                 ON CONFLICT DO NOTHING
                 """, cancellationToken);
+            // The inbox's resolver (M54): its row follows the host's option (a host that turned the inbox off disables it, so a request that names a
+            // role is skipped with a warning, not refused after it was accepted); the service's own row, which nobody else changes.
+            await Planning.SignedInRecipientResolver.EnsureRowAsync(db, options.TenantId, options.Inbox is not null, now, cancellationToken);
             using var context = NotificationsMessageContext.Begin(Actor);
             var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
             foreach (var declaration in options.Types)
