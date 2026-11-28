@@ -8,7 +8,7 @@ namespace Juice.Notifications.Embedded
 {
     /// <summary>
     /// The pipeline's commands in the host's open transaction (phase-5 M46-2, decision on Q-A): a host that changes its own rows and the
-    /// pipeline's setup together (Observability's webhooks alias writes a legacy endpoint and its integration, target and route) commits or
+    /// pipeline's setup together (a producer writing its own row and the pipeline's setup for it) commits or
     /// rolls back both as one. The work runs on a <see cref="NotificationsDbContext"/> on the host's connection, enlisted in its transaction
     /// (<see cref="INotificationTransaction"/>, which the host registers); each command's changes are saved as it goes, so the next one sees them,
     /// and the outbox is saved at the end. Nothing is committed here: the host's commit makes it durable, its rollback drops it.

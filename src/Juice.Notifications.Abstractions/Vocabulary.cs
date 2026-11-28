@@ -216,18 +216,6 @@ namespace Juice.Notifications
         public const string Configuration = "config";
         public const string Api = "api";
         public const string Service = "service";
-        /// <summary>
-        /// Written by a producer's compatibility alias for its legacy API (phase-5 M46: Observability's webhook endpoints), which owns the row
-        /// until cutover; the admin API leaves it alone (<see cref="ErrorCodes.ManagedByAlias"/>).
-        /// </summary>
-        public const string WebhooksAlias = "webhooks-alias";
-        /// <summary>
-        /// Written by the alias from the producer's own deployment configuration (phase-5 M46c: Observability's <c>Webhooks:Endpoints</c> and
-        /// <c>Webhooks:Allowlist</c>), which legacy's API never let an admin change: the admin API and the alias's own API are refused
-        /// (<see cref="ErrorCodes.ManagedByConfiguration"/>), and this service's provisioning file never reconciles or prunes it. The alias's
-        /// secret limits. Becomes <see cref="Configuration"/> at cutover.
-        /// </summary>
-        public const string AliasConfig = "alias-config";
     }
 
     /// <summary>How a template is rendered: Scriban (design D22), or the producer's data sent as is (webhook only).</summary>

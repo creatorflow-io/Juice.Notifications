@@ -977,12 +977,12 @@ namespace Juice.Notifications.IntegrationTests
             };
 
             public static async Task<EmbeddedHost> StartAsync(string connectionString, bool runStages, Receiver? receiver = null,
-                string applicationName = "The host", Action<IServiceCollection>? services = null, string? provisioning = null)
+                string applicationName = "The host", Action<IServiceCollection>? services = null, string? provisioning = null, bool migrate = true)
             {
                 var builder = Host.CreateApplicationBuilder();
                 var settings = new Dictionary<string, string?>
                 {
-                    ["Notifications:Database:Migrate"] = "true",
+                    ["Notifications:Database:Migrate"] = migrate ? "true" : "false",
                     ["Notifications:Stages:Run"] = runStages ? "true" : "false",
                     ["Notifications:Stages:Planner:Poll"] = "00:00:00.2",
                     ["Notifications:Stages:DeliveryPlanner:Poll"] = "00:00:00.2",

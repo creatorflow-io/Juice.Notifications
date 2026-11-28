@@ -3,8 +3,8 @@ using Juice.Notifications.Configuration;
 namespace Juice.Notifications.Tests
 {
     /// <summary>
-    /// Who may change or delete a setup row (phase-5 decision G1): each owner its own, the configuration also the API's; the others are refused
-    /// with the owner's code.
+    /// Who may change or delete a setup row (phase-5 decision G1): the API its own, the configuration also the API's; the others are refused
+    /// with the owner's code. The webhooks alias's owners are retired (M50).
     /// </summary>
     public sealed class OwnershipTests
     {
@@ -13,26 +13,12 @@ namespace Juice.Notifications.Tests
         [InlineData(null, null, null)]
         [InlineData(ManagedBy.Api, null, null)]
         [InlineData(ManagedBy.Configuration, null, ErrorCodes.ManagedByConfiguration)]
-        [InlineData(ManagedBy.WebhooksAlias, null, ErrorCodes.ManagedByAlias)]
-        // The configuration takes over the API's rows, as the provisioning file always has, and leaves the alias's alone.
+        // The configuration takes over the API's rows, as the provisioning file always has.
         [InlineData(ManagedBy.Api, ManagedBy.Configuration, null)]
         [InlineData(ManagedBy.Configuration, ManagedBy.Configuration, null)]
-        [InlineData(ManagedBy.WebhooksAlias, ManagedBy.Configuration, ErrorCodes.ManagedByAlias)]
-        // The alias keeps to its own rows.
-        [InlineData(null, ManagedBy.WebhooksAlias, null)]
-        [InlineData(ManagedBy.WebhooksAlias, ManagedBy.WebhooksAlias, null)]
-        [InlineData(ManagedBy.Api, ManagedBy.WebhooksAlias, ErrorCodes.ManagedByApi)]
-        [InlineData(ManagedBy.Configuration, ManagedBy.WebhooksAlias, ErrorCodes.ManagedByConfiguration)]
-        // The alias's configuration (M46c): every other writer is refused as by a deployment's configuration; it keeps to its own rows, and takes
-        // over the alias's (an endpoint made through the producer's API, then declared in its configuration).
-        [InlineData(ManagedBy.AliasConfig, null, ErrorCodes.ManagedByConfiguration)]
-        [InlineData(ManagedBy.AliasConfig, ManagedBy.WebhooksAlias, ErrorCodes.ManagedByConfiguration)]
-        [InlineData(ManagedBy.AliasConfig, ManagedBy.Configuration, ErrorCodes.ManagedByConfiguration)]
-        [InlineData(ManagedBy.AliasConfig, ManagedBy.AliasConfig, null)]
-        [InlineData(ManagedBy.WebhooksAlias, ManagedBy.AliasConfig, null)]
-        [InlineData(null, ManagedBy.AliasConfig, null)]
-        [InlineData(ManagedBy.Api, ManagedBy.AliasConfig, ErrorCodes.ManagedByApi)]
-        [InlineData(ManagedBy.Configuration, ManagedBy.AliasConfig, ErrorCodes.ManagedByConfiguration)]
+        // The service's own rows are no one's to refuse here (their own check does).
+        [InlineData(ManagedBy.Service, null, null)]
+        [InlineData(ManagedBy.Service, ManagedBy.Configuration, null)]
         public void Each_owner_keeps_to_its_own_rows(string? owner, string? caller, string? refused)
         {
             var outcome = ConfigurationHandlers.Owned<bool>(owner, caller, "route ops");
@@ -43,42 +29,30 @@ namespace Juice.Notifications.Tests
             }
         }
 
-        // A target put under an integration: the alias's configuration must own the integration, so it can't leave a target under one that
-        // was handed back (webhooks-alias). Other callers keep the target's own check.
-        [Theory]
-        [InlineData(ManagedBy.WebhooksAlias, ManagedBy.AliasConfig, ErrorCodes.ManagedByAlias)]
-        [InlineData(ManagedBy.Api, ManagedBy.AliasConfig, ErrorCodes.ManagedByApi)]
-        [InlineData(ManagedBy.Configuration, ManagedBy.AliasConfig, ErrorCodes.ManagedByConfiguration)]
-        [InlineData(ManagedBy.AliasConfig, ManagedBy.AliasConfig, null)]
-        [InlineData(ManagedBy.WebhooksAlias, ManagedBy.WebhooksAlias, null)]
-        [InlineData(ManagedBy.WebhooksAlias, null, null)]
-        [InlineData(ManagedBy.Configuration, null, null)]
-        [InlineData(ManagedBy.AliasConfig, ManagedBy.Configuration, null)]
-        public void A_target_write_needs_the_alias_configuration_to_own_the_integration(string owner, string? caller, string? refused)
+        [Fact]
+        public void Ownership_AliasOwnersGone_OnlyApiConfigService()
         {
-            var outcome = ConfigurationHandlers.OwnedIntegrationOfTarget<TargetView>(owner, caller, "hook");
-            Assert.Equal(refused, outcome?.Code);
-            if (outcome is not null)
-            {
-                Assert.Equal(OutcomeKind.Conflict, outcome.Kind);
-            }
+            // The constants are gone: only these three remain, and a write naming an old owner string is refused as invalid.
+            Assert.Equal(["Api", "Configuration", "Service"], typeof(ManagedBy).GetFields().Select(f => f.Name).Order().ToArray());
+            Assert.Null(typeof(ErrorCodes).GetField("ManagedByAlias"));
+            Assert.Throws<ArgumentException>(() => ConfigurationHandlers.Caller("webhooks" + "-alias"));
+            Assert.Throws<ArgumentException>(() => ConfigurationHandlers.Caller("alias" + "-config"));
+            Assert.Throws<ArgumentException>(() => ConfigurationHandlers.Caller(ManagedBy.Service));
+            Assert.Throws<ArgumentException>(() => ConfigurationHandlers.Caller("someone"));
         }
 
         [Fact]
         public void A_command_names_only_an_in_process_owner()
         {
             Assert.Equal(ManagedBy.Api, ConfigurationHandlers.Caller(null));
-            Assert.Equal(ManagedBy.WebhooksAlias, ConfigurationHandlers.Caller(ManagedBy.WebhooksAlias));
-            Assert.Equal(ManagedBy.AliasConfig, ConfigurationHandlers.Caller(ManagedBy.AliasConfig));
-            Assert.Throws<ArgumentException>(() => ConfigurationHandlers.Caller(ManagedBy.Service));
-            Assert.Throws<ArgumentException>(() => ConfigurationHandlers.Caller("someone"));
+            Assert.Equal(ManagedBy.Api, ConfigurationHandlers.Caller(ManagedBy.Api));
+            Assert.Equal(ManagedBy.Configuration, ConfigurationHandlers.Caller(ManagedBy.Configuration));
         }
 
         [Fact]
         public void The_provisioned_path_is_the_configuration_owner()
         {
             Assert.True(new PutRoute(Guid.NewGuid(), "r", null, null, null) { ManagedBy = ManagedBy.Configuration }.Provisioned);
-            Assert.False(new PutRoute(Guid.NewGuid(), "r", null, null, null) { ManagedBy = ManagedBy.WebhooksAlias }.Provisioned);
             Assert.False(new PutRoute(Guid.NewGuid(), "r", null, null, null).Provisioned);
         }
     }

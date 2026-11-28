@@ -28,7 +28,7 @@ namespace Juice.Notifications.IntegrationTests
         {
             await using var other = _database.Context();
             var entry = await other.Allowlist.SingleAsync(a => a.TenantId == Tenant && a.Destination == "10.20.0.0/16", Ct);
-            entry.ManagedBy = ManagedBy.WebhooksAlias;
+            entry.ManagedBy = ManagedBy.Configuration;
             await other.SaveChangesAsync(Ct);
         }
 
@@ -48,7 +48,7 @@ namespace Juice.Notifications.IntegrationTests
 
             await using var check = _database.Context();
             var stored = await check.Allowlist.AsNoTracking().SingleAsync(a => a.TenantId == Tenant, Ct);
-            Assert.Equal((ManagedBy.WebhooksAlias, "443"), (stored.ManagedBy, string.Join(",", stored.Ports)));
+            Assert.Equal((ManagedBy.Configuration, "443"), (stored.ManagedBy, string.Join(",", stored.Ports)));
         }
 
         [Fact]

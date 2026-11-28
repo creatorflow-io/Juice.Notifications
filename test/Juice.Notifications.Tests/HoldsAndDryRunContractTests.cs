@@ -83,10 +83,8 @@ namespace Juice.Notifications.Tests
         }
 
         [Fact]
-        public void The_alias_owns_its_rows_under_its_own_name()
+        public void The_error_codes_keep_their_names()
         {
-            Assert.Equal("webhooks-alias", ManagedBy.WebhooksAlias);
-            Assert.Equal("managed_by_alias", ErrorCodes.ManagedByAlias);
             Assert.Equal("not_allowed", ErrorCodes.NotAllowed);
         }
 
