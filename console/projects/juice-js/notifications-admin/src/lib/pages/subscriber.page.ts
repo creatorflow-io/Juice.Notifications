@@ -8,7 +8,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { RouterLink } from '@angular/router';
 import { NotificationsAdminApi } from '../core/api.service';
 import { Alias, Subscriber } from '../core/models';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, KEY_PATTERN, Pending, rowAction, submit, whenChanged } from '../shared/forms';
+import { Check, FormErrors, FormErrorsComponent, KEY_PATTERN, NaFieldError, Pending, rowAction, submit, validateAll, whenChanged } from '../shared/forms';
 import { LOCAL_SOURCE, personName } from '../shared/people';
 import { apiResource } from '../shared/resource';
 import { TenantLinkPipe, problemText } from '../shared/ui';
@@ -26,7 +26,7 @@ function blankLocal() {
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, FormsModule, RouterLink, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, TenantLinkPipe,
-    FieldErrorsComponent, FormErrorsComponent],
+    NaFieldError, FormErrorsComponent],
   template: `
     <div class="na-head">
       <a [routerLink]="['subscribers'] | naTenant: tenantId()">Subscribers</a><span class="na-muted">/</span>
@@ -60,15 +60,21 @@ function blankLocal() {
         } @else if (s.source === localSource) {
           <form class="na-card na-form" (ngSubmit)="saveLocal(s)" (input)="localSaved.set(false)" data-testid="local-user-form">
             <h2>Local user</h2>
-            <div class="na-filters">
+            <div class="na-form-grid">
               <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Name</mat-label>
-                <input matInput name="name" [(ngModel)]="local.name" maxlength="200" data-testid="local-user-name"></mat-form-field>
-              <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Locale</mat-label>
-                <input matInput name="locale" [(ngModel)]="local.locale" maxlength="35" placeholder="en" data-testid="local-user-locale"></mat-form-field>
+                <input matInput name="name" [(ngModel)]="local.name" data-testid="local-user-name" [naError]="localErrors" naPointer="/name">
+                @for (e of localErrors.of('/name'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+              </mat-form-field>
+              <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Locale</mat-label>
+                <input matInput name="locale" [(ngModel)]="local.locale" placeholder="en" data-testid="local-user-locale" [naError]="localErrors" naPointer="/locale">
+                @for (e of localErrors.of('/locale'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+              </mat-form-field>
               <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Time zone</mat-label>
-                <input matInput name="timeZone" [(ngModel)]="local.timeZone" maxlength="64" placeholder="Asia/Ho_Chi_Minh" data-testid="local-user-time-zone"></mat-form-field>
+                <input matInput name="timeZone" [(ngModel)]="local.timeZone" placeholder="Asia/Ho_Chi_Minh" data-testid="local-user-time-zone"
+                  [naError]="localErrors" naPointer="/timeZone">
+                @for (e of localErrors.of('/timeZone'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+              </mat-form-field>
             </div>
-            @for (p of localFields; track p) { <na-field-errors [messages]="localErrors.at(p)" [pointer]="p" /> }
             <na-form-errors [errors]="localErrors" [shown]="localFields" />
             <div class="na-actions">
               <button mat-flat-button type="submit" [disabled]="busy()" data-testid="local-user-save">Save</button>
@@ -85,15 +91,17 @@ function blankLocal() {
         <h2>Linked identities</h2>
         <p class="na-hint">A request naming any of these reaches this person. Linking another subscriber's identity links that subscriber in here.</p>
         @if (!s.mergedInto) {
-          <form class="na-filters" (ngSubmit)="link()" data-testid="alias-form">
-            <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Source</mat-label>
-              <input matInput name="source" [(ngModel)]="alias.source" [pattern]="keyPattern" spellcheck="false" data-testid="alias-source"></mat-form-field>
+          <form class="na-form-grid" (ngSubmit)="link()" data-testid="alias-form">
+            <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Source</mat-label>
+              <input matInput name="source" [(ngModel)]="alias.source" spellcheck="false" data-testid="alias-source" [naError]="aliasErrors" naPointer="/source">
+              @for (e of aliasErrors.of('/source'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+            </mat-form-field>
             <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>External id</mat-label>
-              <input matInput name="externalId" [(ngModel)]="alias.externalId" spellcheck="false" data-testid="alias-id"></mat-form-field>
+              <input matInput name="externalId" [(ngModel)]="alias.externalId" spellcheck="false" data-testid="alias-id" [naError]="aliasErrors" naPointer="/externalId">
+              @for (e of aliasErrors.of('/externalId'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+            </mat-form-field>
             <button mat-flat-button type="submit" [disabled]="busy() || !alias.source.trim() || !alias.externalId.trim()" data-testid="alias-link">Link</button>
           </form>
-          <na-field-errors [messages]="aliasErrors.at('/source')" pointer="/source" />
-          <na-field-errors [messages]="aliasErrors.at('/externalId')" pointer="/externalId" />
           <na-form-errors [errors]="aliasErrors" [shown]="['/source', '/externalId']" [reload]="reloadFn" />
         }
         <table class="na-table">
@@ -191,10 +199,12 @@ export class SubscriberPage {
     this.localSaved.set(false);
     const l = this.local;
     // Left out, a field keeps what is stored: an emptied one would look cleared and come back.
-    const emptied = ([['/name', l.name, s.name], ['/locale', l.locale, s.locale], ['/timeZone', l.timeZone, s.timeZone]] as const)
-      .find(([, typed, stored]) => !typed.trim() && stored);
-    if (emptied) {
-      this.localErrors.local(emptied[0], 'This can be changed but not cleared: the stored value stays. Type another.');
+    const issues = validateAll(([['/name', 'Name', 200, l.name, s.name], ['/locale', 'Locale', 35, l.locale, s.locale],
+      ['/timeZone', 'Time zone', 64, l.timeZone, s.timeZone]] as const).map(([pointer, label, max, typed, stored]): Check => () =>
+      !typed.trim() && stored ? { pointer, message: `${label}: can be changed but not cleared, the stored value stays. Type another.` }
+        : typed.trim().length > max ? { pointer, message: `${label}: up to ${max} characters (${typed.trim().length} typed).` } : null));
+    if (issues.length) {
+      this.localErrors.localAll(issues);
       return;
     }
     this.pending.track(submit(this.api.putLocalUser(this.tenantId(), s.externalId, { name: l.name.trim() || null, locale: l.locale.trim() || null,
@@ -206,6 +216,15 @@ export class SubscriberPage {
 
   protected link(): void {
     const body = { source: this.alias.source.trim(), externalId: this.alias.externalId.trim() };
+    const issues = validateAll([
+      () => new RegExp(`^(?:${this.keyPattern})$`).test(body.source) ? null
+        : { pointer: '/source', message: 'Source: 1–63 lowercase letters, digits or hyphens, starting with a letter.' },
+      () => body.externalId ? null : { pointer: '/externalId', message: 'External id: give the identity in that source.' },
+    ]);
+    if (issues.length) {
+      this.aliasErrors.localAll(issues);
+      return;
+    }
     this.pending.track(submit(this.api.linkAlias(this.tenantId(), this.id(), body), this.busy, this.aliasErrors, () => {
       this.alias = { source: body.source, externalId: '' };
       this.subscriber.reload();

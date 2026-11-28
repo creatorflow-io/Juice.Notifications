@@ -13,7 +13,7 @@ import { catchError, debounceTime, map, of, switchMap } from 'rxjs';
 import { AccessService, hasPage } from '../core/access.service';
 import { NotificationsAdminApi } from '../core/api.service';
 import { TemplatePreview, TenantTypeDetail } from '../core/models';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, submit, whenChanged } from '../shared/forms';
+import { FormErrors, FormErrorsComponent, NaFieldError, Pending, submit, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { TenantLinkPipe, problemText } from '../shared/ui';
 import { tenantRights } from '../shared/rights';
@@ -33,7 +33,7 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, JsonPipe, FormsModule, RouterLink, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, MatSelectModule,
-    TenantLinkPipe, FieldErrorsComponent, FormErrorsComponent],
+    TenantLinkPipe, NaFieldError, FormErrorsComponent],
   template: `
     <div class="na-head">
       <a [routerLink]="['types'] | naTenant: tenantId()">Types</a><span class="na-muted">/</span>
@@ -111,13 +111,12 @@ interface PreviewPart { key: string; kind: 'html' | 'text' | 'json'; value: unkn
               </p>
               <mat-form-field subscriptSizing="dynamic" class="na-field-full"><mat-label>Template (Scriban)</mat-label>
                 <textarea matInput class="na-code" rows="14" spellcheck="false" [ngModel]="body()" (ngModelChange)="edited($event)" [disabled]="t.serviceType"
-                  data-testid="template-body"></textarea>
+                  data-testid="template-body" [naError]="errors" naPointer="/body"></textarea>
+                @for (m of errors.of('/body'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
               </mat-form-field>
               <p class="na-hint">Data as <code ngNonBindable>{{ data.field }}</code>. A first line <code>Subject:</code> (email) or <code>Title:</code>
                 (inbox, chat, push) sets the heading. <code>passthrough</code> sends the data as is where the channel allows it.</p>
-              <na-field-errors [messages]="errors.at('/body')" pointer="/body" />
-              <na-field-errors [messages]="errors.at('/locale')" pointer="/locale" />
-              <na-form-errors [errors]="errors" [shown]="['/body', '/locale']" />
+              <na-form-errors [errors]="errors" [shown]="['/body']" />
               @if (changedUnder()) {
                 <p class="na-notice" data-testid="template-changed">The stored template changed while you were editing; your text is kept. Revert shows the new one.</p>
               }

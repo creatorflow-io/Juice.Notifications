@@ -8,7 +8,7 @@ import { RouterLink } from '@angular/router';
 import { Observable, Subscription } from 'rxjs';
 import { NotificationsAdminApi } from '../core/api.service';
 import { Subscriber } from '../core/models';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, Pending, rowAction, submit, whenChanged } from './forms';
+import { FormErrors, FormErrorsComponent, NaFieldError, Pending, rowAction, submit, whenChanged } from './forms';
 import { apiResource } from './resource';
 import { TenantLinkPipe, problemText } from './ui';
 
@@ -67,20 +67,21 @@ export interface MembersOf {
 @Component({
   selector: 'na-members',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, RouterLink, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, TenantLinkPipe, FieldErrorsComponent,
+  imports: [FormsModule, RouterLink, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, TenantLinkPipe, NaFieldError,
     FormErrorsComponent],
   template: `
     <section class="na-card" data-testid="members">
       <h2>{{ title() }}</h2>
-      <form class="na-filters" (ngSubmit)="add()" data-testid="member-add-form">
-        <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Source</mat-label>
+      <form class="na-form-grid" (ngSubmit)="add()" data-testid="member-add-form">
+        <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Source</mat-label>
           <input matInput name="source" [(ngModel)]="draft.source" spellcheck="false" data-testid="member-source"></mat-form-field>
         <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>External id</mat-label>
-          <input matInput name="externalId" [(ngModel)]="draft.externalId" spellcheck="false" data-testid="member-id"></mat-form-field>
+          <input matInput name="externalId" [(ngModel)]="draft.externalId" spellcheck="false" data-testid="member-id" [naError]="errors" naPointer="/externalId">
+          @for (e of errors.of('/externalId'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error> }
+        </mat-form-field>
         <button mat-flat-button type="submit" [disabled]="busy() || !draft.externalId.trim() || !draft.source.trim()" data-testid="member-add">Add</button>
       </form>
       <p class="na-hint">By identity: <code>local</code> and a local user's id, or the source a request named them by (an identity directory's).</p>
-      <na-field-errors [messages]="errors.at('/externalId')" pointer="/externalId" />
       <na-form-errors [errors]="errors" [shown]="['/externalId']" />
       @if (members.isLoading()) { <mat-progress-bar mode="indeterminate" /> }
       @if (members.error()) { <p class="na-error" data-testid="members-error">{{ error() }}</p> }

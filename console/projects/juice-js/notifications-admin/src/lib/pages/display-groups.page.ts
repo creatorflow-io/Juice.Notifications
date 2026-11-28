@@ -8,7 +8,7 @@ import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { RouterLink } from '@angular/router';
 import { NotificationsAdminApi } from '../core/api.service';
 import { DisplayGroup } from '../core/models';
-import { FieldErrorsComponent, FormErrors, FormErrorsComponent, KEY_PATTERN, isBlankNumber, rowAction, submit, whenChanged } from '../shared/forms';
+import { FormErrors, FormErrorsComponent, NaFieldError, isBlankNumber, keyIssue, rowAction, submit, validateAll, whenChanged } from '../shared/forms';
 import { apiResource } from '../shared/resource';
 import { TenantLinkPipe, problemText } from '../shared/ui';
 
@@ -20,7 +20,7 @@ import { TenantLinkPipe, problemText } from '../shared/ui';
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DatePipe, FormsModule, RouterLink, MatButtonModule, MatFormFieldModule, MatInputModule, MatProgressBarModule, TenantLinkPipe,
-    FieldErrorsComponent, FormErrorsComponent],
+    NaFieldError, FormErrorsComponent],
   template: `
     <div class="na-head"><h1>Display groups</h1><span class="na-spacer"></span>
       @if (!editing()) { <button mat-flat-button type="button" (click)="edit(null)" [disabled]="!groups.hasValue()" data-testid="group-new">New group</button> }
@@ -29,19 +29,23 @@ import { TenantLinkPipe, problemText } from '../shared/ui';
     @if (editing(); as e) {
       <form class="na-form na-card" (ngSubmit)="save()" data-testid="group-form">
         <h2>{{ e.isNew ? 'New group' : 'Group ' + draft.key }}</h2>
-        <div class="na-filters">
+        <div class="na-form-grid">
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Key</mat-label>
-            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required [pattern]="keyPattern" data-testid="group-key">
-            <mat-hint>Types name it in their declaration.</mat-hint></mat-form-field>
+            <input matInput name="key" [(ngModel)]="draft.key" [disabled]="!e.isNew" required data-testid="group-key" [naError]="errors" naPointer="/key">
+            <mat-hint>Types name it in their declaration.</mat-hint>
+            @for (m of errors.of('/key'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
           <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Name</mat-label>
-            <input matInput name="name" [(ngModel)]="draft.name" required maxlength="100" data-testid="group-name"></mat-form-field>
+            <input matInput name="name" [(ngModel)]="draft.name" required data-testid="group-name" [naError]="errors" naPointer="/name">
+            @for (m of errors.of('/name'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
           <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Position</mat-label>
-            <input matInput type="number" name="position" [(ngModel)]="draft.position" min="0" max="100000" data-testid="group-position">
-            <mat-hint>{{ e.isNew ? 'Empty: after the last.' : 'Lower first.' }}</mat-hint></mat-form-field>
+            <input matInput type="number" name="position" [(ngModel)]="draft.position" min="0" max="100000" data-testid="group-position"
+              [naError]="errors" naPointer="/position">
+            <mat-hint>{{ e.isNew ? 'Empty: after the last.' : 'Lower first.' }}</mat-hint>
+            @for (m of errors.of('/position'); track $index) { <mat-error data-testid="field-error" [attr.data-pointer]="m.pointer">{{ m.message }}</mat-error> }
+          </mat-form-field>
         </div>
-        <na-field-errors [messages]="errors.at('/key')" pointer="/key" />
-        <na-field-errors [messages]="errors.at('/name')" pointer="/name" />
-        <na-field-errors [messages]="errors.at('/position')" pointer="/position" />
         <na-form-errors [errors]="errors" [shown]="['/key', '/name', '/position']" />
         <div class="na-actions">
           <button mat-flat-button type="submit" [disabled]="busy()" data-testid="group-save">{{ e.isNew ? 'Add' : 'Save' }}</button>
@@ -88,7 +92,6 @@ export class DisplayGroupsPage {
 
   protected readonly groups = apiResource({ params: () => this.tenantId(), stream: ({ params }) => this.api.displayGroups(params) });
   protected readonly error = computed(() => problemText(this.groups.error()));
-  protected readonly keyPattern = KEY_PATTERN;
   protected readonly errors = new FormErrors();
   protected readonly editing = signal<{ isNew: boolean } | null>(null);
   protected readonly busy = signal(false);
@@ -124,29 +127,25 @@ export class DisplayGroupsPage {
   protected save(): void {
     const key = this.draft.key.trim();
     const isNew = this.editing()?.isNew;
-    if (!key) {
-      // Sent empty, the PUT would go to the groups collection, which takes none.
-      this.errors.local('/key', 'Give the group a key.');
-      return;
-    }
-    // A PUT adds or changes: a new group is checked against the list, which must have been read.
-    if (isNew && !this.groups.hasValue()) {
-      this.errors.local('/key', "The groups couldn't be read, so this key can't be checked as new: refresh first.");
-      return;
-    }
-    if (isNew && this.groups.value()?.some(g => g.key === key)) {
-      this.errors.local('/key', `There is a group ${key} already: edit it instead.`);
-      return;
-    }
     const name = this.draft.name.trim();
-    if (!name) {
-      this.errors.local('/name', 'Give the group a name.');
-      return;
-    }
     // Empty: a new group goes after the last; an existing one keeps its place (null is left out).
     const blank = isBlankNumber(this.draft.position);
-    if (!isNew && blank) {
-      this.errors.local('/position', 'Give the position: lower shows first.');
+    const issues = validateAll([
+      // Sent empty, the PUT would go to the groups collection, which takes none.
+      () => isNew ? keyIssue(key, 'display group') : null,
+      // A PUT adds or changes: a new group is checked against the list, which must have been read.
+      () => isNew && key && !this.groups.hasValue()
+        ? { pointer: '/key', message: "Key: the groups couldn't be read, so this key can't be checked as new; refresh first." } : null,
+      () => isNew && key && this.groups.value()?.some(g => g.key === key)
+        ? { pointer: '/key', message: 'Key: there is a group with this key already; edit it instead.' } : null,
+      () => name ? (name.length > 100 ? { pointer: '/name', message: `Name: up to 100 characters (${name.length} typed).` } : null)
+        : { pointer: '/name', message: 'Name: give the group a name, up to 100 characters.' },
+      () => !isNew && blank ? { pointer: '/position', message: 'Position: give a whole number, 0 or more; lower shows first.' } : null,
+      () => !blank && (!Number.isInteger(Number(this.draft.position)) || Number(this.draft.position) < 0 || Number(this.draft.position) > 100000)
+        ? { pointer: '/position', message: 'Position: a whole number from 0 to 100000; lower shows first.' } : null,
+    ]);
+    if (issues.length) {
+      this.errors.localAll(issues);
       return;
     }
     submit(this.api.putDisplayGroup(this.tenantId(), key, { name, position: blank ? null : Number(this.draft.position) }), this.busy, this.errors,
