@@ -92,6 +92,17 @@ namespace Juice.Notifications.Planning
             string[] handles = [RecipientKinds.Role];
             const string settings = "{}";
             var hash = Configuration.ConfigurationRules.ResolverHash(ResolverKey, handles, settings, null, enabled);
+            if (!enabled)
+            {
+                // The inbox is off: a row this host made while it was on is disabled (a pending request that names a role is then skipped with a
+                // warning); a host that never turned it on gets no row, and a row of that key that isn't ours is left alone, as before the inbox.
+                await db.Database.ExecuteSqlAsync($"""
+                    UPDATE notifications.recipient_resolvers
+                    SET enabled = FALSE, definition_hash = {hash}, updated_at = {now}
+                    WHERE tenant_id = {tenantId} AND key = {ResolverKey} AND kind = {ResolverKey} AND managed_by = {ManagedBy.Service} AND enabled
+                    """, ct);
+                return;
+            }
             await db.Database.ExecuteSqlAsync($"""
                 INSERT INTO notifications.recipient_resolvers AS c (tenant_id, id, key, kind, handles, settings, secret_ref, enabled, managed_by, definition_hash, updated_at)
                 VALUES ({tenantId}, {Guid.CreateVersion7()}, {ResolverKey}, {ResolverKey}, {handles}, {settings}::jsonb, NULL, {enabled}, {ManagedBy.Service}, {hash}, {now})
