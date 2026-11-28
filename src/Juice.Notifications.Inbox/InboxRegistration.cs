@@ -14,7 +14,7 @@ namespace Juice.Notifications.Inbox
         internal const string MeKey = "notifications.me";
 
         /// <summary>
-        /// The inbox's services: the person's reader and editor, SignalR with the inbox's JSON (camelCase enums, for this protocol only), and the
+        /// The inbox's services: the person's reader and editor, SignalR (its JSON protocol left as the host has it), and the
         /// hub that tells open sessions after a commit (<see cref="IInboxEvents"/>). The host registers its <see cref="INotificationsInboxAccess"/>.
         /// Returns SignalR's builder, so a host can add a backplane. Changes nothing of the host's: no JSON, authentication, authorization, CORS or
         /// problem-details setting.
@@ -23,8 +23,9 @@ namespace Juice.Notifications.Inbox
         {
             services.TryAddScoped<PersonInboxReader>();
             services.TryAddScoped<PersonInboxEditor>();
-            var signalR = services.AddSignalR().AddJsonProtocol(json => json.PayloadSerializerOptions.Converters.Add(
-                new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+            // No JSON protocol setting: that would apply to every hub of the host, and the one message the hub sends (InboxChangedMessage: a kind and
+            // item ids) has no enum to spell.
+            var signalR = services.AddSignalR();
             // Replaces the core's silent default: the inbox provider, the endpoints and the correlations tell sessions through the hub.
             services.Replace(ServiceDescriptor.Singleton<IInboxEvents, HubInboxEvents>());
             return signalR;

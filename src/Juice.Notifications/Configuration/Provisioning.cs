@@ -217,7 +217,7 @@ namespace Juice.Notifications.Configuration
                     await using var transaction = await db.Database.BeginTransactionAsync(ct);
                     await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(hashtext('juice-notifications:provisioning'))", ct);
                     var problems = new List<string>();
-                    changes = await ApplyAsync(db, handlers, tenantId, definition, clock.UtcNow(), problems, ct);
+                    changes = await ApplyAsync(db, handlers, tenantId, definition, clock.UtcNow(), problems, ct, logger);
                     if (problems.Count > 0)
                     {
                         throw new InvalidOperationException($"Invalid provisioning for tenant {tenantId}:\n" + string.Join("\n", problems));
@@ -247,7 +247,7 @@ namespace Juice.Notifications.Configuration
 
         /// <summary>Applies one tenant's definition, saving as it goes (inside the caller's transaction); returns the rows written.</summary>
         internal static async Task<int> ApplyAsync(NotificationsDbContext db, ConfigurationHandlers handlers, Guid tenantId, TenantProvisioning definition,
-            DateTimeOffset now, List<string> problems, CancellationToken ct)
+            DateTimeOffset now, List<string> problems, CancellationToken ct, ILogger? logger = null)
         {
             var changes = 0;
             async Task<T?> Put<T>(string what, ValueTask<Outcome<T>> put)
@@ -326,6 +326,13 @@ namespace Juice.Notifications.Configuration
             var resolverDefinitions = definition.Resolvers ?? [];
             foreach (var (key, c) in resolverDefinitions)
             {
+                if (await db.Resolvers.AsNoTracking().AnyAsync(r => r.TenantId == tenantId && r.Key == key && r.ManagedBy == ManagedBy.Service, ct))
+                {
+                    // The service's own row (the embedded inbox's, which the host's options set at start): the file can't change it, and naming it
+                    // isn't a fault that should stop the host on every start after the first.
+                    logger?.LogWarning("Provisioning skips resolver '{Key}' of tenant {Tenant}: it is the service's own, set by the host's options, not by this file", key, tenantId);
+                    continue;
+                }
                 await Put($"resolver '{key}'", handlers.Handle(new PutResolver(tenantId, key, c.Kind, c.Handles, c.Settings ?? JsonElement.Parse("{}"),
                     c.SecretRef, c.Enabled ?? true) { Provisioned = true }, ct));
             }

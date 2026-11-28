@@ -161,7 +161,8 @@ namespace Juice.Notifications.IntegrationTests
             Assert.Empty(await db.SubscriberRoles.ToListAsync(Ct));
             Assert.Equal(1, await db.Subscribers.CountAsync(Ct));
             Assert.Empty(await db.Requests.ToListAsync(Ct));
-            Assert.False((await db.Resolvers.AsNoTracking().SingleAsync(c => c.Key == "signed-in", Ct)).Enabled);
+            // A host that never turned the inbox on has no such row (as alpha.60).
+            Assert.False(await db.Resolvers.AnyAsync(c => c.Key == "signed-in", Ct));
         }
 
         [Fact]
@@ -275,6 +276,50 @@ namespace Juice.Notifications.IntegrationTests
             await using var check = _database.Context();
             var row = await check.Resolvers.AsNoTracking().SingleAsync(c => c.Key == "signed-in", Ct);
             Assert.Equal((ManagedBy.Service, true), (row.ManagedBy, row.Enabled));
+        }
+
+        [Fact]
+        public async Task Embedded_ProvisioningFileNamingSignedIn_StartsTwice_RowStaysServiceManaged()
+        {
+            LocalStack.RequireAvailable();
+            var listing = $$"""
+                { "tenants": { "{{Tenant}}": { "resolvers": { "signed-in": { "kind": "signed-in", "handles": ["role"], "enabled": false } } } } }
+                """;
+            // The second start finds the row the first made the service's own: the file's line is skipped with a warning, not refused.
+            await using (var first = await StartAsync(_database.ConnectionString, new Options { Provisioning = listing }))
+            {
+            }
+            await using (var second = await StartAsync(_database.ConnectionString, new Options { Provisioning = listing }))
+            {
+                Assert.Contains(second.Probe.Logs, l => l.Level == LogLevel.Warning && l.Message.Contains("signed-in"));
+            }
+
+            await using var check = _database.Context();
+            var row = await check.Resolvers.AsNoTracking().SingleAsync(c => c.Key == "signed-in", Ct);
+            Assert.Equal((ManagedBy.Service, true), (row.ManagedBy, row.Enabled));
+        }
+
+        [Fact]
+        public async Task Embedded_InboxOff_HostsOwnSignedInResolver_StartsAndRowIsUntouched()
+        {
+            LocalStack.RequireAvailable();
+            await using (var db = await _database.MigratedAsync())
+            {
+                db.Resolvers.Add(new RecipientResolverConfig
+                {
+                    TenantId = Tenant, Key = "signed-in", Kind = "local", Handles = ["user"], Settings = "{}", ManagedBy = ManagedBy.Api, DefinitionHash = "d",
+                    UpdatedAt = Seed.Now,
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+
+            await using (var host = await StartAsync(_database.ConnectionString, new Options { Inbox = null }))
+            {
+            }
+
+            await using var check = _database.Context();
+            var row = await check.Resolvers.AsNoTracking().SingleAsync(c => c.Key == "signed-in", Ct);
+            Assert.Equal(("local", ManagedBy.Api, "d", true), (row.Kind, row.ManagedBy, row.DefinitionHash, row.Enabled));
         }
 
         [Fact]
