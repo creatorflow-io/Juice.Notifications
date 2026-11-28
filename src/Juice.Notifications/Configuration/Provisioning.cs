@@ -228,10 +228,14 @@ namespace Juice.Notifications.Configuration
                 }
                 catch (Exception ex) when (ex is not InvalidOperationException && DbConflicts.Classify(ex) is { } conflict)
                 {
-                    // Another writer (an admin's PUT, another replica) changed a row between this pass's read and its save. The transaction
-                    // rolls back, so nothing of this tenant is applied; the next start reconciles. Said as the API says it, not as a raw EF error.
-                    throw new InvalidOperationException($"Provisioning for tenant {tenantId} lost a race with another writer ({ErrorCodes.ConcurrentChange}, {conflict.Kind}): "
-                        + "nothing of it was applied; the next start reconciles.", ex);
+                    // The transaction rolls back, so nothing of this tenant is applied. Said in words, not as a raw EF error, and by kind: a row
+                    // another writer changed (an admin's PUT, another replica) between this pass's read and its save is a race the next start
+                    // reconciles; a unique or foreign key violation comes from the data itself and recurs on every start until it is fixed.
+                    throw new InvalidOperationException(conflict.Kind is ConflictKind.RowGone or ConflictKind.Aborted
+                        ? $"Provisioning for tenant {tenantId} lost a race with another writer ({ErrorCodes.ConcurrentChange}, {conflict.Kind}): "
+                            + "nothing of it was applied; the next start reconciles."
+                        : $"Provisioning for tenant {tenantId} conflicts with existing data ({conflict.Kind}{(conflict.Constraint is null ? "" : ", " + conflict.Constraint)}): "
+                            + "nothing of it was applied, and the next start fails the same way until the file or the data is fixed.", ex);
                 }
                 finally
                 {
