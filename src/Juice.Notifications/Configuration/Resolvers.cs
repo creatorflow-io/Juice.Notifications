@@ -38,6 +38,9 @@ namespace Juice.Notifications.Configuration
     internal sealed partial class ConfigurationHandlers :
         IRequestHandler<PutResolver, Outcome<ResolverView>>, IRequestHandler<DeleteResolver, Outcome<bool>>
     {
+        private static Outcome<T> ResolverServiceManaged<T>(string key)
+            => Outcome<T>.Conflict(ErrorCodes.ManagedByService, $"The resolver {key} is the service's own (the embedded inbox's); it can't be changed or deleted.");
+
         public async ValueTask<Outcome<ResolverView>> Handle(PutResolver r, CancellationToken ct)
         {
             if (!ConfigurationRules.Key().IsMatch(r.Key))
@@ -45,6 +48,11 @@ namespace Juice.Notifications.Configuration
                 return Invalid<ResolverView>(new FieldError("/key", "A key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
             }
             var existing = await db.Resolvers.SingleOrDefaultAsync(c => c.TenantId == r.NotificationTenantId && c.Key == r.Key, ct);
+            if (existing?.ManagedBy == ManagedBy.Service)
+            {
+                // The embedded inbox's own row (M54): neither the API nor the provisioning file changes it; the host's options do, at start.
+                return ResolverServiceManaged<ResolverView>(r.Key);
+            }
             if (existing?.ManagedBy == ManagedBy.Configuration && !r.Provisioned)
             {
                 return ConfigManaged<ResolverView>("resolver " + r.Key);
@@ -152,6 +160,10 @@ namespace Juice.Notifications.Configuration
             if (existing is null)
             {
                 return Outcome<bool>.Ok(false);
+            }
+            if (existing.ManagedBy == ManagedBy.Service)
+            {
+                return ResolverServiceManaged<bool>(r.Key);
             }
             if (existing.ManagedBy == ManagedBy.Configuration)
             {

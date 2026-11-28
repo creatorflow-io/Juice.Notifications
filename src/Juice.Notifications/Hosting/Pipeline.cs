@@ -36,6 +36,12 @@ namespace Juice.Notifications.Hosting
 
         /// <summary>Embedded: the host's one tenant; the admin API refuses any other in its path.</summary>
         public Guid? EmbeddedTenantId { get; set; }
+
+        /// <summary>
+        /// Embedded: the host's inbox (M54). Set, the <c>signed-in</c> resolver and the roles' recorder are installed, and
+        /// <see cref="NotificationsHosting.Inbox"/> is true; null (the default) leaves the pipeline as it was.
+        /// </summary>
+        public SignedInOptions? SignedIn { get; set; }
     }
 
     /// <summary>How the pipeline is hosted: the centralized service, or embedded in a product's own host (phase-5-plan I57).</summary>
@@ -46,7 +52,8 @@ namespace Juice.Notifications.Hosting
     /// any tenant but <see cref="EmbeddedTenantId"/>. Set by the pipeline's registration, never by the host, so no page can claim what the
     /// pipeline doesn't have.
     /// </summary>
-    public sealed record NotificationsHosting(NotificationsMode Mode, Guid? EmbeddedTenantId);
+    /// <remarks><see cref="Inbox"/>: an embedded host that opted in to the inbox (M54). Never true for the service, which has its own people.</remarks>
+    public sealed record NotificationsHosting(NotificationsMode Mode, Guid? EmbeddedTenantId, bool Inbox = false);
 
     /// <summary>Warns at start when the dispatcher is in dry run (phase-5-plan I67): deliveries planned meanwhile are recorded, not sent.</summary>
     internal sealed class DryRunNotice(Microsoft.Extensions.Options.IOptions<Providers.DeliveryOptions> options, ILogger<DryRunNotice> logger) : IHostedService
@@ -77,7 +84,12 @@ namespace Juice.Notifications.Hosting
             Action<IServiceProvider, DbContextOptionsBuilder> database, NotificationsPipelineOptions? options = null)
         {
             options ??= new NotificationsPipelineOptions();
-            services.AddSingleton(new NotificationsHosting(options.Mode, options.Mode == NotificationsMode.Embedded ? options.EmbeddedTenantId : null));
+            if (options.SignedIn is not null && options.Mode != NotificationsMode.Embedded)
+            {
+                throw new InvalidOperationException("The signed-in inbox is for an embedded host: the service has its own people.");
+            }
+            services.AddSingleton(new NotificationsHosting(options.Mode, options.Mode == NotificationsMode.Embedded ? options.EmbeddedTenantId : null,
+                options.SignedIn is not null));
             services.AddDbContext<NotificationsDbContext>(database);
             services.TryAddSingleton(TimeProvider.System);
             services.AddSingleton(new DatabaseMigrator.Settings(configuration.GetSection(DatabaseOptions.Section).Get<DatabaseOptions>() ?? new DatabaseOptions()));
@@ -118,7 +130,7 @@ namespace Juice.Notifications.Hosting
             services.TryAddSingleton<Stages.StagePasses>();
             services.AddSingleton(new Stages.StagesRunning(runStages));
             services.TryAddScoped<INotificationsPipelineHealth, Stages.NotificationsPipelineHealth>();
-            services.AddPlanning(configuration.GetSection("Stages:Planner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages, options.People);
+            services.AddPlanning(configuration.GetSection("Stages:Planner").Get<Stages.StageOptions>() ?? new Stages.StageOptions(), runStages, options.People, options.SignedIn);
             services.Configure<ResolverOptions>(configuration.GetSection(ResolverOptions.Section));
             if (options.People)
             {

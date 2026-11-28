@@ -27,6 +27,9 @@ namespace Juice.Notifications.Data
         public const string AliasIdentity = "ix_subscriber_aliases_identity";
         /// <summary>An alias linked to a subscriber deleted at the same moment.</summary>
         public const string AliasSubscriber = "fk_subscriber_aliases_subscribers";
+        public const string SubscriberRole = "pk_subscriber_roles";
+        /// <summary>A role recorded for a subscriber deleted at the same moment.</summary>
+        public const string SubscriberRoleSubscriber = "fk_subscriber_roles_subscribers";
         public const string LocalGroupKey = "ix_local_groups_key";
         public const string LocalGroupMember = "pk_local_group_members";
         /// <summary>A member added to a group deleted at the same moment.</summary>

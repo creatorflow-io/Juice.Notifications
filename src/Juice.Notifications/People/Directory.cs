@@ -5,6 +5,7 @@ using Juice.Notifications.Configuration;
 using Juice.Notifications.Data;
 using Juice.Notifications.Planning;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Juice.Notifications.People
 {
@@ -358,6 +359,54 @@ namespace Juice.Notifications.People
                 .Where(t => t.SelfService || t.Subscribed).OrderBy(t => t.Key).ToListAsync(ct);
             // A person isn't told how many others follow a topic.
             return rows.Select(t => (new TopicView(t.Key, t.Name, t.SelfService, 0, t.UpdatedAt), t.Subscribed)).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Records the roles a signed-in person's token carries, for the <c>signed-in</c> resolver (M54): only those the host allowlists
+    /// (<see cref="SignedInOptions.Roles"/>, compared ordinally), as the host's own access judged the token. What is stored becomes exactly that
+    /// set: the roles no longer carried are deleted, the others get <c>seen_at</c> now. A call that would change nothing, because the stored set
+    /// is the same and was seen within the hour, writes nothing, so a busy session isn't a write per request.
+    /// </summary>
+    public sealed class SubscriberRoleRecorder(NotificationsDbContext db, SignedInOptions options, TimeProvider clock, ILogger<SubscriberRoleRecorder> logger)
+    {
+        /// <summary>How old the oldest stored role may be before the same set is written again (its <c>seen_at</c> must stay well inside the TTL).</summary>
+        public static readonly TimeSpan Refresh = TimeSpan.FromHours(1);
+
+        /// <summary>The roles kept from what a token carried: the allowlisted ones, each once, in byte order.</summary>
+        internal IReadOnlyList<string> Allowed(IEnumerable<string> carried)
+            => [.. carried.Where(r => options.Roles.Contains(r, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+
+        public async Task RecordAsync(Guid tenantId, Guid subscriberId, IEnumerable<string> carried, CancellationToken ct)
+        {
+            var roles = Allowed(carried);
+            var now = clock.GetUtcNow();
+            var stored = await db.SubscriberRoles.AsNoTracking().Where(r => r.TenantId == tenantId && r.SubscriberId == subscriberId)
+                .Select(r => new { r.Role, r.SeenAt }).ToListAsync(ct);
+            if (stored.Select(r => r.Role).Order(StringComparer.Ordinal).SequenceEqual(roles) && (stored.Count == 0 || stored.Min(r => r.SeenAt) >= now - Refresh))
+            {
+                return;
+            }
+            var array = roles.ToArray();
+            try
+            {
+                // One statement, so no one sees the roles half changed; the upserts go in key order, so two sign-ins of the same person can't deadlock.
+                // A data-modifying CTE runs whether or not the main statement reads it: an empty set still deletes every role.
+                await db.Database.ExecuteSqlAsync($"""
+                    WITH gone AS (
+                        DELETE FROM notifications.subscriber_roles
+                        WHERE tenant_id = {tenantId} AND subscriber_id = {subscriberId} AND NOT (role = ANY({array}::text[]))
+                    )
+                    INSERT INTO notifications.subscriber_roles (tenant_id, subscriber_id, role, seen_at)
+                    SELECT {tenantId}, {subscriberId}, r.role, {now} FROM unnest({array}::text[]) WITH ORDINALITY AS r(role, n) ORDER BY r.n
+                    ON CONFLICT (tenant_id, subscriber_id, role) DO UPDATE SET seen_at = excluded.seen_at
+                    """, ct);
+            }
+            catch (Exception ex) when (DbConflicts.Classify(ex) is { Kind: ConflictKind.ForeignKey, Constraint: Constraints.SubscriberRoleSubscriber })
+            {
+                // The person was removed while they signed in: there is nobody to record roles for.
+                logger.LogInformation("Subscriber {Subscriber} of tenant {Tenant} was removed while their roles were recorded", subscriberId, tenantId);
+            }
         }
     }
 }

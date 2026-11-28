@@ -577,10 +577,18 @@ namespace Juice.Notifications.Planning
         /// <c>people</c>: people as recipients (the local, topic and identity resolvers, and the service's own contact-point one). Off (embedded, design §4.2),
         /// requests name routes and addresses only.
         /// </remarks>
-        public static IServiceCollection AddPlanning(this IServiceCollection services, StageOptions options, bool runWorkers = true, bool people = true)
+        public static IServiceCollection AddPlanning(this IServiceCollection services, StageOptions options, bool runWorkers = true, bool people = true,
+            SignedInOptions? signedIn = null)
         {
             services.AddSingleton<IRecipientResolver, RouteRecipientResolver>();
             services.AddSingleton<IRecipientResolver, StaticAddressResolver>();
+            if (signedIn is not null)
+            {
+                // An embedded host's inbox (M54): the people its own sign-in recorded, by role.
+                services.AddSingleton(signedIn);
+                services.AddSingleton<IRecipientResolver, SignedInRecipientResolver>();
+                services.AddScoped<People.SubscriberRoleRecorder>();
+            }
             if (people)
             {
                 services.AddSingleton<IRecipientResolver, StaticContactPointResolver>();

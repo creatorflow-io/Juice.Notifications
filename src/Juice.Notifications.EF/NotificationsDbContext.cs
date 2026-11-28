@@ -52,6 +52,7 @@ namespace Juice.Notifications.Data
         public DbSet<DeviceRegistration> Devices => Set<DeviceRegistration>();
         public DbSet<LocalGroup> LocalGroups => Set<LocalGroup>();
         public DbSet<LocalGroupMember> LocalGroupMembers => Set<LocalGroupMember>();
+        public DbSet<SubscriberRole> SubscriberRoles => Set<SubscriberRole>();
         public DbSet<Topic> Topics => Set<Topic>();
         public DbSet<TopicSubscription> TopicSubscriptions => Set<TopicSubscription>();
         public DbSet<Preference> Preferences => Set<Preference>();
@@ -384,6 +385,17 @@ namespace Juice.Notifications.Data
                 e.HasOne<LocalGroup>().WithMany().HasForeignKey(x => new { x.TenantId, x.GroupId }).OnDelete(DeleteBehavior.Cascade)
                     .HasConstraintName(Constraints.LocalGroupMemberGroup);
                 e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            model.Entity<SubscriberRole>(e =>
+            {
+                e.ToTable("subscriber_roles");
+                e.HasKey(x => new { x.TenantId, x.SubscriberId, x.Role }).HasName(Constraints.SubscriberRole);
+                e.Property(x => x.Role).HasMaxLength(63);
+                // The signed-in resolver's query: a tenant's people with a role, seen lately.
+                e.HasIndex(x => new { x.TenantId, x.Role, x.SeenAt });
+                e.HasOne<Subscriber>().WithMany().HasForeignKey(x => new { x.TenantId, x.SubscriberId }).OnDelete(DeleteBehavior.Cascade)
+                    .HasConstraintName(Constraints.SubscriberRoleSubscriber);
             });
 
             model.Entity<Topic>(e =>

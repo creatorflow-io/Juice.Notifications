@@ -2672,6 +2672,34 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                     b.HasAnnotation("Juice:Auditable", true);
                 });
 
+            modelBuilder.Entity("Juice.Notifications.Data.SubscriberRole", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("SubscriberId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subscriber_id");
+
+                    b.Property<string>("Role")
+                        .HasMaxLength(63)
+                        .HasColumnType("character varying(63)")
+                        .HasColumnName("role");
+
+                    b.Property<DateTimeOffset>("SeenAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("seen_at");
+
+                    b.HasKey("TenantId", "SubscriberId", "Role")
+                        .HasName("pk_subscriber_roles");
+
+                    b.HasIndex("TenantId", "Role", "SeenAt")
+                        .HasDatabaseName("ix_subscriber_roles_tenant_id_role_seen_at");
+
+                    b.ToTable("subscriber_roles", "notifications");
+                });
+
             modelBuilder.Entity("Juice.Notifications.Data.Template", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3235,6 +3263,16 @@ namespace Juice.Notifications.EF.PostgreSQL.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_subscriber_aliases_subscribers");
+                });
+
+            modelBuilder.Entity("Juice.Notifications.Data.SubscriberRole", b =>
+                {
+                    b.HasOne("Juice.Notifications.Data.Subscriber", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubscriberId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_subscriber_roles_subscribers");
                 });
 
             modelBuilder.Entity("Juice.Notifications.Data.Template", b =>
