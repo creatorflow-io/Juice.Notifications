@@ -510,8 +510,8 @@ namespace Juice.Notifications.Configuration
             {
                 return Invalid<TargetView>(new FieldError("/key", "A key is 1–63 lowercase letters, digits or hyphens, starting with a letter."));
             }
-            // Tracked, and its owner fenced below: a hand-back that commits between this read and the save changes the integration's ManagedBy
-            // (a concurrency token), so the save fails concurrent_change instead of leaving this caller's target under the new owner.
+            // Tracked: the integration is read once for this write. The owner is no longer fenced here (the hand-back is gone), and a change
+            // to the target itself that lands before the save fails it as concurrent_change.
             var integration = await db.Integrations.SingleOrDefaultAsync(i => i.TenantId == r.NotificationTenantId && i.Key == r.IntegrationKey, ct);
             if (integration is null)
             {

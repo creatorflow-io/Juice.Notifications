@@ -103,7 +103,7 @@ namespace Juice.Notifications.Configuration
                     throw new InvalidOperationException($"The notifications schema isn't migrated ({pending.Count} migration(s) pending, the next is {pending[0]}): "
                         + "set Database:Migrate, or migrate it before the host starts. Nothing was provisioned.");
                 }
-                owning =await db.Integrations.Where(i => i.ManagedBy == ManagedBy.Configuration).Select(i => i.TenantId)
+                owning = await db.Integrations.Where(i => i.ManagedBy == ManagedBy.Configuration).Select(i => i.TenantId)
                     .Union(db.IntegrationTargets.Where(t => t.ManagedBy == ManagedBy.Configuration).Select(t => t.TenantId))
                     .Union(db.Routes.Where(r => r.ManagedBy == ManagedBy.Configuration).Select(r => r.TenantId))
                     .Union(db.Allowlist.Where(a => a.ManagedBy == ManagedBy.Configuration).Select(a => a.TenantId))
@@ -127,6 +127,12 @@ namespace Juice.Notifications.Configuration
             {
                 throw new InvalidOperationException($"Provisioning:Path '{options.Value.Path}' names tenant {foreign[0]}, but this embedded host's tenant is {own}; "
                     + "the file may name only the host's tenant. Nothing was provisioned.");
+            }
+            // An embedded host leaves another tenant's rows alone (they aren't its to prune or disable): said, and not written.
+            if (hosting is { Mode: NotificationsMode.Embedded, EmbeddedTenantId: { } host } && owning.Where(t => t != host).ToList() is { Count: > 0 } strangers)
+            {
+                logger.LogWarning("Embedded provisioning leaves the rows of {Tenants} other tenant(s) alone; this host's tenant is {Host}", strangers.Count, host);
+                owning = [.. owning.Where(t => t == host)];
             }
             // Tenants the file lists, and tenants it no longer lists that still have rows it owned.
             HashSet<Guid> tenants = [.. listed.Keys, .. owning];
@@ -219,6 +225,13 @@ namespace Juice.Notifications.Configuration
                     await mediator.DispatchEventsUntilStableAsync(db, logger, cancellationToken: ct);
                     await db.CommitTransactionAsync(transaction.TransactionId, ct);
                     db.ClearEvents();
+                }
+                catch (Exception ex) when (ex is not InvalidOperationException && DbConflicts.Classify(ex) is { } conflict)
+                {
+                    // Another writer (an admin's PUT, another replica) changed a row between this pass's read and its save. The transaction
+                    // rolls back, so nothing of this tenant is applied; the next start reconciles. Said as the API says it, not as a raw EF error.
+                    throw new InvalidOperationException($"Provisioning for tenant {tenantId} lost a race with another writer ({ErrorCodes.ConcurrentChange}, {conflict.Kind}): "
+                        + "nothing of it was applied; the next start reconciles.", ex);
                 }
                 finally
                 {
