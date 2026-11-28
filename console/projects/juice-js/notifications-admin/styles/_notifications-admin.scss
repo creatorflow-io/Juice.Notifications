@@ -59,7 +59,7 @@
   .na-form-grid, .na-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 8px 12px;
     align-items: start; margin-bottom: 12px; @include mat.form-field-density(-1);
     > * { min-width: 0; }
-    > :not(mat-form-field) { align-self: center; }
+    > :not(mat-form-field) { align-self: center; justify-self: start; }
     > mat-form-field { width: 100%; } }
   // Width scale, in columns: sm and md one, lg two (the whole row where the grid is narrower than two columns), full the whole row.
   .na-field-sm, .na-field-md { grid-column: span 1; }
