@@ -19,7 +19,7 @@ describe('allowlist form', () => {
     expect(errors.every(e => e.inField && e.tag === 'mat-error')).toBe(true);
     expect(errors[1].text).toBe('Port 99999 (entry 2): a whole number from 1 to 65535.');
     expect(errors[2].text).toBe('Port abc (entry 3): a whole number from 1 to 65535.');
-    expect(formError(f)?.textContent).toContain('Fix the 3 marked fields.');
+    expect(formError(f)?.textContent).toContain('Fix the 2 marked fields.');
   });
 
   it('Allowlist_NonCanonicalInput_IsAnError_ThenTheFixedFormSendsTrimmed', async () => {
@@ -53,6 +53,9 @@ describe('allowlist form', () => {
     expect(destinationIssue('fd00::/8')).toBeNull();
     expect(destinationIssue('::1/128')).toBeNull();
     expect(destinationIssue('intranet.example.com')).toBeNull();
+    // What the API takes: a trailing dot, an international name.
+    expect(destinationIssue('hooks.example.com.')).toBeNull();
+    expect(destinationIssue('bücher.example')).toBeNull();
     expect(destinationIssue('')).not.toBeNull();
     expect(portIssues(['443', '8443'])).toEqual([]);
     expect(portIssues(['0', '65535', '65536', '-1', '1.5', '1e3', '08']).map(i => i.message.split(' (')[0])).toEqual(

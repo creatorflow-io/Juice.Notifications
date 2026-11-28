@@ -43,7 +43,7 @@ export class FormErrors {
   /** The errors, by pointer; empty when there are none. */
   readonly fields = computed(() => this.problem()?.body?.errors ?? []);
   /** How many field errors the form shows (its marked fields, and the ones listed for lack of a field). */
-  readonly count: Signal<number> = computed(() => this.fields().length);
+  readonly count: Signal<number> = computed(() => new Set(this.fields().map(e => e.pointer)).size);
   /** Whether the save lost a race: the row changed (or appeared) since the form read it. */
   readonly conflict = computed(() => this.problem()?.body?.code === 'concurrent_change');
   /**
@@ -315,9 +315,10 @@ export function matchIssues(draft: MatchDraft): FieldIssue[] {
     const name = label.name.trim();
     if (!name && !label.matcher.trim()) return;
     if (!name) {
-      issues.push({ pointer: '/match/labels', message: `Label matcher ${i + 1} needs a label name: each matcher names its label.` });
+      issues.push({ pointer: `/match/labels/#${i + 1}`, message: `Label matcher ${i + 1} needs a label name: each matcher names its label.` });
     } else if (seen.has(name)) {
-      issues.push({ pointer: '/match/labels/' + pointerSegment(name),
+      // Its own pointer, by row: it is shown on that row, and typing in another row leaves it be.
+      issues.push({ pointer: `/match/labels/#${i + 1}`,
         message: `The label ${name} is matched twice (matcher ${i + 1}): one matcher per label (in(a,b) takes several values).` });
     }
     seen.add(name);
@@ -376,11 +377,9 @@ export function matchText(match: Match | null | undefined): string {
       <div class="na-form-grid" data-testid="match-label">
         <mat-form-field subscriptSizing="dynamic" class="na-field-sm"><mat-label>Label</mat-label>
           <input matInput [name]="name() + '-label-' + i" [(ngModel)]="label.name" [disabled]="disabled()" data-testid="match-label-name"
-            [naError]="errors()" [naPointer]="labelPointer(label)">
-          @for (e of errors().of(labelPointer(label)); track $index) {
-            @if (e.pointer !== '/match/labels' || e.message.startsWith('Label matcher ' + (i + 1) + ' ')) {
-              <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error>
-            }
+            [naError]="errors()" [naPointer]="labelPointer(label, i)">
+          @for (e of errors().of(labelPointer(label, i)); track $index) {
+            <mat-error data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</mat-error>
           }</mat-form-field>
         <mat-form-field subscriptSizing="dynamic" class="na-field-md"><mat-label>Matches</mat-label>
           <input matInput [name]="name() + '-matcher-' + i" [(ngModel)]="label.matcher" [disabled]="disabled()" placeholder="prod, !=dev, in(high,critical)"
@@ -389,6 +388,10 @@ export function matchText(match: Match | null | undefined): string {
           <button mat-icon-button type="button" (click)="draft().labels.splice(i, 1)" aria-label="Remove the label matcher"><mat-icon>close</mat-icon></button>
         }
       </div>
+    }
+    <!-- The labels as a whole (the API's "Up to N label matchers"): no row owns it. -->
+    @for (e of orphans(); track $index) {
+      <div class="na-error na-small" data-testid="field-error" [attr.data-pointer]="e.pointer">{{ e.message }}</div>
     }
     @if (!disabled()) {
       <button mat-button type="button" (click)="draft().labels.push({ name: '', matcher: '' })" data-testid="match-add-label">Add a label matcher</button>
@@ -402,10 +405,22 @@ export class MatchEditorComponent {
   readonly name = input('match');
   protected readonly priorities = PRIORITIES;
 
-  /** Where a label row's errors are: those under its name, or (a matcher without a name) the list's own. */
-  protected labelPointer(label: { name: string; matcher: string }): string {
+  /** Errors under `/match` no field here shows (the labels as a whole, a label no row has, a part this editor lacks): listed, never only counted. */
+  protected orphans(): { pointer: string; message: string }[] {
+    const names = new Set(this.draft().labels.map(l => pointerSegment(l.name.trim())));
+    return this.errors().of('/match').filter(e => {
+      const p = e.pointer;
+      if (p === '/match' || p === '/match/type' || p.startsWith('/match/type/') || p === '/match/minPriority' || p.startsWith('/match/minPriority/')) return false;
+      if (p.startsWith('/match/labels/#')) return false;
+      const label = /^\/match\/labels\/([^/]+)/.exec(p);
+      return !label || !names.has(label[1]);
+    });
+  }
+
+  /** Where a label row's errors are: the form's own for this row, and the API's under the row's label name. */
+  protected labelPointer(label: { name: string; matcher: string }, row: number): string {
     const name = label.name.trim();
-    return name ? '/match/labels/' + pointerSegment(name) : label.matcher.trim() ? '/match/labels$' : '/match/labels/';
+    return `/match/labels/#${row + 1}$` + (name ? '|/match/labels/' + pointerSegment(name) : '');
   }
 }
 
